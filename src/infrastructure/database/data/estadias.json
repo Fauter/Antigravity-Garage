@@ -1,0 +1,18 @@
+[
+  {
+    "id": "e4d7221a-6c94-429a-ba7f-54fddc5fb5ce",
+    "vehicleId": null,
+    "plate": "ABC123",
+    "entryTime": "2026-02-02T23:40:56.993Z",
+    "active": true,
+    "createdAt": "2026-02-02T23:40:56.993Z"
+  },
+  {
+    "id": "478efce5-b302-4952-aac7-4fdaa52a6920",
+    "vehicleId": null,
+    "plate": "ZM458CX",
+    "entryTime": "2026-02-02T23:41:05.961Z",
+    "active": true,
+    "createdAt": "2026-02-02T23:41:05.961Z"
+  }
+]

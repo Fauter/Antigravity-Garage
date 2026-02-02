@@ -1,0 +1,12 @@
+[
+  {
+    "id": "93658126-2f82-4882-a8ab-7a66ef4cfbdb",
+    "relatedEntityId": "e4d7221a-6c94-429a-ba7f-54fddc5fb5ce",
+    "type": "CobroEstadia",
+    "timestamp": "2026-02-02T23:41:19.757Z",
+    "amount": 3000,
+    "paymentMethod": "Efectivo",
+    "notes": "Salida de: ABC123",
+    "createdAt": "2026-02-02T23:41:19.758Z"
+  }
+]

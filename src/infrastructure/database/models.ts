@@ -1,0 +1,117 @@
+import mongoose, { Schema } from 'mongoose';
+import {
+    Vehicle, Customer, Subscription, Movement, Shift
+} from '../../shared/schemas';
+
+// --- Vehicle ---
+const VehicleSchema = new Schema<Vehicle>({
+    id: { type: String, required: true, unique: true, index: true },
+    plate: { type: String, required: true, unique: true, uppercase: true },
+    type: { type: String, required: true, enum: ['Auto', 'Moto', 'Camioneta', 'Otro'] },
+    description: { type: String },
+    customerId: { type: String }, // Referencia loose
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now }
+});
+
+export const VehicleModel = mongoose.model<Vehicle>('Vehicle', VehicleSchema);
+
+// --- Customer ---
+const CustomerSchema = new Schema<Customer>({
+    id: { type: String, required: true, unique: true },
+    name: { type: String, required: true },
+    email: { type: String },
+    phone: { type: String },
+    dni: { type: String },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now }
+});
+
+export const CustomerModel = mongoose.model<Customer>('Customer', CustomerSchema);
+
+// --- Subscription ---
+const SubscriptionSchema = new Schema<Subscription>({
+    id: { type: String, required: true, unique: true },
+    customerId: { type: String, required: true },
+    vehicleId: { type: String },
+    type: { type: String, required: true, enum: ['Exclusiva', 'Fija', 'Movil'] },
+    startDate: { type: Date, required: true },
+    endDate: { type: Date },
+    price: { type: Number, required: true },
+    active: { type: Boolean, default: true },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now }
+});
+
+export const SubscriptionModel = mongoose.model<Subscription>('Subscription', SubscriptionSchema);
+
+// --- Stay ---
+const StaySchema = new Schema<import('../../shared/schemas').Stay>({
+    id: { type: String, required: true, unique: true },
+    vehicleId: { type: String },
+    plate: { type: String, required: true },
+    entryTime: { type: Date, required: true },
+    exitTime: { type: Date },
+    active: { type: Boolean, default: true },
+    createdAt: { type: Date, default: Date.now }
+});
+
+export const StayModel = mongoose.model<import('../../shared/schemas').Stay>('Stay', StaySchema);
+
+// --- Movement (Financial) ---
+const MovementSchema = new Schema<Movement>({
+    id: { type: String, required: true, unique: true },
+    relatedEntityId: { type: String },
+    type: { type: String, required: true }, // Enum validado por TS/Zod
+    timestamp: { type: Date, required: true },
+    amount: { type: Number, required: true, min: 0 },
+    paymentMethod: { type: String, default: 'Efectivo' },
+    ticketNumber: { type: Number },
+    ticketPago: { type: Number },
+    notes: { type: String },
+    shiftId: { type: String },
+    createdAt: { type: Date, default: Date.now }
+});
+
+export const MovementModel = mongoose.model<Movement>('Movement', MovementSchema);
+
+// --- Shift ---
+const ShiftSchema = new Schema<Shift>({
+    id: { type: String, required: true, unique: true },
+    operatorName: { type: String, required: true },
+    startDate: { type: Date, required: true },
+    endDate: { type: Date },
+    startCash: { type: Number, default: 0 },
+    endCash: { type: Number },
+    totalCollection: { type: Number, default: 0 },
+    active: { type: Boolean, default: true },
+    notes: { type: String }
+});
+
+export const ShiftModel = mongoose.model<Shift>('Shift', ShiftSchema);
+
+// --- Mutation Queue ---
+const MutationSchema = new Schema<import('../../shared/schemas').Mutation>({
+    id: { type: String, required: true, unique: true },
+    entityType: { type: String, required: true },
+    entityId: { type: String, required: true },
+    operation: { type: String, required: true },
+    payload: { type: Schema.Types.Mixed },
+    timestamp: { type: Date, default: Date.now },
+    synced: { type: Boolean, default: false },
+    retryCount: { type: Number, default: 0 }
+});
+
+export const MutationModel = mongoose.model<import('../../shared/schemas').Mutation>('Mutation', MutationSchema);
+
+// --- Sync Conflict ---
+const SyncConflictSchema = new Schema<import('../../shared/schemas').SyncConflict>({
+    id: { type: String, required: true, unique: true },
+    mutationId: { type: String, required: true },
+    error: { type: String, required: true },
+    receivedPayload: { type: Schema.Types.Mixed },
+    timestamp: { type: Date, default: Date.now },
+    resolved: { type: Boolean, default: false }
+});
+
+export const SyncConflictModel = mongoose.model<import('../../shared/schemas').SyncConflict>('SyncConflict', SyncConflictSchema);
