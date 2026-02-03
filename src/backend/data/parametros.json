@@ -1,0 +1,7 @@
+{
+    "fraccionarDesde": 0,
+    "toleranciaInicial": 15,
+    "recargoDia11": 10,
+    "recargoDia22": 20,
+    "permitirCobroAnticipado": false
+}

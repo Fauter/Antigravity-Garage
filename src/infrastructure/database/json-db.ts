@@ -95,4 +95,14 @@ export class JsonDB<T extends { id?: string; _id?: string }> {
     async getById(id: string): Promise<T | null> {
         return this.findOne({ id } as any) || this.findOne({ _id: id } as any);
     }
+
+    async delete(id: string): Promise<boolean> {
+        const initialLength = this.data.length;
+        this.data = this.data.filter(item => (item as any).id !== id && (item as any)._id !== id);
+        if (this.data.length < initialLength) {
+            this.save();
+            return true;
+        }
+        return false;
+    }
 }

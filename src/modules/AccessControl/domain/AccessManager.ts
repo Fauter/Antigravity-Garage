@@ -7,12 +7,16 @@ import {
     Stay,
     StaySchema
 } from '../../../shared/schemas';
-import { PricingEngine, TarifasConfig } from '../../Billing/domain/PricingEngine';
+import { PricingEngine } from '../../Billing/domain/PricingEngine';
+import { JsonTariffRepository } from '../../Configuration/infrastructure/JsonTariffRepository';
+import { JsonParamRepository } from '../../Configuration/infrastructure/JsonParamRepository';
+import { JsonPriceMatrixRepository } from '../../Configuration/infrastructure/JsonPriceMatrixRepository';
 
-export interface AccessConfig {
-    tarifas: TarifasConfig;
-    hourlyRate: number;
-}
+// Backend Instance of Pricing Engine
+const tariffRepo = new JsonTariffRepository();
+const paramRepo = new JsonParamRepository();
+const priceRepo = new JsonPriceMatrixRepository();
+const pricingEngine = new PricingEngine(tariffRepo, paramRepo, priceRepo);
 
 export class AccessManager {
     /**
@@ -42,22 +46,22 @@ export class AccessManager {
      * Calcula el cobro usando PricingEngine si corresponde.
      * Cierra el Stay y genera un Movement (CobroEstadia).
      */
-    static processExit(
+    static async processExit(
         stay: Stay,
         exitDate: Date,
-        config: AccessConfig,
-        paymentMethod: 'Efectivo' | 'MercadoPago' | 'Tarjeta' | 'Otro' = 'Efectivo',
-        operator?: string
-    ): { closedStay: Stay; exitMovement: Movement; price: number } {
+        paymentMethod: 'Efectivo' | 'Transferencia' | 'Debito' | 'Credito' | 'QR' = 'Efectivo',
+        operator?: string,
+        invoiceType?: 'A' | 'B' | 'C' | 'CC' | 'Final'
+    ): Promise<{ closedStay: Stay; exitMovement: Movement; price: number }> {
         if (!stay.active) {
             throw new Error('La estancia ya está cerrada.');
         }
 
-        // 1. Calcular estadía
-        const price = PricingEngine.calculateParkingFee(
-            stay.entryTime,
+        // 1. Calcular estadía (Dynamically using Repositories hidden in PricingEngine)
+        const price = await pricingEngine.calculateParkingFee(
+            stay,
             exitDate,
-            config.hourlyRate
+            paymentMethod
         );
 
         const exitMovement: Movement = {
@@ -68,6 +72,8 @@ export class AccessManager {
             amount: price,
             paymentMethod,
             operator,
+            invoiceType: invoiceType || 'Final',
+            plate: stay.plate,
 
             notes: `Salida de: ${stay.plate}`,
 

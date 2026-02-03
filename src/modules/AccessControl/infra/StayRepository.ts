@@ -25,23 +25,25 @@ export class StayRepository {
             stay.id = stay._id;
         }
 
-        // Check if updating or creating
-        const existing = await this.findActiveByPlate(stay.plate);
-        // Logic might differ: if closure, we update. If entry, we create.
+        // Logic: Try to find by ID first to update, if not found, create.
+        const id = stay.id || stay._id;
+        let existing = null;
+        if (id) {
+            // Try finding by internal ID or mapped ID
+            const all = await this.db.getAll();
+            existing = all.find(s => s.id === id || s._id === id);
+        }
 
-        if (stay.exitTime && existing) {
-            // It's an update/exit
-            const idToUpdate = existing._id || existing.id;
-            await this.db.updateOne({ _id: idToUpdate }, stay);
+        if (existing) {
+            // Update
+            await this.db.updateOne({ id: existing.id }, stay);
+            // Also try _id if that's what we used
+            if (existing._id && existing._id !== existing.id) {
+                await this.db.updateOne({ _id: existing._id }, stay);
+            }
             return stay;
         } else {
-            // It might be a new entry
-            // But save() in mongoose handles upsert commonly. 
-            // Here we simple create if new.
-            if (existing && !stay.exitTime) {
-                // Already active, maybe just update properties?
-                return existing;
-            }
+            // Create
             await this.db.create(stay);
             return stay;
         }

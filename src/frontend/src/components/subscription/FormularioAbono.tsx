@@ -1,208 +1,441 @@
-import React, { useState } from 'react';
-import { Save, ArrowLeft, CreditCard, Car, User } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { api } from '../../services/api';
+import { toast } from 'sonner';
+import { Camera, Car, Check, User, Phone, CreditCard, AlertTriangle, Wallet } from 'lucide-react';
+import { WebcamModal } from '../common/WebcamModal';
 
-interface FormularioAbonoProps {
-    onCancel: () => void;
-    onSubmit: (data: any) => Promise<void> | void;
-}
-
-const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit }) => {
-    // State mirroring the legacy logic
+const FormularioAbono: React.FC = () => {
+    // --- STATE ---
     const [loading, setLoading] = useState(false);
+    const [showCameraModal, setShowCameraModal] = useState(false);
+    const [activePhotoField, setActivePhotoField] = useState<string | null>(null);
+    const [photos, setPhotos] = useState<{ [key: string]: string }>({});
+
+    // Load Vehicle Types once on mount
+    useEffect(() => {
+        api.get('/tipos-vehiculo')
+            .then(res => {
+                if (res.data && Array.isArray(res.data)) {
+                    console.log("[Abonos] Tipos cargados:", res.data);
+                    setVehicleTypes(res.data);
+                    if (res.data.length > 0) {
+                        setFormData(prev => ({ ...prev, tipoVehiculo: res.data[0].nombre }));
+                    }
+                }
+            })
+            .catch(e => console.error("Vehicle Type Load Error:", e));
+    }, []);
+
+    // Data
+    const [basePriceDisplay, setBasePriceDisplay] = useState(0);
+    const [proratedPrice, setProratedPrice] = useState(0);
+    const [pricesMatrix, setPricesMatrix] = useState<any>({});
+    const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
+
     const [formData, setFormData] = useState({
-        cochera: 'Móvil',
-        piso: '',
-        exclusiva: false,
-        nombreApellido: '',
+        // Cochera
+        tipoCochera: 'Movil',
+        numeroCochera: '',
+        exclusivaOverride: false,
+
+        // Personales
+        nombre: '',
         dni: '',
         email: '',
-        telefono: '',
+        domicilio: '',
+        localidad: '',
+        domicilioTrabajo: '',
+        telParticular: '',
+        telEmergencia: '',
+        telTrabajo: '',
+
+        // Vehículo
         patente: '',
         marca: '',
         modelo: '',
         color: '',
-        tipoVehiculo: '',
+        anio: '',
+        companiaSeguro: '',
+        tipoVehiculo: 'Auto',
+
+        // Pago
         metodoPago: 'Efectivo',
-        factura: 'Final'
+        tipoFactura: 'Final',
     });
 
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-        const { name, value } = e.target;
-        // Checkbox handling logic
-        if (e.target.type === 'checkbox') {
-            setFormData(prev => ({ ...prev, [name]: (e.target as HTMLInputElement).checked }));
+    useEffect(() => { loadConfig(); }, []);
+    useEffect(() => { calculatePrice(); }, [formData.tipoCochera, formData.exclusivaOverride, formData.tipoVehiculo, pricesMatrix]);
+
+    const loadConfig = async () => {
+        // Parallel independent fetches
+        const fetchPrices = api.get('/precios?metodo=efectivo').catch(e => { console.error("Price load error:", e); return null; });
+        const fetchTypes = api.get('/tipos-vehiculo').catch(e => { console.error("Type load error:", e); return null; });
+
+        const [priceRes, typeRes] = await Promise.all([fetchPrices, fetchTypes]);
+
+        if (priceRes && priceRes.data) {
+            // endpoint /precios?metodo=efectivo returns the object directly
+            setPricesMatrix(priceRes.data.efectivo || priceRes.data);
+        }
+
+        if (typeRes && typeRes.data && Array.isArray(typeRes.data)) {
+            console.log("[Abonos] Tipos cargados:", typeRes.data);
+            setVehicleTypes(typeRes.data);
+            // Set initial vehicle type
+            if (typeRes.data.length > 0) {
+                setFormData(prev => ({ ...prev, tipoVehiculo: typeRes.data[0].nombre }));
+            }
+        }
+    };
+
+    const calculatePrice = () => {
+        let base = 30000;
+        const typeKey = formData.tipoVehiculo;
+
+        // Normalize helper
+        const normalize = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+        // Find price in matrix using fuzzy match
+        let matrixPrice = null;
+        if (pricesMatrix[typeKey]) {
+            matrixPrice = pricesMatrix[typeKey]?.mensual;
         } else {
-            setFormData(prev => ({ ...prev, [name]: name === 'patente' ? value.toUpperCase() : value }));
+            const normalizedType = normalize(typeKey);
+            const foundKey = Object.keys(pricesMatrix).find(k => normalize(k) === normalizedType);
+            if (foundKey) matrixPrice = pricesMatrix[foundKey]?.mensual;
+        }
+
+        if (matrixPrice) base = Number(matrixPrice);
+        else base = typeKey === 'Moto' ? 20000 : typeKey === 'Camioneta' ? 40000 : 30000;
+
+        if (formData.tipoCochera === 'Fija') {
+            base = Math.floor(base * 1.2);
+            if (formData.exclusivaOverride) base = Math.floor(base * 1.5);
+        }
+
+        setBasePriceDisplay(base);
+
+        const now = new Date();
+        const currentDay = now.getDate();
+        const remainingDays = Math.max(0, 30 - currentDay + 1);
+        const calc = Math.floor((base / 30) * remainingDays);
+        setProratedPrice(calc);
+    };
+
+    const openCamera = (field: string) => { setActivePhotoField(field); setShowCameraModal(true); };
+    const handleCapture = (img: string) => {
+        if (activePhotoField) {
+            setPhotos(prev => ({ ...prev, [activePhotoField]: img }));
+            setShowCameraModal(false);
+            setActivePhotoField(null);
         }
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
+
+        // Validation for assigned spots
+        if (formData.tipoCochera === 'Fija' && !formData.numeroCochera) {
+            toast.error('Falta número de cochera');
+            setLoading(false);
+            return;
+        }
+
         try {
-            // Transform data structure to match backend/hook expectation if needed
-            // The hook expects: customer: {}, vehicle: {}, billing: {}
-            // But here we have flat structure. Let's map it.
-            const payload = {
-                customer: {
-                    nombreApellido: formData.nombreApellido,
+            // 1. CLIENT MANAGEMENT (Find or Create)
+            let clientId = null;
+            try {
+                // Attempt to find existing client by DNI
+                const searchRes = await api.get(`/clientes?dni=${formData.dni}`);
+                if (searchRes.data && searchRes.data.length > 0) {
+                    clientId = searchRes.data[0].id;
+                    // Optional: Update client data if needed, but for now we assume existence is enough or we proceed.
+                    // Ideally we'd PUT /clientes/:id to update latest info.
+                    console.log(`Client found: ${clientId}`);
+                } else {
+                    // Create new client
+                    const clientRes = await api.post('/clientes', {
+                        nombreApellido: formData.nombre,
+                        dni: formData.dni,
+                        email: formData.email,
+                        address: formData.domicilio,
+                        localidad: formData.localidad,
+                        workAddress: formData.domicilioTrabajo,
+                        phones: {
+                            particular: formData.telParticular,
+                            emergency: formData.telEmergencia,
+                            work: formData.telTrabajo
+                        }
+                    });
+                    clientId = clientRes.data.id;
+                    console.log(`Client created: ${clientId}`);
+                }
+            } catch (err) {
+                // If search fails, potentially try creation or handle error
+                console.error("Client check failed, attempting creation...", err);
+                const clientRes = await api.post('/clientes', {
+                    nombreApellido: formData.nombre,
                     dni: formData.dni,
                     email: formData.email,
-                    telefono: formData.telefono
+                    address: formData.domicilio,
+                    localidad: formData.localidad,
+                    workAddress: formData.domicilioTrabajo,
+                    phones: {
+                        particular: formData.telParticular,
+                        emergency: formData.telEmergencia,
+                        work: formData.telTrabajo
+                    }
+                });
+                clientId = clientRes.data.id;
+            }
+
+            // 2. SPOT MANAGEMENT (Mark as Occupied/Assigned)
+            const finalType = formData.exclusivaOverride ? 'Exclusiva' : formData.tipoCochera;
+            if (finalType !== 'Movil') {
+                // Ensuring we verify valid spot number
+                if (!formData.numeroCochera) throw new Error("Cochera number required for Fixed/Exclusive");
+
+                // Assign spot to this vehicle/client (Mark occupied)
+                await api.post('/cocheras', {
+                    tipo: finalType,
+                    numero: formData.numeroCochera,
+                    vehiculos: [formData.patente], // Mark as occupied by this vehicle
+                    precioBase: basePriceDisplay,
+                    status: 'Ocupada',
+                    assignedTo: clientId
+                });
+            }
+
+            // 3. SUBSCRIPTION CREATION (Full Payload)
+            // Ensure totalInicial (proratedPrice) is sent
+            const payload = {
+                clientId: clientId, // Link to the real client ID
+                customerData: { // Redundant but requested to be "Full Object"
+                    nombreApellido: formData.nombre,
+                    dni: formData.dni,
+                    email: formData.email,
+                    address: formData.domicilio,
+                    localidad: formData.localidad,
+                    workAddress: formData.domicilioTrabajo,
+                    phones: {
+                        particular: formData.telParticular,
+                        emergency: formData.telEmergencia,
+                        work: formData.telTrabajo
+                    }
                 },
-                vehicle: {
+                vehicleData: {
                     plate: formData.patente,
                     brand: formData.marca,
                     model: formData.modelo,
-                    type: formData.tipoVehiculo || 'Auto', // Default
-                    color: formData.color
+                    color: formData.color,
+                    year: formData.anio,
+                    insurance: formData.companiaSeguro,
+                    type: formData.tipoVehiculo
                 },
-                billing: {
-                    method: formData.metodoPago,
-                    invoiceType: formData.factura,
-                    parkingType: formData.cochera
-                }
+                subscriptionType: finalType,
+                spotNumber: formData.numeroCochera, // Explicitly sending spot info
+                paymentMethod: formData.metodoPago,
+                amount: proratedPrice, // The calculated prorated amount
+                totalInicial: proratedPrice, // Explicit naming for clarity
+                billingType: formData.tipoFactura,
+                photos: photos,
+                startDate: new Date().toISOString()
             };
 
-            await onSubmit(payload);
-        } catch (error) {
-            console.error("Error submitting form", error);
+            await api.post('/abonos', payload);
+
+            // only show success on 200 OK (implied by awaiting promise not throwing)
+            toast.success('ALTA DE ABONO EXITOSA');
+
+            // Allow state reset
+            setFormData(prev => ({
+                ...prev,
+                patente: '',
+                nombre: '',
+                dni: '',
+                email: '',
+                numeroCochera: '',
+                marca: '',
+                modelo: '',
+                telParticular: ''
+            }));
+            setPhotos({});
+
+        } catch (error: any) {
+            console.error("Subscription Error:", error);
+            toast.error('Error: ' + (error.response?.data?.error || error.message || "Fallo al procesar abono"));
         } finally {
             setLoading(false);
         }
     };
 
+    // Shared Styles
+    const inputStyle = "bg-gray-950/40 border border-gray-800/60 rounded-lg px-2.5 py-1.5 text-sm text-white outline-none focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/5 transition-all w-full placeholder-gray-700/50 font-medium h-9";
+    const labelStyle = "block text-[10px] uppercase text-gray-500 font-bold mb-0.5 tracking-wider";
+
     return (
-        <div className="max-w-4xl mx-auto bg-gray-900 border border-gray-800 rounded-xl overflow-hidden shadow-2xl">
-            <div className="p-6 border-b border-gray-800 bg-gray-800/50 flex justify-between items-center">
-                <h3 className="text-xl font-bold text-white">Alta de Nuevo Suscriptor</h3>
-                <button onClick={onCancel} className="text-gray-400 hover:text-white transition-colors flex items-center gap-2 text-sm">
-                    <ArrowLeft className="w-4 h-4" /> Cancelar
-                </button>
-            </div>
+        <div className="h-full bg-[#0a0a0a] flex flex-col p-2 overflow-hidden text-white">
+            <h1 className="text-base font-bold mb-2 flex items-center gap-2 pl-2 text-gray-300">
+                <User className="text-emerald-500 w-4 h-4" /> Nueva Suscripción
+            </h1>
 
-            <form onSubmit={handleSubmit} className="p-8 space-y-8">
+            <div className="flex-1 bg-gray-900/50 border border-gray-800 rounded-xl flex overflow-hidden shadow-2xl relative">
 
-                {/* Section 1: Personal Data */}
-                <section>
-                    <h4 className="flex items-center gap-2 text-indigo-400 font-semibold mb-4 text-sm uppercase tracking-wider">
-                        <User className="w-4 h-4" /> Datos Personales
-                    </h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                        <InputGroup label="Nombre y Apellido" name="nombreApellido" value={formData.nombreApellido} onChange={handleChange} required />
-                        <InputGroup label="DNI / CUIT" name="dni" value={formData.dni} onChange={handleChange} required />
-                        <InputGroup label="Email" name="email" type="email" value={formData.email} onChange={handleChange} required />
-                        <InputGroup label="Teléfono" name="telefono" value={formData.telefono} onChange={handleChange} />
-                    </div>
-                </section>
+                {/* --- MAIN FORM (LEFT) --- */}
+                <div className="flex-1 overflow-y-auto p-3 scrollbar-hide">
+                    <form onSubmit={handleSubmit} className="space-y-3">
 
-                <div className="border-t border-gray-800"></div>
-
-                {/* Section 2: Vehicle Data */}
-                <section>
-                    <h4 className="flex items-center gap-2 text-emerald-400 font-semibold mb-4 text-sm uppercase tracking-wider">
-                        <Car className="w-4 h-4" /> Vehículo & Cochera
-                    </h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                        {/* Patente highlighted */}
-                        <div className="lg:col-span-1">
-                            <label className="block text-xs font-medium text-gray-500 mb-1 uppercase">Patente</label>
-                            <input
-                                type="text"
-                                name="patente"
-                                value={formData.patente}
-                                onChange={handleChange}
-                                className="w-full bg-gray-950 border-2 border-emerald-900/50 rounded-lg px-4 py-2.5 text-emerald-400 font-mono font-bold text-center tracking-widest focus:border-emerald-500 outline-none uppercase"
-                                placeholder="AAA-000"
-                                maxLength={10}
-                                required
-                            />
-                        </div>
-                        <InputGroup label="Marca" name="marca" value={formData.marca} onChange={handleChange} />
-                        <InputGroup label="Modelo" name="modelo" value={formData.modelo} onChange={handleChange} />
-
-                        <div className="space-y-1">
-                            <label className="block text-xs font-medium text-gray-500 mb-1 uppercase">Tipo</label>
-                            <select name="tipoVehiculo" value={formData.tipoVehiculo} onChange={handleChange} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-indigo-500 outline-none">
-                                <option value="">Seleccione...</option>
-                                <option value="Auto">Auto</option>
-                                <option value="Moto">Moto</option>
-                                <option value="Camioneta">Camioneta</option>
-                            </select>
+                        {/* 1. CONFIG COCHERA (Compact) */}
+                        <div className="flex items-center gap-4 bg-black/40 py-1.5 px-3 rounded-lg border border-gray-800/60">
+                            <span className="text-[10px] font-bold text-emerald-500/80 uppercase tracking-widest">Config Cochera</span>
+                            <div className="flex bg-gray-950 p-0.5 rounded border border-gray-800">
+                                {['Movil', 'Fija'].map(type => (
+                                    <button type="button" key={type} onClick={() => setFormData({ ...formData, tipoCochera: type })}
+                                        className={`px-3 py-0.5 rounded text-[10px] font-bold uppercase transition-all ${formData.tipoCochera === type ? 'bg-emerald-600 text-white' : 'text-gray-500 hover:text-gray-300'}`}>
+                                        {type}
+                                    </button>
+                                ))}
+                            </div>
+                            <div className={`flex items-center gap-2 ${formData.tipoCochera === 'Movil' ? 'opacity-30 pointer-events-none' : ''}`}>
+                                <input placeholder="N°" className={`${inputStyle} w-14 text-center h-7`} value={formData.numeroCochera} onChange={e => setFormData({ ...formData, numeroCochera: e.target.value })} />
+                                <label className="flex items-center gap-1.5 cursor-pointer">
+                                    <input type="checkbox" className="accent-purple-500 w-3.5 h-3.5" checked={formData.exclusivaOverride} onChange={e => setFormData({ ...formData, exclusivaOverride: e.target.checked })} />
+                                    <span className="text-[10px] font-bold text-purple-400">EXCL</span>
+                                </label>
+                            </div>
                         </div>
 
-                        <div className="space-y-1">
-                            <label className="block text-xs font-medium text-gray-500 mb-1 uppercase">Cochera</label>
-                            <select name="cochera" value={formData.cochera} onChange={handleChange} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-indigo-500 outline-none">
-                                <option value="Móvil">Móvil</option>
-                                <option value="Fija">Fija</option>
-                            </select>
-                        </div>
-                        <InputGroup label="Piso / N°" name="piso" value={formData.piso} onChange={handleChange} disabled={formData.cochera !== 'Fija'} />
-                    </div>
-                </section>
+                        {/* 2. DATOS PERSONALES (GRID 3 EQUAL) */}
+                        <div>
+                            <div className="flex items-center gap-2 mb-1.5 text-gray-500">
+                                <User className="w-3 h-3" /> <span className="text-[10px] font-bold uppercase">Datos Cliente</span>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2">
+                                {/* Row 1 */}
+                                <div><label className={labelStyle}>Nombre Completo</label><input className={inputStyle} value={formData.nombre} onChange={e => setFormData({ ...formData, nombre: e.target.value })} required /></div>
+                                <div><label className={labelStyle}>DNI / CUIT</label><input className={inputStyle} value={formData.dni} onChange={e => setFormData({ ...formData, dni: e.target.value })} required /></div>
+                                <div><label className={labelStyle}>Email</label><input className={inputStyle} value={formData.email} onChange={e => setFormData({ ...formData, email: e.target.value })} /></div>
 
-                <div className="border-t border-gray-800"></div>
+                                {/* Row 2 */}
+                                <div><label className={labelStyle}>Domicilio Real</label><input className={inputStyle} value={formData.domicilio} onChange={e => setFormData({ ...formData, domicilio: e.target.value })} /></div>
+                                <div><label className={labelStyle}>Localidad</label><input className={inputStyle} value={formData.localidad} onChange={e => setFormData({ ...formData, localidad: e.target.value })} /></div>
+                                <div><label className={labelStyle}>Dom. Trabajo</label><input className={inputStyle} value={formData.domicilioTrabajo} onChange={e => setFormData({ ...formData, domicilioTrabajo: e.target.value })} /></div>
 
-                {/* Section 3: Billing */}
-                <section>
-                    <h4 className="flex items-center gap-2 text-orange-400 font-semibold mb-4 text-sm uppercase tracking-wider">
-                        <CreditCard className="w-4 h-4" /> Facturación
-                    </h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-lg">
-                        <div className="space-y-1">
-                            <label className="block text-xs font-medium text-gray-500 mb-1 uppercase">Método Pago</label>
-                            <select name="metodoPago" value={formData.metodoPago} onChange={handleChange} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-indigo-500 outline-none">
-                                <option value="Efectivo">Efectivo</option>
-                                <option value="Transferencia">Transferencia</option>
-                                <option value="Débito">Débito</option>
-                                <option value="Crédito">Crédito</option>
-                            </select>
+                                {/* Row 3 */}
+                                <div className="relative"><label className={labelStyle}>Tel. Particular</label><Phone className="w-3 h-3 absolute top-[26px] left-2.5 text-gray-500 z-10" /><input className={`${inputStyle} pl-8`} value={formData.telParticular} onChange={e => setFormData({ ...formData, telParticular: e.target.value })} /></div>
+                                <div className="relative"><label className={labelStyle}>Tel. Emergencia</label><Phone className="w-3 h-3 absolute top-[26px] left-2.5 text-red-500/50 z-10" /><input className={`${inputStyle} pl-8 border-red-900/20`} value={formData.telEmergencia} onChange={e => setFormData({ ...formData, telEmergencia: e.target.value })} /></div>
+                                <div className="relative"><label className={labelStyle}>Tel. Trabajo</label><Phone className="w-3 h-3 absolute top-[26px] left-2.5 text-blue-500/50 z-10" /><input className={`${inputStyle} pl-8 border-blue-900/20`} value={formData.telTrabajo} onChange={e => setFormData({ ...formData, telTrabajo: e.target.value })} /></div>
+                            </div>
                         </div>
-                        <div className="space-y-1">
-                            <label className="block text-xs font-medium text-gray-500 mb-1 uppercase">Tipo Factura</label>
-                            <select name="factura" value={formData.factura} onChange={handleChange} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-indigo-500 outline-none">
-                                <option value="CC">CC</option>
-                                <option value="A">A</option>
-                                <option value="Final">Final</option>
-                            </select>
-                        </div>
-                    </div>
-                </section>
 
-                {/* Actions */}
-                <div className="pt-6 flex justify-end gap-4">
-                    <button type="button" onClick={onCancel} className="px-6 py-3 rounded-lg text-gray-400 hover:text-white hover:bg-gray-800 transition-colors">
-                        Cancelar
-                    </button>
-                    <button
-                        type="submit"
-                        disabled={loading}
-                        className={`px-8 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold shadow-lg shadow-indigo-900/50 flex items-center gap-2 ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    >
-                        <Save className="w-5 h-5" />
-                        {loading ? 'Guardando...' : 'Guardar Suscriptor'}
-                    </button>
+                        {/* 3. DOCUMENTACION (Horizontal) */}
+                        <div className="flex gap-2">
+                            {['Seguro', 'DNI', 'Cédula'].map(doc => (
+                                <button key={doc} type="button" onClick={() => openCamera(doc)}
+                                    className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded border border-dashed text-[10px] font-bold uppercase transition-all ${photos[doc] ? 'border-emerald-500/50 bg-emerald-900/10 text-emerald-400' : 'border-gray-800 bg-gray-950/20 text-gray-500 hover:bg-white/5'}`}>
+                                    {photos[doc] ? <Check className="w-3 h-3" /> : <Camera className="w-3 h-3" />} {doc}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* 4. VEHICULO (GRID 4x2) */}
+                        <div className="pt-1.5 border-t border-gray-800/50">
+                            <div className="flex items-center gap-2 mb-1.5 text-gray-500">
+                                <Car className="w-3 h-3" /> <span className="text-[10px] font-bold uppercase">Datos Vehículo</span>
+                            </div>
+                            <div className="grid grid-cols-4 gap-2">
+                                {/* Row 1: Patente, Marca, Modelo, Tipo */}
+                                <div>
+                                    <label className={labelStyle}>Patente</label>
+                                    <input className={`${inputStyle} font-mono text-center font-bold tracking-widest uppercase border-l-[3px] border-l-emerald-500`}
+                                        value={formData.patente} onChange={e => setFormData({ ...formData, patente: e.target.value.toUpperCase() })} required placeholder="AAA000" />
+                                </div>
+                                <div><label className={labelStyle}>Marca</label><input className={inputStyle} value={formData.marca} onChange={e => setFormData({ ...formData, marca: e.target.value })} /></div>
+                                <div><label className={labelStyle}>Modelo</label><input className={inputStyle} value={formData.modelo} onChange={e => setFormData({ ...formData, modelo: e.target.value })} /></div>
+                                <div>
+                                    <label className={labelStyle}>Tipo</label>
+                                    <select className={`${inputStyle} appearance-none`} value={formData.tipoVehiculo} onChange={e => setFormData({ ...formData, tipoVehiculo: e.target.value })}>
+                                        {vehicleTypes.length > 0 ? (
+                                            vehicleTypes.map((v: any) => (
+                                                <option key={v.id} value={v.nombre}>{v.nombre}</option>
+                                            ))
+                                        ) : (
+                                            <option>Cargando vehículos...</option>
+                                        )}
+                                    </select>
+                                </div>
+
+                                {/* Row 2: Color, Año, Cia Seguro (span 2) */}
+                                <div><label className={labelStyle}>Color</label><input className={inputStyle} value={formData.color} onChange={e => setFormData({ ...formData, color: e.target.value })} /></div>
+                                <div><label className={labelStyle}>Año</label><input className={inputStyle} value={formData.anio} onChange={e => setFormData({ ...formData, anio: e.target.value })} /></div>
+                                <div className="col-span-2"><label className={labelStyle}>Cía. Seguro</label><input className={inputStyle} value={formData.companiaSeguro} onChange={e => setFormData({ ...formData, companiaSeguro: e.target.value })} placeholder="Ej. La Caja / Federación Patronal" /></div>
+                            </div>
+                        </div>
+
+                    </form>
                 </div>
 
-            </form>
+                {/* --- SIDEBAR (RIGHT) --- */}
+                <div className="w-64 bg-gray-950 border-l border-gray-800 p-3 flex flex-col shrink-0 z-10 gap-4">
+
+                    {/* Payment Config Section */}
+                    <div className="space-y-3">
+                        <h2 className="text-gray-500 text-[10px] font-bold uppercase tracking-wider flex items-center gap-2 mb-2">
+                            <Wallet className="w-3 h-3" /> Facturación
+                        </h2>
+
+                        <div className="space-y-2">
+                            <div>
+                                <label className={labelStyle}>Método de Pago</label>
+                                <select className={`${inputStyle} appearance-none bg-gray-900`} value={formData.metodoPago} onChange={e => setFormData({ ...formData, metodoPago: e.target.value })}>
+                                    <option value="Efectivo">Efectivo</option>
+                                    <option value="Transferencia">Transferencia</option>
+                                    <option value="Débito">Débito</option>
+                                    <option value="Crédito">Crédito</option>
+                                    <option value="QR">QR</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className={labelStyle}>Tipo Factura</label>
+                                <select className={`${inputStyle} appearance-none bg-gray-900`} value={formData.tipoFactura} onChange={e => setFormData({ ...formData, tipoFactura: e.target.value })}>
+                                    <option value="CC">CC</option>
+                                    <option value="A">A</option>
+                                    <option value="Final">Final</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Summary Section */}
+                    <div className="mt-auto">
+                        <div className="space-y-1.5 bg-gray-900/40 p-3 rounded border border-gray-800/50">
+                            <div className="flex justify-between border-b border-gray-800 pb-1">
+                                <span className="text-[10px] text-gray-500 uppercase font-bold">Mensual</span>
+                                <span className="text-xs text-white font-mono">${basePriceDisplay.toLocaleString()}</span>
+                            </div>
+                            <div className="flex justify-between pt-1">
+                                <span className="text-[10px] text-gray-500 uppercase font-bold">Restante</span>
+                                <span className="text-xs text-emerald-400 font-bold">{Math.max(0, 30 - new Date().getDate() + 1)}d</span>
+                            </div>
+                        </div>
+
+                        <div className="bg-emerald-900/10 border border-emerald-500/20 p-3 rounded-lg mt-3 text-center">
+                            <span className="block text-[9px] text-emerald-500/70 uppercase font-bold tracking-widest mb-0.5">Total Inicial</span>
+                            <span className="block text-2xl font-black text-white tracking-tighter">${proratedPrice.toLocaleString()}</span>
+                        </div>
+
+                        <button onClick={handleSubmit} disabled={loading}
+                            className="w-full py-3 bg-white hover:bg-gray-200 text-black text-xs font-black uppercase tracking-widest rounded shadow-lg flex items-center justify-center gap-2 mt-3 transition-all active:scale-95">
+                            {loading ? '...' : <><Check className="w-3.5 h-3.5" /> Confirmar</>}
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <WebcamModal isOpen={showCameraModal} onClose={() => setShowCameraModal(false)} onCapture={handleCapture} label={activePhotoField || 'Doc'} />
         </div>
     );
 };
-
-// Helper Input Component
-const InputGroup = ({ label, name, value, onChange, type = "text", required = false, disabled = false }: any) => (
-    <div className="space-y-1">
-        <label className="block text-xs font-medium text-gray-500 mb-1 uppercase">{label} {required && '*'}</label>
-        <input
-            type={type}
-            name={name}
-            value={value}
-            onChange={onChange}
-            disabled={disabled}
-            className={`w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-        />
-    </div>
-);
 
 export default FormularioAbono;

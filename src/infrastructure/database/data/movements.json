@@ -1,12 +1,15 @@
 [
   {
-    "id": "93658126-2f82-4882-a8ab-7a66ef4cfbdb",
-    "relatedEntityId": "e4d7221a-6c94-429a-ba7f-54fddc5fb5ce",
+    "id": "937d06b3-e2df-42ce-a0e5-72dc174194b7",
+    "relatedEntityId": "67018ac8-4ace-49e9-8c84-6d9c8f57245e",
     "type": "CobroEstadia",
-    "timestamp": "2026-02-02T23:41:19.757Z",
-    "amount": 3000,
-    "paymentMethod": "Efectivo",
-    "notes": "Salida de: ABC123",
-    "createdAt": "2026-02-02T23:41:19.758Z"
+    "timestamp": "2026-02-03T08:10:26.335Z",
+    "amount": 1200,
+    "paymentMethod": "Debito",
+    "operator": "Membrela Sabrola",
+    "invoiceType": "Final",
+    "plate": "QTS223",
+    "notes": "Salida de: QTS223",
+    "createdAt": "2026-02-03T08:10:26.339Z"
   }
 ]

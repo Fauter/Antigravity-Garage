@@ -1,0 +1,101 @@
+[
+    {
+        "id": "matrix_v2",
+        "values": {
+            "efectivo": {
+                "Auto": {
+                    "hora": 3000,
+                    "Media Estadia": 9000,
+                    "completa": 15000,
+                    "mensual": 50000,
+                    "Movil": 30000,
+                    "Fija": 35000,
+                    "Exclusiva": 50000
+                },
+                "Moto": {
+                    "hora": 2000,
+                    "Media Estadia": 6000,
+                    "completa": 10000,
+                    "mensual": 30000,
+                    "Movil": 20000,
+                    "Fija": 24000,
+                    "Exclusiva": 30000
+                },
+                "Camioneta": {
+                    "hora": 4000,
+                    "Media Estadia": 12000,
+                    "completa": 20000,
+                    "mensual": 60000,
+                    "Movil": 40000,
+                    "Fija": 48000,
+                    "Exclusiva": 60000
+                },
+                "CAMION": {
+                    "hora": 6000,
+                    "Media Estadia": 18000,
+                    "completa": 30000,
+                    "mensual": 90000,
+                    "Movil": 90000,
+                    "Fija": 100000,
+                    "Exclusiva": 120000
+                },
+                "SPRINTER": {
+                    "hora": 5000,
+                    "Media Estadia": 15000,
+                    "completa": 25000,
+                    "mensual": 75000,
+                    "Movil": 75000,
+                    "Fija": 85000,
+                    "Exclusiva": 100000
+                }
+            },
+            "otrosMetodos": {
+                "Auto": {
+                    "hora": 3300,
+                    "Media Estadia": 9900,
+                    "completa": 16500,
+                    "mensual": 55000,
+                    "Movil": 33000,
+                    "Fija": 38500,
+                    "Exclusiva": 55000
+                },
+                "Moto": {
+                    "hora": 2200,
+                    "Media Estadia": 6600,
+                    "completa": 11000,
+                    "mensual": 33000,
+                    "Movil": 22000,
+                    "Fija": 26400,
+                    "Exclusiva": 33000
+                },
+                "Camioneta": {
+                    "hora": 4400,
+                    "Media Estadia": 13200,
+                    "completa": 22000,
+                    "mensual": 66000,
+                    "Movil": 44000,
+                    "Fija": 52800,
+                    "Exclusiva": 66000
+                },
+                "CAMION": {
+                    "hora": 6600,
+                    "Media Estadia": 19800,
+                    "completa": 33000,
+                    "mensual": 99000,
+                    "Movil": 99000,
+                    "Fija": 110000,
+                    "Exclusiva": 132000
+                },
+                "SPRINTER": {
+                    "hora": 5500,
+                    "Media Estadia": 16500,
+                    "completa": 27500,
+                    "mensual": 82500,
+                    "Movil": 82500,
+                    "Fija": 93500,
+                    "Exclusiva": 110000
+                }
+            }
+        }
+    }
+]

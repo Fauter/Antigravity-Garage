@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useState, useEffect } from 'react';
+import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '../services/api';
 
@@ -13,17 +13,44 @@ export const useEntryLogic = () => {
     const [vehicleType, setVehicleType] = useState('');
     const queryClient = useQueryClient();
 
+    // Fetch Vehicle Types
+    const { data: vehicleTypes = [] } = useQuery({
+        queryKey: ['vehicleTypes'],
+        queryFn: async () => {
+            const res = await api.get('/tipos-vehiculo');
+            // Map to simplified structure if needed, or use directly
+            return (res.data || []).map((v: any) => ({
+                id: v.nombre, // Using name as ID for the engine logic if needed, OR v.id. 
+                // Engine expects 'vehicleType' string in Stay. If we use UUID here, Stay will have UUID. 
+                // But PricingEngine logic `matrix[type]` uses keys like "Auto".
+                // So if we save UUID, we break PricingEngine unless we map back.
+                // DECISION: Map ID to Name for now to keep PricingEngine happy with string keys.
+                // OR: ensure EntryPanel saves the Name.
+                // The PanelEntrada <select> uses value={type.id}.
+                // If I set id: v.nombre, then value is "Auto". 
+                // This aligns with PricingEngine expecting "Auto".
+                label: v.nombre
+            }));
+        }
+    });
+
+    // Auto-select first type if available and none selected
+    useEffect(() => {
+        if (!vehicleType && vehicleTypes.length > 0) {
+            setVehicleType(vehicleTypes[0].id);
+        }
+    }, [vehicleTypes, vehicleType]);
+
     // Mutation para registrar entrada
     const entryMutation = useMutation({
         mutationFn: async (data: EntryFormData) => {
-            // TODO: Ajustar endpoint real según backend
             const response = await api.post('/estadias/entrada', data);
             return response.data;
         },
         onSuccess: (data) => {
             // Invalidate active stays query to refresh list
             queryClient.invalidateQueries({ queryKey: ['stays'] });
-            queryClient.invalidateQueries({ queryKey: ['activeStays'] }); // Also invalidate audit list
+            queryClient.invalidateQueries({ queryKey: ['activeStays'] });
             toast.success(`Ingreso registrado: ${data.plate || 'Vehículo'}`, {
                 description: 'Entrada autorizada correctamente'
             });
@@ -38,7 +65,8 @@ export const useEntryLogic = () => {
 
     const resetForm = () => {
         setPlate('');
-        setVehicleType('');
+        // Keep vehicle type selected or reset to first? User preference usually to keep last.
+        // But for safety let's keep current.
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -47,13 +75,6 @@ export const useEntryLogic = () => {
 
         entryMutation.mutate({ plate, vehicleType });
     };
-
-    // Mock de Tipos de Vehículo (luego vendrá de API)
-    const vehicleTypes = [
-        { id: 'auto', label: 'Auto' },
-        { id: 'moto', label: 'Moto' },
-        { id: 'camioneta', label: 'Camioneta' },
-    ];
 
     return {
         plate,

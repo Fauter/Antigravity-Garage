@@ -1,0 +1,83 @@
+{
+  "efectivo": {
+    "Auto": {
+      "Hora": 1000,
+      "Media Estadia": 5000,
+      "Estadia": 8000,
+      "5 Minutos": 100,
+      "Media Estadía": 5000,
+      "Estadía": 8000,
+      "Movil": 160000,
+      "Fija": 165000,
+      "Exclusiva": 170000
+    },
+    "Moto": {
+      "Hora": 500,
+      "Media Estadia": 2500,
+      "Estadia": 4000,
+      "5 Minutos": 50,
+      "Media Estadía": 2500,
+      "Movil": 80000,
+      "Fija": 85000,
+      "Exclusiva": 90000
+    },
+    "Camioneta": {
+      "Hora": 1500,
+      "Media Estadia": 7000,
+      "Estadia": 12000,
+      "5 Minutos": 150,
+      "Media Estadía": 7500,
+      "Movil": 240000,
+      "Fija": 245000,
+      "Exclusiva": 250000
+    },
+    "Bicicleta": {
+      "Hora": 250,
+      "Media Estadía": 1300,
+      "Estadía": 2000,
+      "Movil": 40000,
+      "Fija": 45000,
+      "Exclusiva": 50000
+    }
+  },
+  "otros": {
+    "Auto": {
+      "Hora": 1200,
+      "Media Estadia": 6000,
+      "Estadia": 9000,
+      "5 Minutos": 110,
+      "Media Estadía": 5500,
+      "Movil": 176000,
+      "Fija": 181000,
+      "Exclusiva": 187000
+    },
+    "Moto": {
+      "Hora": 600,
+      "Media Estadia": 3000,
+      "Estadia": 4500,
+      "5 Minutos": 60,
+      "Media Estadía": 3000,
+      "Movil": 88000,
+      "Fija": 93000,
+      "Exclusiva": 99000
+    },
+    "Camioneta": {
+      "Hora": 1800,
+      "Media Estadia": 8000,
+      "Estadia": 13000,
+      "5 Minutos": 180,
+      "Media Estadía": 8300,
+      "Movil": 264000,
+      "Fija": 269000,
+      "Exclusiva": 275000
+    },
+    "Bicicleta": {
+      "Hora": 300,
+      "Media Estadía": 1400,
+      "Estadía": 2200,
+      "Movil": 44000,
+      "Fija": 49000,
+      "Exclusiva": 55000
+    }
+  }
+}

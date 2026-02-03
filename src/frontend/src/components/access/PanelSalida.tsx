@@ -5,6 +5,15 @@ import { api } from '../../services/api';
 
 import { useAuth } from '../../context/AuthContext';
 import { PricingEngine } from '../../../../modules/Billing/domain/PricingEngine';
+import { ApiTariffRepository } from '../../repositories/ApiTariffRepository';
+import { ApiParamRepository } from '../../repositories/ApiParamRepository';
+import { ApiPriceMatrixRepository } from '../../repositories/ApiPriceMatrixRepository';
+
+// Frontend Instance of Pricing Engine
+const tariffRepo = new ApiTariffRepository();
+const paramRepo = new ApiParamRepository();
+const priceRepo = new ApiPriceMatrixRepository();
+const pricingEngine = new PricingEngine(tariffRepo, paramRepo, priceRepo);
 
 // API Hook simplified for this component
 const useExitLogic = () => {
@@ -32,12 +41,8 @@ const useExitLogic = () => {
                 setIsSubscriber(true);
             } else {
                 if (res.data) {
-                    const entry = new Date(res.data.entryTime);
-                    const now = new Date();
-                    const hours = Math.ceil((now.getTime() - entry.getTime()) / (1000 * 60 * 60));
-                    const estimated = hours * 3000;
-                    setBasePrice(estimated);
-                    setPrice(estimated); // Default to base
+                    setBasePrice(0);
+                    setPrice(0); // Default to 0, wait for payment method
                 }
             }
 
@@ -49,13 +54,14 @@ const useExitLogic = () => {
         }
     };
 
-    const processExit = async (plate: string, paymentMethod: string) => {
+    const processExit = async (plate: string, paymentMethod: string, invoiceType: string) => {
         setLoading(true);
         try {
             // Include operator in the request
             await api.post('/estadias/salida', {
                 plate,
                 paymentMethod,
+                invoiceType,
                 operator: user ? `${user.nombre} ${user.apellido}` : 'Unknown'
             });
             setStay(null);
@@ -78,7 +84,7 @@ const PanelSalida: React.FC = () => {
     const [invoiceType, setInvoiceType] = useState('Final');
     const [promo, setPromo] = useState('NINGUNA');
 
-    const { searchStay, stay, price, setPrice, basePrice, loading, error, isSubscriber, processExit } = useExitLogic();
+    const { searchStay, stay, price, setPrice, loading, error, isSubscriber, processExit } = useExitLogic();
 
     const handleSearch = (e: React.FormEvent) => {
         e.preventDefault();
@@ -88,33 +94,49 @@ const PanelSalida: React.FC = () => {
 
     // Calculation Logic
     useEffect(() => {
-        if (stay && !isSubscriber) {
-            // PRICING ENGINE INTEGRATION
-            // Assuming strict hourly rate of 3000 for now as per previous logic
-            const hourlyRate = 3000;
+        const calculate = async () => {
+            if (!stay || isSubscriber || !paymentMethod) return;
+
             const entryDate = new Date(stay.entryTime);
-            const exitDate = new Date(); // Live calculation
+            const exitDate = new Date();
 
-            let calculated = PricingEngine.calculateParkingFee(
-                entryDate,
-                exitDate,
-                hourlyRate,
-                paymentMethod || 'Efectivo'
-            );
+            // Log for debugging
+            const durationMinutes = Math.ceil((exitDate.getTime() - entryDate.getTime()) / 60000);
+            console.log(`[PanelSalida] Calculating for ${stay.plate} (${stay.vehicleType}) - Method: ${paymentMethod} - Duration: ${durationMinutes} min`);
 
-            // Promos apply AFTER base calculation
-            if (promo === 'VISITA') calculated = 0;
-            if (promo === 'LOCAL') calculated = Math.max(0, calculated - 1000);
+            try {
+                let calculated = await pricingEngine.calculateParkingFee(
+                    { ...stay, vehicleType: stay.vehicleType || 'Auto' },
+                    exitDate,
+                    paymentMethod
+                );
 
-            setPrice(calculated);
-        } else if (!paymentMethod && !isSubscriber && stay) {
-            setPrice(0); // Default to 0
+                console.log(`[PanelSalida] Price Result: $${calculated}`);
+
+                // Promos apply AFTER base calculation
+                if (promo === 'VISITA') calculated = 0;
+                if (promo === 'LOCAL') calculated = Math.max(0, calculated - 1000);
+
+                setPrice(calculated);
+            } catch (err) {
+                console.error("[PanelSalida] Calculation error:", err);
+                setPrice(0);
+            }
+        };
+
+        // Only run if we have a stay and it's not a subscriber 
+        if (stay && !isSubscriber) {
+            if (paymentMethod) {
+                calculate();
+            } else {
+                setPrice(0);
+            }
         }
-    }, [paymentMethod, stay, basePrice, isSubscriber, promo]);
+    }, [paymentMethod, stay, promo]);
 
     const handleExit = async () => {
         if (!stay) return;
-        const success = await processExit(stay.plate, paymentMethod || 'Efectivo');
+        const success = await processExit(stay.plate, paymentMethod || 'Efectivo', invoiceType || 'Final');
         if (success) {
             toast.success(`Salida ok: ${stay.plate}`, {
                 description: `Cobro: ${paymentMethod || 'Aut.'}`
@@ -142,6 +164,7 @@ const PanelSalida: React.FC = () => {
             <div className="flex bg-gray-900 border-b border-gray-800" style={{ height: '35%' }}>
 
                 {/* Evidence Viewer (Left) - NOT A LIVE CAMERA */}
+                {/* ... Evidence Viewer code ... */}
                 <div className="w-1/2 relative bg-gray-900 border-r border-gray-800 p-2 flex items-center justify-center overflow-hidden">
                     {stay ? (
                         <div className="relative z-10 w-full h-full flex flex-col items-center justify-center bg-black/20 rounded-lg border border-gray-800/50">
@@ -173,8 +196,8 @@ const PanelSalida: React.FC = () => {
                             {/* Time Data */}
                             <div className="space-y-2">
                                 <div>
-                                    <span className="text-gray-500 text-[9px] font-bold uppercase tracking-widest block mb-0.5">Patente</span>
-                                    <span className="text-xl font-mono text-white font-bold">{stay.plate}</span>
+                                    <span className="text-gray-500 text-[9px] font-bold uppercase tracking-widest block mb-0.5">Vehículo</span>
+                                    <span className="text-xl font-mono text-white font-bold">{stay.plate} - {stay.vehicleType || 'Auto'}</span>
                                 </div>
                                 <div className="flex justify-between text-sm border-b border-gray-800 pb-1">
                                     <span className="text-gray-500">Entrada</span>

@@ -1,0 +1,74 @@
+[
+  {
+    "nombre": "Hora",
+    "tipo": "hora",
+    "dias": 0,
+    "horas": 1,
+    "minutos": 0,
+    "tolerancia": 0,
+    "id": "f8558352-f6c9-4e6d-ae44-40dbd60d5f60"
+  },
+  {
+    "nombre": "4 Horas",
+    "tipo": "turno",
+    "dias": 0,
+    "horas": 0,
+    "minutos": 0,
+    "tolerancia": 0,
+    "id": "58e796a6-ec33-415a-89b8-e30316900073"
+  },
+  {
+    "nombre": "Media Estadía",
+    "tipo": "hora",
+    "dias": 0,
+    "horas": 12,
+    "minutos": 0,
+    "tolerancia": 0,
+    "id": "cbbff0c2-629f-40ca-93ca-111e714068bd"
+  },
+  {
+    "nombre": "8 Horas",
+    "tipo": "turno",
+    "dias": 0,
+    "horas": 8,
+    "minutos": 0,
+    "tolerancia": 0,
+    "id": "4c02cc11-d0f0-4f19-9f03-4236f93e753a"
+  },
+  {
+    "nombre": "Movil",
+    "tipo": "abono",
+    "dias": 30,
+    "horas": 0,
+    "minutos": 0,
+    "tolerancia": 0,
+    "id": "sub-movil-protected"
+  },
+  {
+    "nombre": "Fija",
+    "tipo": "abono",
+    "dias": 30,
+    "horas": 0,
+    "minutos": 0,
+    "tolerancia": 0,
+    "id": "sub-fija-protected"
+  },
+  {
+    "nombre": "Exclusiva",
+    "tipo": "abono",
+    "dias": 30,
+    "horas": 0,
+    "minutos": 0,
+    "tolerancia": 0,
+    "id": "sub-exclusiva-protected"
+  },
+  {
+    "nombre": "Estadía",
+    "tipo": "hora",
+    "dias": 1,
+    "horas": 0,
+    "minutos": 0,
+    "tolerancia": 0,
+    "id": "2c8cefdf-4302-4d8a-a252-44a5cb869aae"
+  }
+]

@@ -17,7 +17,9 @@ const AuditoriaVehiculos: React.FC = () => {
         try {
             setLoading(true);
             const res = await api.get<Stay[]>('/estadias');
-            setStays(res.data);
+            // Filter strictly by no exitTime just in case backend returns all
+            // Note: Backend /estadias should only return active, but double check
+            setStays(res.data.filter((s: any) => !s.exitTime && s.active !== false));
         } catch (error) {
             console.error('Error fetching auditoria', error);
             toast.error('No se pudo cargar la auditoría');

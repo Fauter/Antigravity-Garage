@@ -1,18 +1,21 @@
 [
   {
-    "id": "e4d7221a-6c94-429a-ba7f-54fddc5fb5ce",
+    "id": "67018ac8-4ace-49e9-8c84-6d9c8f57245e",
     "vehicleId": null,
-    "plate": "ABC123",
-    "entryTime": "2026-02-02T23:40:56.993Z",
-    "active": true,
-    "createdAt": "2026-02-02T23:40:56.993Z"
+    "plate": "QTS223",
+    "entryTime": "2026-02-03T07:56:06.779Z",
+    "active": false,
+    "createdAt": "2026-02-03T07:56:06.779Z",
+    "vehicleType": "Auto",
+    "exitTime": "2026-02-03T08:10:26.335Z"
   },
   {
-    "id": "478efce5-b302-4952-aac7-4fdaa52a6920",
+    "id": "abaf6bd5-9fdd-428e-8f60-00cca4939faf",
     "vehicleId": null,
-    "plate": "ZM458CX",
-    "entryTime": "2026-02-02T23:41:05.961Z",
+    "plate": "AQE344",
+    "entryTime": "2026-02-03T08:02:05.842Z",
     "active": true,
-    "createdAt": "2026-02-02T23:41:05.961Z"
+    "createdAt": "2026-02-03T08:02:05.842Z",
+    "vehicleType": "Camioneta"
   }
 ]

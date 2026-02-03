@@ -8,10 +8,10 @@ export const TimestampSchema = z.date();
 export const SubscriptionTypeEnum = z.enum(['Exclusiva', 'Fija', 'Movil']);
 export type SubscriptionType = z.infer<typeof SubscriptionTypeEnum>;
 
-export const VehicleTypeEnum = z.enum(['Auto', 'Moto', 'Camioneta', 'Otro']);
+export const VehicleTypeEnum = z.string();
 export type VehicleType = z.infer<typeof VehicleTypeEnum>;
 
-export const PaymentMethodEnum = z.enum(['Efectivo', 'MercadoPago', 'Tarjeta', 'Otro']);
+export const PaymentMethodEnum = z.enum(['Efectivo', 'Transferencia', 'Debito', 'Credito', 'QR']);
 export type PaymentMethod = z.infer<typeof PaymentMethodEnum>;
 
 export const MovementTypeEnum = z.enum(['CobroEstadia', 'CobroAbono', 'CobroRenovacion', 'IngresoVarios', 'EgresoVarios']);
@@ -97,6 +97,12 @@ export const MovementSchema = z.object({
 
   ticketNumber: z.number().int().optional(),
   ticketPago: z.number().int().optional(),
+
+  // Traceability
+  operator: z.string().optional(),
+  invoiceType: z.enum(['A', 'B', 'C', 'CC', 'Final']).optional(), // Final = Consumidor Final
+  plate: z.string().optional(), // Patente para búsqueda rápida
+
 
   notes: z.string().optional(),
   shiftId: UuidSchema.optional(), // Turno que cobró

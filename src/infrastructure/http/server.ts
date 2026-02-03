@@ -3,7 +3,6 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import { connectDB } from '../database/mongodb';
-import { connectDB } from '../database/mongodb';
 
 console.log('🚀 [BACKEND] Proceso de arranque iniciado...');
 
@@ -29,17 +28,22 @@ export const startServer = async () => {
 
     // --- API Routes ---
 
-    // Dynamic import to avoid circular dependencies
+
     // Dynamic import to avoid circular dependencies
     const { AccessController } = await import('../../modules/AccessControl/infra/AccessController');
     const { GarageController } = await import('../../modules/Garage/infra/GarageController');
     const { AuthController } = await import('../../modules/Identity/infra/AuthController');
 
+    // NEW: Configuration Module Routes
+    const { default: configRoutes } = await import('../../modules/Configuration/http/routes');
+
     const accessController = new AccessController();
     const garageController = new GarageController();
     const authController = new AuthController();
 
-    // Access Control (Estadías)
+    // Mount Configuration Routes (Precios, Tarifas, Parametros)
+    app.use('/api', configRoutes);
+
     // Access Control (Estadías)
     app.post('/api/estadias/entrada', accessController.registerEntry.bind(accessController));
     app.post('/api/estadias/salida', accessController.registerExit.bind(accessController));
@@ -52,21 +56,21 @@ export const startServer = async () => {
     // Caja / Billing
     app.get('/api/movimientos', accessController.getAllMovements.bind(accessController));
 
-    // Config & Reset
+    // Config & Reset (Legacy routes commented out or kept for specific utilities)
+    // app.get('/api/config/precios', accessController.getPrices.bind(accessController)); // Replaced by /api/precios
+    // app.post('/api/config/precios', accessController.savePrices.bind(accessController)); // Replaced by /api/precios
+
+    // Vehicle Types are now handled by /api/tipos-vehiculo in Config Module
+    // app.get('/api/config/vehiculos', accessController.getVehicleTypes.bind(accessController)); 
+    // app.post('/api/config/vehiculos', accessController.saveVehicleType.bind(accessController));
+    // app.delete('/api/config/vehiculos/:id', accessController.deleteVehicleType.bind(accessController));
+
     app.post('/api/config/reset', async (req, res) => {
         try {
             console.log('⚠️ RESET SOLICITADO. Limpiando Base de Datos...');
 
-            // Usar las instancias activas de los controladores para limpiar RAM y Disco
-            // AccessController maneja StayRepository y MovementRepository
-            // GarageController maneja SubscriptionRepository
-
             await accessController.reset();
             await garageController.reset();
-
-            // Note: accessController.reset() clears both stays and movements
-            // garageController.reset() clears subscriptions
-
 
             console.log('🗑️ Base de datos (Abonos, Movimientos, Estadías) reiniciada.');
 
@@ -80,6 +84,12 @@ export const startServer = async () => {
     // Garage / Subscriptions (Abonos)
     app.post('/api/abonos', garageController.createSubscription.bind(garageController));
     app.get('/api/abonos', garageController.getAllSubscriptions.bind(garageController));
+
+    // Cocheras
+    app.get('/api/cocheras', garageController.getAllCocheras.bind(garageController));
+    app.post('/api/cocheras', garageController.createCochera.bind(garageController));
+    app.put('/api/cocheras/:id', garageController.updateCochera.bind(garageController));
+    app.delete('/api/cocheras/:id', garageController.deleteCochera.bind(garageController));
 
 
     app.post('/api/sync', async (req, res) => {

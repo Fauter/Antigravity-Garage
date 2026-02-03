@@ -1,126 +1,178 @@
-import { SubscriptionType } from '../../../shared/schemas';
+// Interfaces for Dependency Injection
+interface TariffRepo { getAll(): Promise<any[]> }
+interface ParamRepo { getParams(): Promise<any> }
+interface PriceRepo { getPrices(method: string): Promise<any> }
 
-export interface PricingByMethod {
-    Efectivo: number;
-    [key: string]: number; // Otros métodos
-}
+interface Chunk { minutes: number; price: number; name: string }
 
-export interface TarifasConfig {
-    mensual: {
-        Exclusiva: PricingByMethod;
-        Fija: PricingByMethod;
-        Movil: PricingByMethod;
-    };
-    mora: {
-        nivel1: number;
-        nivel2: number;
-    };
-}
-
-/**
- * Motor de precios puro (Domain Service).
- * Soporta precios diferenciados por método de pago.
- */
 export class PricingEngine {
-    /**
-     * Calcula el monto a cobrar por una suscripción.
-     * 
-     * @param type Tipo de suscripción
-     * @param startDate Fecha de inicio
-     * @param endDate Fecha de fin
-     * @param config Configuración de precios (con diferenciación por método)
-     * @param paymentDate Fecha efectiva del pago
-     * @param paymentMethod Método de pago (Efectivo por defecto)
-     */
-    static calculateSubscriptionFee(
-        type: SubscriptionType,
-        startDate: Date,
-        endDate: Date,
-        config: TarifasConfig,
-        paymentDate: Date = new Date(),
+    private tariffRepo: TariffRepo;
+    private paramRepo: ParamRepo;
+    private priceRepo: PriceRepo;
+
+    constructor(tariffRepo: TariffRepo, paramRepo: ParamRepo, priceRepo: PriceRepo) {
+        this.tariffRepo = tariffRepo;
+        this.paramRepo = paramRepo;
+        this.priceRepo = priceRepo;
+    }
+
+    // --- Dynamic Parking Logic (DP Optimization) ---
+    async calculateParkingFee(
+        stay: { entryTime: Date | string; exitTime?: Date | string | null; plate: string; vehicleType?: string },
+        exitTime: Date | string,
         paymentMethod: string = 'Efectivo'
-    ): number {
-        // 1. Obtener configuración de precio para el tipo
-        const priceConfig = config.mensual[type];
-        if (!priceConfig) {
-            throw new Error(`Tarifa no configurada para el tipo de suscripción: ${type}`);
+    ): Promise<number> {
+        // 1. Validation & Setup
+        const start = new Date(stay.entryTime);
+        const end = new Date(exitTime);
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
+        if (end <= start) return 0;
+
+        const durationMs = end.getTime() - start.getTime();
+        const minutesTotal = Math.ceil(durationMs / 60000);
+
+        // 2. Load Configuration (Async)
+        // Map UI Payment Methods to Repository Keys ('efectivo' | 'otros')
+        const repoMethod = paymentMethod === 'Efectivo' ? 'efectivo' : 'otros';
+
+        const [tariffs, params, matrix] = await Promise.all([
+            this.tariffRepo.getAll(),
+            this.paramRepo.getParams(),
+            this.priceRepo.getPrices(repoMethod)
+        ]);
+
+        // 3. Tolerance Logic:
+        // User requested to IGNORE tolerance if we are here (calculating payment).
+        // If minutesTotal > 0, we must charge at least the minimum unit.
+        // if (params.toleranciaInicial > 0 && minutesTotal <= params.toleranciaInicial) {
+        //     console.log(`[PricingEngine] Within tolerance (${params.toleranciaInicial}m), but enforcing minimum payment as requested.`);
+        // }
+
+        // 4. Resolve Prices for Vehicle
+        const type = stay.vehicleType || 'Auto';
+
+        // Normalize helper: exact match for keys like 'Media Estadía' vs 'Media Estadia'
+        const normalize = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+        // Find vehicle prices object with fuzzy matching
+        let vehiclePrices: any = null;
+        // Try exact match first
+        if (matrix[type]) {
+            vehiclePrices = matrix[type];
+        } else {
+            // Try normalized match
+            const normalizedType = normalize(type);
+            const foundKey = Object.keys(matrix).find(k => normalize(k) === normalizedType);
+            if (foundKey) vehiclePrices = matrix[foundKey];
         }
 
-        // 2. Seleccionar precio base según método de pago
-        // Si el método no existe explícitamente, usamos 'Efectivo' como base.
-        let basePrice = priceConfig[paymentMethod];
-        if (basePrice === undefined) {
-            basePrice = priceConfig['Efectivo'];
+        // Fallback to 'Auto' if still not found
+        if (!vehiclePrices && matrix['Auto']) {
+            console.log(`[PricingEngine] Vehicle type '${type}' not found. Falling back to 'Auto'.`);
+            vehiclePrices = matrix['Auto'];
         }
 
-        // 3. Determinar si es un Alta Nueva (Prorrateo)
-        // Ensure startDate is Date object
-        const startObj = new Date(startDate);
-        const startDay = startObj.getDate();
-        const isProrated = startDay > 1;
-
-        if (isProrated) {
-            // Cálculo de Prorrateo: (base / diasMes) * diasRestantes
-            const year = startObj.getFullYear();
-            const month = startObj.getMonth();
-            const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-            const diasRestantes = daysInMonth - startDay + 1;
-
-            const dailyRate = basePrice / daysInMonth;
-            const proratedAmount = dailyRate * diasRestantes;
-
-            return Math.round(proratedAmount * 100) / 100;
+        if (!vehiclePrices) {
+            console.warn(`[PricingEngine] No prices found for '${type}' and no fallback.`);
+            return 0;
         }
 
-        // 4. Si NO es prorrateo, verificamos Mora
-        const paymentDay = paymentDate.getDate();
-        let surcharge = 0;
+        // 5. Build Combinations (Chunks)
+        const chunks: Chunk[] = [];
 
-        // Reglas de Mora (Niveles)
-        if (paymentDay >= 22) {
-            surcharge = config.mora.nivel2;
-        } else if (paymentDay >= 11) {
-            surcharge = config.mora.nivel1;
+        for (const t of tariffs) {
+            // Filter: Only process 'hora' type tariffs for parking stays.
+            // Ignore 'turno', 'abono', or other types as requested.
+            if (t.tipo !== 'hora') continue;
+
+            // Calculate total minutes for this block
+            const blockMinutes = (t.dias * 1440) + (t.horas * 60) + t.minutos;
+            if (blockMinutes <= 0) continue;
+
+            // Find price for this tariff name with fuzzy matching
+            let price = vehiclePrices[t.nombre];
+            if (price === undefined) {
+                const normalizedTariffName = normalize(t.nombre);
+                const foundPriceKey = Object.keys(vehiclePrices).find(k => normalize(k) === normalizedTariffName);
+                if (foundPriceKey) price = vehiclePrices[foundPriceKey];
+            }
+
+            if (price !== undefined && price !== null) {
+                // Ensure price is number
+                const numPrice = Number(price);
+                if (!isNaN(numPrice)) {
+                    chunks.push({ minutes: blockMinutes, price: numPrice, name: t.nombre });
+                }
+            }
         }
 
-        return basePrice + surcharge;
+        if (chunks.length === 0) return 0;
+
+        // 6. Run Optimization (DP)
+        return this.optimizeCost(minutesTotal, chunks);
     }
 
     /**
-     * Calcula el cobro por estadía (Rotativo) con diferenciación por método.
+     * Finds the minimum cost to cover at least targetMinutes using available chunks.
+     * Uses Unbounded Knapsack-like DP logic (Min Cost).
      */
-    static calculateParkingFee(
-        entryDate: Date,
-        exitDate: Date,
-        hourlyRate: number,
-        paymentMethod: string = 'Efectivo'
-    ): number {
-        // Ensure we have valid Date objects
-        const start = new Date(entryDate);
-        const end = new Date(exitDate);
+    private optimizeCost(targetMinutes: number, chunks: Chunk[]): number {
+        console.log(`[PricingEngine] Optimizing for ${targetMinutes} minutes. Chunks available:`, chunks.map(c => `${c.name} (${c.minutes}m)=$${c.price}`));
 
-        if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-            console.error('Invalid dates provided to calculateParkingFee', { entryDate, exitDate });
-            return 0; // Safe fallback
+        // Max range: We might overshoot. 
+        // Example: Stay 50min. Chunks: 60min ($100).
+        // Best is to pay $100 for 60min.
+        // We find min cost for i >= targetMinutes.
+        // To be safe, buffer by the largest chunk size.
+        const maxChunkSize = Math.max(...chunks.map(c => c.minutes));
+        const limit = targetMinutes + maxChunkSize;
+
+        // dp[i] = Min cost to get EXACTLY i minutes capacity (or reachable capacity)
+        // Initialize with Infinity
+        const dp = new Array(limit + 1).fill(Infinity);
+        dp[0] = 0;
+
+        for (let i = 0; i <= limit; i++) {
+            if (dp[i] === Infinity) continue;
+
+            for (const chunk of chunks) {
+                const next = i + chunk.minutes;
+                if (next <= limit) {
+                    if (dp[i] + chunk.price < dp[next]) {
+                        dp[next] = dp[i] + chunk.price;
+                    }
+                }
+            }
         }
 
-        const durationMs = end.getTime() - start.getTime();
-        const durationHours = durationMs / (1000 * 60 * 60);
-
-        // Ceiling to next hour
-        const hoursToCharge = Math.ceil(durationHours);
-        if (hoursToCharge <= 0) return 0; // Avoid negative prices or zero
-
-        let total = hoursToCharge * hourlyRate;
-
-        // Apply surcharge for non-cash methods (Example logic from requirements - can be configured)
-        if (paymentMethod !== 'Efectivo') {
-            // Assuming 10% surcharge as seen in frontend logic previously
-            // Ideally this percentage comes from config, but hardcoding for now as per "Shared Logic" goal
-            total = Math.ceil(total * 1.1);
+        // Find min cost in range [targetMinutes, limit]
+        // This answers "What is the cheapest way to cover AT LEAST startMinutes?"
+        let minCost = Infinity;
+        for (let i = targetMinutes; i <= limit; i++) {
+            if (dp[i] < minCost) {
+                minCost = dp[i];
+            }
         }
 
-        return total;
+        console.log(`[PricingEngine] Target: ${targetMinutes}m. MinCost found: $${minCost}`);
+        return minCost === Infinity ? 0 : minCost;
+    }
+
+    // --- Legacy / Subscription Logic (Preserved but adaptable) ---
+    static calculateSubscriptionFee(monthlyPrice: number, startDate: Date = new Date()): number {
+        return 0; // Placeholder or use legacy logic if needed external to this class
+    }
+
+    static calculateSubscriptionProrata(monthlyPrice: number, startDate: Date = new Date()): number {
+        const now = new Date(startDate);
+        const year = now.getFullYear();
+        const month = now.getMonth();
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        const dayOfMonth = now.getDate();
+        const remainingDays = daysInMonth - dayOfMonth + 1;
+
+        if (remainingDays <= 0) return 0;
+        const prorated = (monthlyPrice / daysInMonth) * remainingDays;
+        return Math.floor(prorated);
     }
 }

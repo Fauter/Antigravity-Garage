@@ -1,74 +1,104 @@
 import React, { useState } from 'react';
-import { resetDatabase } from '../services/api';
+import { Settings, CreditCard, Clock, Database, ChevronLeft, LayoutGrid, Car } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import TariffConfig from '../components/config/TariffConfig';
+import PriceMatrix from '../components/config/PriceMatrix';
+import SystemConfig from '../components/config/SystemConfig';
+import VehicleConfig from '../components/config/VehicleConfig';
+import { api } from '../services/api';
 import { toast } from 'sonner';
-import { AlertTriangle, RefreshCw, Trash2 } from 'lucide-react';
 
 const ConfigPage: React.FC = () => {
-    const [confirming, setConfirming] = useState(false);
-    const [loading, setLoading] = useState(false);
+    const navigate = useNavigate();
+    const [activeTab, setActiveTab] = useState<'tarifas' | 'precios' | 'vehiculos' | 'sistema'>('tarifas');
+    const [resetting, setResetting] = useState(false);
 
     const handleReset = async () => {
-        setLoading(true);
+        if (!confirm('⚠️ PELIGRO: ESTO BORRARÁ TODOS LOS ABONOS Y MOVIMIENTOS\n\n¿Estás seguro de reiniciar la base de datos?')) return;
+
+        setResetting(true);
         try {
-            await resetDatabase();
-            toast.success('Base de datos reiniciada correctamente');
-            setConfirming(false);
-            // Optional: Reload window to clear client state
-            setTimeout(() => window.location.reload(), 1000);
-        } catch (error) {
-            console.error('Reset failed', error);
-            toast.error('Error al reiniciar base de datos');
-            setLoading(false);
+            await api.post('/config/reset');
+            toast.success('Bases de datos reiniciadas correctamente');
+            window.location.reload();
+        } catch (error: any) {
+            toast.error('Error: ' + (error.response?.data?.error || error.message));
+        } finally {
+            setResetting(false);
         }
     };
 
     return (
-        <div className="p-8 max-w-2xl mx-auto">
-            <h2 className="text-3xl font-bold text-white mb-8 flex items-center gap-3">
-                <RefreshCw className="w-8 h-8 text-emerald-500" />
-                Configuración del Sistema
-            </h2>
-
-            <div className="bg-gray-900 border border-red-900/30 rounded-2xl p-6 shadow-lg relative overflow-hidden">
-                <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none">
-                    <AlertTriangle className="w-32 h-32 text-red-500" />
+        <div className="h-full bg-[#0a0a0a] flex flex-col text-white">
+            {/* Header */}
+            <div className="h-16 border-b border-gray-800 flex items-center justify-between px-6 bg-black/50 backdrop-blur-md sticky top-0 z-50">
+                <div className="flex items-center gap-4">
+                    <button
+                        onClick={() => navigate('/')}
+                        className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white transition-colors"
+                    >
+                        <ChevronLeft className="w-6 h-6" />
+                    </button>
+                    <h1 className="text-xl font-bold bg-gradient-to-r from-emerald-400 to-emerald-600 bg-clip-text text-transparent">
+                        Configuración
+                    </h1>
                 </div>
 
-                <h3 className="text-xl font-bold text-red-400 mb-2">Zona de Peligro</h3>
-                <p className="text-gray-400 mb-6">
-                    Estas acciones son irreversibles y afectan a toda la operación.
-                </p>
+                <div className="flex bg-gray-900 p-1 rounded-lg border border-gray-800">
+                    <button
+                        onClick={() => setActiveTab('tarifas')}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'tarifas' ? 'bg-gray-800 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}
+                    >
+                        <Clock className="w-4 h-4" /> Tarifas
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('vehiculos')}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'vehiculos' ? 'bg-gray-800 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}
+                    >
+                        <Car className="w-4 h-4" /> Vehículos
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('precios')}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'precios' ? 'bg-gray-800 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}
+                    >
+                        <LayoutGrid className="w-4 h-4" /> Precios
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('sistema')}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'sistema' ? 'bg-gray-800 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}
+                    >
+                        <Settings className="w-4 h-4" /> Sistema
+                    </button>
+                </div>
+            </div>
 
-                <div className="flex items-center justify-between bg-black/40 p-4 rounded-xl border border-red-900/20">
-                    <div>
-                        <h4 className="text-white font-bold">Reiniciar Base de Datos</h4>
-                        <p className="text-sm text-gray-500">Borra estadías, movimientos y abonos. Mantiene usuarios.</p>
-                    </div>
+            {/* Content */}
+            <div className="flex-1 overflow-auto p-6 scrollbar-thin scrollbar-thumb-gray-800">
+                <div className="max-w-6xl mx-auto">
+                    {activeTab === 'tarifas' && <TariffConfig />}
+                    {activeTab === 'vehiculos' && <VehicleConfig />}
+                    {activeTab === 'precios' && <PriceMatrix />}
+                    {activeTab === 'sistema' && (
+                        <div className="space-y-12">
+                            <SystemConfig />
 
-                    {!confirming ? (
-                        <button
-                            onClick={() => setConfirming(true)}
-                            className="px-4 py-2 bg-red-900/50 hover:bg-red-600 text-red-200 hover:text-white rounded-lg transition-all font-bold text-sm border border-red-800"
-                        >
-                            Reset DB
-                        </button>
-                    ) : (
-                        <div className="flex items-center gap-2">
-                            <button
-                                onClick={() => setConfirming(false)}
-                                className="px-3 py-2 text-gray-400 hover:text-white text-sm"
-                            >
-                                Cancelar
-                            </button>
-                            <button
-                                onClick={handleReset}
-                                disabled={loading}
-                                className={`px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-bold text-sm flex items-center gap-2 relative z-10 transition-all ${loading ? 'opacity-50 cursor-not-allowed' : 'animate-pulse hover:scale-105'
-                                    }`}
-                            >
-                                {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                                {loading ? 'Limpiando...' : 'Confirmar'}
-                            </button>
+                            {/* Danger Zone */}
+                            <div className="border border-red-900/30 bg-red-950/10 rounded-xl p-6">
+                                <h3 className="text-red-500 font-bold uppercase text-xs tracking-wider mb-4 flex items-center gap-2">
+                                    <Database className="w-4 h-4" /> Zona de Peligro
+                                </h3>
+                                <p className="text-gray-400 text-sm mb-6">
+                                    El reinicio de base de datos eliminará permanentemente todos los registros de movimientos, abonos y estadías activas.
+                                    Esta acción no se puede deshacer.
+                                </p>
+                                <button
+                                    onClick={handleReset}
+                                    disabled={resetting}
+                                    className="bg-red-500/10 hover:bg-red-500/20 text-red-500 hover:text-red-400 border border-red-500/50 px-6 py-3 rounded-lg font-bold text-sm transition-all flex items-center gap-2"
+                                >
+                                    {resetting ? 'Reiniciando...' : 'Reiniciar Base de Datos'}
+                                </button>
+                            </div>
                         </div>
                     )}
                 </div>
