@@ -1,16 +1,58 @@
-import React from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { Edit, Trash2, Search, Plus } from 'lucide-react';
+import { api } from '../../services/api';
 
 interface SubscriberListProps {
     onNewClick: () => void;
+    onSelectSubscriber?: (sub: any) => void;
     subscribers: any[];
 }
 
-const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, subscribers }) => {
-    // Determine which list to show (mock if empty for dev, or just real)
-    // For now, if empty, we might show empty state. 
-    // If backend is not running, query might error or return undefined.
-    const displayList = subscribers && subscribers.length > 0 ? subscribers : [];
+const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSubscriber, subscribers }) => {
+    // Local state for cocheras lookup
+    const [cocheras, setCocheras] = useState<any[]>([]);
+
+    useEffect(() => {
+        // Fetch all cocheras to map plates correctly
+        api.get('/cocheras')
+            .then(res => setCocheras(res.data || []))
+            .catch(err => console.error("Error loading cocheras list:", err));
+    }, []);
+
+    // Unique Client Aggregation Logic
+    const uniqueSubscribers = useMemo(() => {
+        const map = new Map();
+
+        const rawList = subscribers && subscribers.length > 0 ? subscribers : [];
+
+        rawList.forEach((sub: any) => {
+            // Priority for ID: sub.clientId (from Abono) > sub.customerData.id > sub.id
+            const customerId = sub.clientId || sub.customerData?.id || sub.id;
+
+            if (!customerId) return;
+
+            if (!map.has(customerId)) {
+                // Initialize unique entry
+                map.set(customerId, {
+                    ...sub, // Keep base data
+                    // Ensure robust Customer Data
+                    aggregatedValues: {
+                        name: sub.customerData?.firstName || sub.customerData?.name || sub.nombreApellido || 'Cliente Desconocido',
+                        avatar: (sub.customerData?.firstName || sub.customerData?.name || sub.nombreApellido || '?').charAt(0).toUpperCase(),
+                        isActive: sub.status === 'active' || sub.active === true
+                    }
+                });
+            } else {
+                // Merge logic if needed (e.g. if one sub is active, client is active)
+                const existing = map.get(customerId);
+                if (sub.status === 'active' || sub.active === true) {
+                    existing.aggregatedValues.isActive = true;
+                }
+            }
+        });
+
+        return Array.from(map.values());
+    }, [subscribers]);
 
     return (
         <div className="max-w-7xl mx-auto space-y-6 w-full p-6">
@@ -41,54 +83,82 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, subscribers
                     <thead>
                         <tr className="bg-gray-800/80 text-gray-400 text-xs uppercase tracking-wider">
                             <th className="p-4 font-medium border-b border-gray-700">Cliente</th>
-                            <th className="p-4 font-medium border-b border-gray-700">Patente</th>
-                            <th className="p-4 font-medium border-b border-gray-700">Vehículo</th>
+                            <th className="p-4 font-medium border-b border-gray-700">Patentes</th>
                             <th className="p-4 font-medium border-b border-gray-700">Estado</th>
-                            <th className="p-4 font-medium text-right border-b border-gray-700">Días Restantes</th>
                             <th className="p-4 font-medium text-right border-b border-gray-700">Acciones</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-800">
-                        {displayList.map((sub: any) => (
-                            <tr key={sub.id || sub._id} className="group hover:bg-gray-800/40 transition-colors">
-                                <td className="p-4 font-medium text-white">
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-8 h-8 rounded-full bg-indigo-900/50 flex items-center justify-center text-indigo-300 font-bold text-xs ring-1 ring-indigo-500/30">
-                                            {sub.name.charAt(0)}
+                        {uniqueSubscribers.map((sub: any) => {
+                            const customerId = sub.clientId || sub.customerData?.id || sub.id;
+                            const isActive = sub.aggregatedValues.isActive;
+
+                            // Lookup Vehicles from Cocheras
+                            // Filter cocheras belonging to this client
+                            const clientCocheras = cocheras.filter(c => c.clienteId === customerId);
+
+                            // Extract unique plates
+                            const uniquePlates = new Set<string>();
+                            clientCocheras.forEach(c => {
+                                if (c.vehiculos && Array.isArray(c.vehiculos)) {
+                                    c.vehiculos.forEach((v: any) => {
+                                        // Handle both string and Object formats from backend
+                                        if (typeof v === 'string') uniquePlates.add(v);
+                                        else if (typeof v === 'object' && v.plate) uniquePlates.add(v.plate);
+                                    });
+                                }
+                            });
+
+                            const displayPlates = Array.from(uniquePlates);
+
+                            return (
+                                <tr key={sub.id || sub._id}
+                                    onClick={() => onSelectSubscriber && onSelectSubscriber(sub)}
+                                    className="group hover:bg-gray-800/40 transition-colors cursor-pointer">
+                                    <td className="p-4 font-medium text-white">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-8 h-8 rounded-full bg-indigo-900/50 flex items-center justify-center text-indigo-300 font-bold text-xs ring-1 ring-indigo-500/30">
+                                                {sub.aggregatedValues.avatar}
+                                            </div>
+                                            {sub.aggregatedValues.name}
                                         </div>
-                                        {sub.name}
-                                    </div>
-                                </td>
-                                <td className="p-4">
-                                    <span className="font-mono bg-gray-950 px-2 py-1 rounded text-emerald-400 border border-emerald-900/30 text-xs tracking-wider font-bold shadow-sm">
-                                        {sub.plate}
-                                    </span>
-                                </td>
-                                <td className="p-4 text-gray-400 text-sm">{sub.type}</td>
-                                <td className="p-4">
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${sub.status === 'Active'
-                                        ? 'bg-emerald-900/20 text-emerald-400 border-emerald-900/50'
-                                        : 'bg-red-900/20 text-red-400 border-red-900/50'
-                                        }`}>
-                                        <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${sub.status === 'Active' ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
-                                        {sub.status === 'Active' ? 'Activo' : 'Vencido'}
-                                    </span>
-                                </td>
-                                <td className={`p-4 text-right font-medium text-sm ${sub.daysLeft < 0 ? 'text-red-400' : 'text-gray-300'}`}>
-                                    {sub.daysLeft} días
-                                </td>
-                                <td className="p-4 text-right">
-                                    <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <button className="p-2 hover:bg-gray-800 text-gray-500 hover:text-indigo-400 rounded-lg transition-colors border border-transparent hover:border-gray-700" title="Editar">
-                                            <Edit className="w-4 h-4" />
-                                        </button>
-                                        <button className="p-2 hover:bg-gray-800 text-gray-500 hover:text-red-400 rounded-lg transition-colors border border-transparent hover:border-gray-700" title="Eliminar">
-                                            <Trash2 className="w-4 h-4" />
-                                        </button>
-                                    </div>
-                                </td>
-                            </tr>
-                        ))}
+                                    </td>
+                                    <td className="p-4">
+                                        <div className="flex gap-2 flex-wrap">
+                                            {displayPlates.length > 0 ? (
+                                                displayPlates.map((plate: string, i: number) => (
+                                                    <span key={i} className="font-mono bg-gray-950 px-2 py-1 rounded text-emerald-400 border border-emerald-900/30 text-xs tracking-wider font-bold shadow-sm">
+                                                        {plate}
+                                                    </span>
+                                                ))
+                                            ) : (
+                                                <span className="text-gray-600 text-xs italic">Sin vehículos</span>
+                                            )}
+                                        </div>
+                                    </td>
+                                    {/* Removed 'Vehículo' and 'Días Restantes' columns */}
+                                    <td className="p-4">
+                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${isActive
+                                            ? 'bg-emerald-900/20 text-emerald-400 border-emerald-900/50'
+                                            : 'bg-red-900/20 text-red-400 border-red-900/50'
+                                            }`}>
+                                            <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${isActive ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
+                                            {isActive ? 'Activo' : 'Inactivo'}
+                                        </span>
+                                    </td>
+                                    <td className="p-4 text-right">
+                                        <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <button className="p-2 hover:bg-gray-800 text-gray-500 hover:text-indigo-400 rounded-lg transition-colors border border-transparent hover:border-gray-700" title="Editar">
+                                                <Edit className="w-4 h-4" />
+                                            </button>
+                                            <button className="p-2 hover:bg-gray-800 text-gray-500 hover:text-red-400 rounded-lg transition-colors border border-transparent hover:border-gray-700" title="Eliminar">
+                                                <Trash2 className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            );
+                        })}
                     </tbody>
                 </table>
             </div>
@@ -98,7 +168,7 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, subscribers
                     Cargar más suscriptores
                 </button>
             </div>
-        </div>
+        </div >
     );
 };
 

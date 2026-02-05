@@ -242,7 +242,7 @@ const PanelSalida: React.FC = () => {
                             <div className="grid grid-cols-5 gap-1.5">
                                 {[
                                     { id: 'Efectivo', label: 'Efectivo', icon: DollarSign, color: 'emerald' },
-                                    { id: 'Transfer', label: 'Transf.', icon: Wallet, color: 'indigo' },
+                                    { id: 'Transferencia', label: 'Transf.', icon: Wallet, color: 'indigo' },
                                     { id: 'Debito', label: 'Débito', icon: CreditCard, color: 'blue' },
                                     { id: 'Credito', label: 'Crédito', icon: CreditCard, color: 'violet' },
                                     { id: 'QR', label: 'QR', labelShort: 'QR', icon: QrCode, color: 'cyan' },

@@ -1,34 +1,34 @@
-import { VehicleModel } from '../../../infrastructure/database/models';
 import { Vehicle } from '../../../shared/schemas';
+import { JsonDB } from '../../../infrastructure/database/json-db';
+
+const vehicleDB = new JsonDB<Vehicle>('vehicles');
 
 export class VehicleRepository {
-    /**
-     * Guarda o actualiza un vehículo.
-     * Utiliza upsert basado en ID.
-     */
     async save(vehicle: Vehicle): Promise<Vehicle> {
-        // Usamos findOneAndUpdate con upsert: true para crear si no existe o actualizar.
-        // Retornamos el documento nuevo (new: true).
+        // Validation: Ensure ID
+        if (!vehicle.id) {
+            throw new Error("Vehicle ID is required for save");
+        }
 
-        const result = await VehicleModel.findOneAndUpdate(
-            { id: vehicle.id },
-            vehicle,
-            { new: true, upsert: true }
-        );
-
-        // Mongoose retorna un documento Mongoose, lo convertimos a objeto plano
-        // para cumplir con la interfaz Vehicle pura.
-        return result.toObject() as Vehicle;
+        const existing = await vehicleDB.getById(vehicle.id);
+        if (existing) {
+            await vehicleDB.updateOne({ id: vehicle.id }, vehicle);
+        } else {
+            await vehicleDB.create(vehicle);
+        }
+        return vehicle;
     }
 
     async findById(id: string): Promise<Vehicle | null> {
-        const result = await VehicleModel.findOne({ id });
-        return result ? (result.toObject() as Vehicle) : null;
+        return await vehicleDB.getById(id);
     }
 
     async findByPlate(plate: string): Promise<Vehicle | null> {
-        const result = await VehicleModel.findOne({ plate }); // Case insensitive? Mongo es cs por defecto
-        // Idealmente normalizar plate antes de query. El schema obliga uppercase.
-        return result ? (result.toObject() as Vehicle) : null;
+        const all = await vehicleDB.getAll();
+        return all.find(v => v.plate === plate) || null;
+    }
+
+    async reset(): Promise<void> {
+        await vehicleDB.reset();
     }
 }

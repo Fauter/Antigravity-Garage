@@ -12,7 +12,7 @@ export const startServer = async () => {
     // 1. CORS Middleware - MUST BE FIRST
     app.use(cors({
         origin: 'http://localhost:5173',
-        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
         allowedHeaders: ['Content-Type', 'Authorization']
     }));
 
@@ -22,7 +22,7 @@ export const startServer = async () => {
     const io = new Server(httpServer, {
         cors: {
             origin: "http://localhost:5173",
-            methods: ["GET", "POST"]
+            methods: ["GET", "POST", "PATCH"]
         }
     });
 
@@ -89,7 +89,12 @@ export const startServer = async () => {
     app.get('/api/cocheras', garageController.getAllCocheras.bind(garageController));
     app.post('/api/cocheras', garageController.createCochera.bind(garageController));
     app.put('/api/cocheras/:id', garageController.updateCochera.bind(garageController));
+    app.patch('/api/cocheras/:id', garageController.updateCochera.bind(garageController));
     app.delete('/api/cocheras/:id', garageController.deleteCochera.bind(garageController));
+
+    // Clientes
+    app.get('/api/clientes', garageController.findClientByDni.bind(garageController));
+    app.post('/api/clientes', garageController.createClient.bind(garageController));
 
 
     app.post('/api/sync', async (req, res) => {

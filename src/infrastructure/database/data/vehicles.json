@@ -1,0 +1,80 @@
+[
+  {
+    "id": "a803fad9-6b87-4694-b5e0-bcdfcfa7785d",
+    "customerId": "cef4631d-a33d-4c60-a203-ec8e09465645",
+    "plate": "ABE34A2",
+    "type": "Auto",
+    "createdAt": "2026-02-03T09:52:58.206Z",
+    "updatedAt": "2026-02-03T09:52:58.206Z"
+  },
+  {
+    "id": "00013117-dbcd-4c4c-bf53-4247d6ed948e",
+    "customerId": "1d0eecb6-76c7-4294-9b67-43281b1d2518",
+    "plate": "AXE234",
+    "type": "Auto",
+    "createdAt": "2026-02-03T10:02:12.379Z",
+    "updatedAt": "2026-02-03T10:02:12.379Z"
+  },
+  {
+    "id": "d7753192-bf7d-4368-9d72-05a45d6382a8",
+    "customerId": "df60c9e3-982a-41bd-a8cc-ad5f116a0fb8",
+    "plate": "ABC123",
+    "type": "Auto",
+    "createdAt": "2026-02-03T10:23:03.755Z",
+    "updatedAt": "2026-02-03T10:23:03.755Z"
+  },
+  {
+    "id": "e892bd64-ba51-4219-abaa-73ce90d9e2ab",
+    "customerId": "e7231076-ef32-4796-846a-5591e80c2e61",
+    "plate": "ADS344",
+    "type": "Auto",
+    "createdAt": "2026-02-03T10:33:07.767Z",
+    "updatedAt": "2026-02-03T10:33:07.767Z"
+  },
+  {
+    "id": "356f883f-4000-465d-bab3-bf36715cc337",
+    "customerId": "d96a350a-ce36-4d0d-a577-1c0827529f0e",
+    "plate": "ABZ234",
+    "type": "Auto",
+    "createdAt": "2026-02-03T21:31:39.844Z",
+    "updatedAt": "2026-02-03T21:31:39.844Z"
+  },
+  {
+    "id": "600e7965-2aaa-4269-a4d1-223432df39e2",
+    "customerId": "ff9c6c06-500e-4753-952b-f7735e3c406e",
+    "plate": "ASDAS34",
+    "type": "Auto",
+    "createdAt": "2026-02-05T22:14:02.449Z",
+    "updatedAt": "2026-02-05T22:14:02.449Z"
+  },
+  {
+    "id": "da89140c-66cd-4c04-9db5-a1c74a384eca",
+    "customerId": "e9f59d7d-f52e-4237-9203-99a65cdbd288",
+    "plate": "AQTR344",
+    "type": "Auto",
+    "createdAt": "2026-02-05T23:02:10.858Z",
+    "updatedAt": "2026-02-05T23:02:10.858Z"
+  },
+  {
+    "id": "51bf8632-123c-4072-a2f3-c42c2d9b8704",
+    "customerId": "e9f59d7d-f52e-4237-9203-99a65cdbd288",
+    "plate": "ZCX344",
+    "type": "Moto",
+    "brand": "Albion",
+    "model": "Mendiola",
+    "color": "Rojo",
+    "createdAt": "2026-02-05T23:02:56.850Z",
+    "updatedAt": "2026-02-05T23:02:56.850Z"
+  },
+  {
+    "id": "7db05000-7329-4a77-8ecf-1a27dffa9cf5",
+    "customerId": "e9f59d7d-f52e-4237-9203-99a65cdbd288",
+    "plate": "QT344ZX",
+    "type": "Auto",
+    "brand": "Malgion",
+    "model": "Rigio",
+    "color": "Azul",
+    "createdAt": "2026-02-05T23:03:41.793Z",
+    "updatedAt": "2026-02-05T23:03:41.793Z"
+  }
+]

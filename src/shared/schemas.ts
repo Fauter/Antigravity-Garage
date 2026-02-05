@@ -42,6 +42,9 @@ export const VehicleSchema = z.object({
   id: UuidSchema,
   plate: z.string().min(1, "La patente es obligatoria").toUpperCase(),
   type: VehicleTypeEnum.default('Auto'),
+  brand: z.string().optional(),
+  model: z.string().optional(),
+  color: z.string().optional(),
   description: z.string().optional(),
   customerId: UuidSchema.optional().nullable(), // Nullable si es rotativo anónimo
   createdAt: TimestampSchema.default(() => new Date()),

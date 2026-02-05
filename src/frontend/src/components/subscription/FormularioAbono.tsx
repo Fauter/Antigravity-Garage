@@ -18,9 +18,8 @@ const FormularioAbono: React.FC = () => {
                 if (res.data && Array.isArray(res.data)) {
                     console.log("[Abonos] Tipos cargados:", res.data);
                     setVehicleTypes(res.data);
-                    if (res.data.length > 0) {
-                        setFormData(prev => ({ ...prev, tipoVehiculo: res.data[0].nombre }));
-                    }
+                    // Auto-selection removed
+
                 }
             })
             .catch(e => console.error("Vehicle Type Load Error:", e));
@@ -56,69 +55,86 @@ const FormularioAbono: React.FC = () => {
         color: '',
         anio: '',
         companiaSeguro: '',
-        tipoVehiculo: 'Auto',
+        tipoVehiculo: '',
 
         // Pago
         metodoPago: 'Efectivo',
         tipoFactura: 'Final',
     });
 
-    useEffect(() => { loadConfig(); }, []);
+    useEffect(() => { loadConfig(); }, [formData.metodoPago]);
     useEffect(() => { calculatePrice(); }, [formData.tipoCochera, formData.exclusivaOverride, formData.tipoVehiculo, pricesMatrix]);
 
     const loadConfig = async () => {
+        // Fetch prices based on current payment method
+        const queryMethod = formData.metodoPago === 'Efectivo' ? 'efectivo' : 'otros';
+
         // Parallel independent fetches
-        const fetchPrices = api.get('/precios?metodo=efectivo').catch(e => { console.error("Price load error:", e); return null; });
+        const fetchPrices = api.get(`/precios?metodo=${queryMethod}`).catch(e => { console.error("Price load error:", e); return null; });
         const fetchTypes = api.get('/tipos-vehiculo').catch(e => { console.error("Type load error:", e); return null; });
 
         const [priceRes, typeRes] = await Promise.all([fetchPrices, fetchTypes]);
 
         if (priceRes && priceRes.data) {
-            // endpoint /precios?metodo=efectivo returns the object directly
+            // endpoint /precios?metodo=... returns the object directly
             setPricesMatrix(priceRes.data.efectivo || priceRes.data);
         }
 
         if (typeRes && typeRes.data && Array.isArray(typeRes.data)) {
-            console.log("[Abonos] Tipos cargados:", typeRes.data);
-            setVehicleTypes(typeRes.data);
-            // Set initial vehicle type
-            if (typeRes.data.length > 0) {
-                setFormData(prev => ({ ...prev, tipoVehiculo: typeRes.data[0].nombre }));
+            // Only update types if empty to avoid reset issues or just ensure list is fresh
+            if (vehicleTypes.length === 0) {
+                console.log("[Abonos] Tipos cargados:", typeRes.data);
+                setVehicleTypes(typeRes.data);
+                // Removed auto-selection logic
             }
         }
     };
 
     const calculatePrice = () => {
-        let base = 30000;
         const typeKey = formData.tipoVehiculo;
+        if (!typeKey) {
+            setBasePriceDisplay(0);
+            setProratedPrice(0);
+            return;
+        }
 
         // Normalize helper
         const normalize = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
-        // Find price in matrix using fuzzy match
-        let matrixPrice = null;
+        // 1. Determine Cochera Key in Matrix
+        let cocheraKey = formData.tipoCochera; // 'Movil' or 'Fija'
+        if (formData.exclusivaOverride) cocheraKey = 'Exclusiva';
+
+        // 2. Find vehicle entry in matrix (Fuzzy Match)
+        let vehiclePrices: any = null;
         if (pricesMatrix[typeKey]) {
-            matrixPrice = pricesMatrix[typeKey]?.mensual;
+            vehiclePrices = pricesMatrix[typeKey];
         } else {
             const normalizedType = normalize(typeKey);
             const foundKey = Object.keys(pricesMatrix).find(k => normalize(k) === normalizedType);
-            if (foundKey) matrixPrice = pricesMatrix[foundKey]?.mensual;
+            if (foundKey) vehiclePrices = pricesMatrix[foundKey];
         }
 
-        if (matrixPrice) base = Number(matrixPrice);
-        else base = typeKey === 'Moto' ? 20000 : typeKey === 'Camioneta' ? 40000 : 30000;
-
-        if (formData.tipoCochera === 'Fija') {
-            base = Math.floor(base * 1.2);
-            if (formData.exclusivaOverride) base = Math.floor(base * 1.5);
+        // 3. Find Price Value (Fuzzy Match for Tariff Key)
+        let finalPrice = 0;
+        if (vehiclePrices) {
+            if (vehiclePrices[cocheraKey] !== undefined) {
+                finalPrice = Number(vehiclePrices[cocheraKey]);
+            } else {
+                const normalizedCochera = normalize(cocheraKey);
+                const foundCocheraKey = Object.keys(vehiclePrices).find(k => normalize(k) === normalizedCochera);
+                if (foundCocheraKey) finalPrice = Number(vehiclePrices[foundCocheraKey]);
+            }
         }
 
-        setBasePriceDisplay(base);
+        // 4. Update Display
+        setBasePriceDisplay(finalPrice);
 
+        // 5. Calculate Prorated
         const now = new Date();
         const currentDay = now.getDate();
         const remainingDays = Math.max(0, 30 - currentDay + 1);
-        const calc = Math.floor((base / 30) * remainingDays);
+        const calc = Math.floor((finalPrice / 30) * remainingDays);
         setProratedPrice(calc);
     };
 
@@ -138,6 +154,13 @@ const FormularioAbono: React.FC = () => {
         // Validation for assigned spots
         if (formData.tipoCochera === 'Fija' && !formData.numeroCochera) {
             toast.error('Falta número de cochera');
+            setLoading(false);
+            return;
+        }
+
+        // Validate basic vehicle data to prevent junk
+        if (!formData.tipoVehiculo || !formData.patente) {
+            toast.error('Faltan datos del vehículo (Tipo o Patente)');
             setLoading(false);
             return;
         }
@@ -171,24 +194,39 @@ const FormularioAbono: React.FC = () => {
                     clientId = clientRes.data.id;
                     console.log(`Client created: ${clientId}`);
                 }
-            } catch (err) {
-                // If search fails, potentially try creation or handle error
-                console.error("Client check failed, attempting creation...", err);
-                const clientRes = await api.post('/clientes', {
-                    nombreApellido: formData.nombre,
-                    dni: formData.dni,
-                    email: formData.email,
-                    address: formData.domicilio,
-                    localidad: formData.localidad,
-                    workAddress: formData.domicilioTrabajo,
-                    phones: {
-                        particular: formData.telParticular,
-                        emergency: formData.telEmergencia,
-                        work: formData.telTrabajo
-                    }
-                });
-                clientId = clientRes.data.id;
+            } catch (err: any) {
+                // Circuit Breaker: If checking/creating client fails, STOP everything.
+                // Diagnosis: if HTML returned (404 on API), don't proceed.
+                console.error("Client check/create failed. URL:", err.config?.url);
+                if (err.response && typeof err.response.data === 'string' && err.response.data.includes('<!DOCTYPE html>')) {
+                    toast.error('Error Crítico: El sistema no contacta al backend (/api/clientes devuelve HTML). Revise la conexión.');
+                    throw new Error("API Route Error: Received HTML instead of JSON");
+                }
+
+                // Try creation as fallback only if it wasn't a structural 404 on the API root
+                console.warn("Attempting fallback creation...", err);
+                try {
+                    const clientRes = await api.post('/clientes', {
+                        nombreApellido: formData.nombre,
+                        dni: formData.dni,
+                        email: formData.email,
+                        address: formData.domicilio,
+                        localidad: formData.localidad,
+                        workAddress: formData.domicilioTrabajo,
+                        phones: {
+                            particular: formData.telParticular,
+                            emergency: formData.telEmergencia,
+                            work: formData.telTrabajo
+                        }
+                    });
+                    clientId = clientRes.data.id;
+                } catch (creationErr: any) {
+                    console.error("Fallback creation also failed. URL:", creationErr.config?.url);
+                    throw creationErr; // Stop execution
+                }
             }
+
+            if (!clientId) throw new Error("No se pudo obtener ID de cliente. Abortando.");
 
             // 2. SPOT MANAGEMENT (Mark as Occupied/Assigned)
             const finalType = formData.exclusivaOverride ? 'Exclusiva' : formData.tipoCochera;
@@ -203,7 +241,7 @@ const FormularioAbono: React.FC = () => {
                     vehiculos: [formData.patente], // Mark as occupied by this vehicle
                     precioBase: basePriceDisplay,
                     status: 'Ocupada',
-                    assignedTo: clientId
+                    clienteId: clientId
                 });
             }
 
@@ -244,6 +282,7 @@ const FormularioAbono: React.FC = () => {
             };
 
             await api.post('/abonos', payload);
+            console.log("[Abonos] Iniciando guardado...", payload);
 
             // only show success on 200 OK (implied by awaiting promise not throwing)
             toast.success('ALTA DE ABONO EXITOSA');
@@ -284,14 +323,21 @@ const FormularioAbono: React.FC = () => {
 
                 {/* --- MAIN FORM (LEFT) --- */}
                 <div className="flex-1 overflow-y-auto p-3 scrollbar-hide">
-                    <form onSubmit={handleSubmit} className="space-y-3">
+                    <form id="abono-form" onSubmit={handleSubmit} className="space-y-3">
 
                         {/* 1. CONFIG COCHERA (Compact) */}
                         <div className="flex items-center gap-4 bg-black/40 py-1.5 px-3 rounded-lg border border-gray-800/60">
                             <span className="text-[10px] font-bold text-emerald-500/80 uppercase tracking-widest">Config Cochera</span>
                             <div className="flex bg-gray-950 p-0.5 rounded border border-gray-800">
                                 {['Movil', 'Fija'].map(type => (
-                                    <button type="button" key={type} onClick={() => setFormData({ ...formData, tipoCochera: type })}
+                                    <button type="button" key={type}
+                                        onClick={() => {
+                                            if (type === 'Movil') {
+                                                setFormData({ ...formData, tipoCochera: 'Movil', exclusivaOverride: false, numeroCochera: '' });
+                                            } else {
+                                                setFormData({ ...formData, tipoCochera: 'Fija' });
+                                            }
+                                        }}
                                         className={`px-3 py-0.5 rounded text-[10px] font-bold uppercase transition-all ${formData.tipoCochera === type ? 'bg-emerald-600 text-white' : 'text-gray-500 hover:text-gray-300'}`}>
                                         {type}
                                     </button>
@@ -356,6 +402,7 @@ const FormularioAbono: React.FC = () => {
                                 <div>
                                     <label className={labelStyle}>Tipo</label>
                                     <select className={`${inputStyle} appearance-none`} value={formData.tipoVehiculo} onChange={e => setFormData({ ...formData, tipoVehiculo: e.target.value })}>
+                                        <option value="" disabled hidden>Seleccione el tipo...</option>
                                         {vehicleTypes.length > 0 ? (
                                             vehicleTypes.map((v: any) => (
                                                 <option key={v.id} value={v.nombre}>{v.nombre}</option>
@@ -391,8 +438,8 @@ const FormularioAbono: React.FC = () => {
                                 <select className={`${inputStyle} appearance-none bg-gray-900`} value={formData.metodoPago} onChange={e => setFormData({ ...formData, metodoPago: e.target.value })}>
                                     <option value="Efectivo">Efectivo</option>
                                     <option value="Transferencia">Transferencia</option>
-                                    <option value="Débito">Débito</option>
-                                    <option value="Crédito">Crédito</option>
+                                    <option value="Debito">Débito</option>
+                                    <option value="Credito">Crédito</option>
                                     <option value="QR">QR</option>
                                 </select>
                             </div>
@@ -425,7 +472,7 @@ const FormularioAbono: React.FC = () => {
                             <span className="block text-2xl font-black text-white tracking-tighter">${proratedPrice.toLocaleString()}</span>
                         </div>
 
-                        <button onClick={handleSubmit} disabled={loading}
+                        <button form="abono-form" type="submit" disabled={loading}
                             className="w-full py-3 bg-white hover:bg-gray-200 text-black text-xs font-black uppercase tracking-widest rounded shadow-lg flex items-center justify-center gap-2 mt-3 transition-all active:scale-95">
                             {loading ? '...' : <><Check className="w-3.5 h-3.5" /> Confirmar</>}
                         </button>

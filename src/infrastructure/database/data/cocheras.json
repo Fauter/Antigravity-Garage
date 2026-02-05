@@ -1,1 +1,24 @@
-[]
+[
+  {
+    "id": "582625dd-9de2-4e82-86e2-567fe6de0bb3",
+    "tipo": "Exclusiva",
+    "numero": "55",
+    "vehiculos": [
+      "ABC123",
+      "ZCX344",
+      "QT344ZX"
+    ],
+    "clienteId": "e9f59d7d-f52e-4237-9203-99a65cdbd288",
+    "precioBase": 170000
+  },
+  {
+    "id": "a6776c86-54a4-4d5f-bec6-72449d321372",
+    "tipo": "Fija",
+    "numero": "123",
+    "vehiculos": [
+      "AQTR344"
+    ],
+    "clienteId": "e9f59d7d-f52e-4237-9203-99a65cdbd288",
+    "precioBase": 165000
+  }
+]
