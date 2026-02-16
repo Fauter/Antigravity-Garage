@@ -3,7 +3,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import MainLayout from './components/layout/MainLayout';
 import OperatorDashboard from './pages/OperatorDashboard';
 import LoginPage from './pages/LoginPage';
-import GestorAbonos from './components/subscription/GestorAbonos'; // Assuming this is the page for Abonos
+import GestorAbonos from './components/subscription/GestorAbonos';
 import AltaSuscriptor from './pages/AltaSuscriptor';
 import CajaPage from './pages/CajaPage';
 import AuditoriaVehiculos from './components/audit/AuditoriaVehiculos';

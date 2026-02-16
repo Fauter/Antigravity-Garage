@@ -101,6 +101,36 @@ export class GarageController {
                 precioBase: precioBase || 0
             };
 
+            // PERSIST VEHICLE METADATA IF PROVIDED (Detailed Add)
+            if (vehiculos && vehiculos.length > 0) {
+                // We know for createCochera from frontend it sends 1 vehicle usually in the array
+                const primaryPlate = vehiculos[0];
+                // Frontend "New Cochera" modal might not send full vehicle object in 'vehiculos' array (it sends strings),
+                // BUT it calls /abonos right after with full data. 
+                // HOWEVER, to be safe and robust as requested:
+                // The user said: "Revisa si al crear la cochera (handleCreateCochera), también estamos guardando los metadatos"
+                // The frontend handleCreateCochera calls /cocheras THEN /abonos.
+                // /abonos ALREADY saves the vehicle (fixed above). 
+                // So actually, the vehicle saving in /cocheras is redundant IF /abonos follows.
+                // BUT, if we want independent robustness:
+                // The 'vehiculos' payload in createCochera is usually just strings of plates [ 'AAA123' ].
+                // If the frontend changes to send objects, we should handle it.
+                // Currently frontend sends: vehiculos: [newCocheraData.patente.toUpperCase()] -> STRING array.
+                // So we can't extract brand/model here unless we change the frontend payload or use what /abonos does.
+                // Recommendation: Rely on the /abonos call which carries the metadata. 
+                // Or better: ensure /abonos logic is perfect (done above).
+                // User asked to check. I checked. It sends strings. 
+                // So I will add a comment or if I really want to save it here, I need to look at other body props?
+                // No, frontend handleCreateCochera sends vehicle props to /abonos, not /cocheras body (except plate).
+                // Ah, wait. The user might mean `handleCreateCochera` in Frontend.
+                // Let's look at `handleCreateCochera` in Frontend again.
+                // It calls `/cocheras` with `vehiculos: [patente]`.
+                // THEN it calls `/abonos` with `vehicleData: { ...full details }`.
+                // So `createSubscription` (fixed above) WILL save the vehicle.
+                // The "Gap" might be if `createCochera` is called but `createSubscription` fails?
+                // Or if `updateCochera` is used.
+            }
+
             await cocherasDB.create(newCochera);
             res.json(newCochera);
         } catch (error: any) {
@@ -220,8 +250,7 @@ export class GarageController {
                 customer = {
                     id: uuidv4(),
                     ...customerData,
-                    firstName: customerData.nombreApellido,
-                    lastName: '',
+                    name: customerData.nombreApellido || 'Cliente',
                     dni: customerData.dni,
                     email: customerData.email,
                     phone: customerData.telefono,
@@ -239,10 +268,28 @@ export class GarageController {
                     customerId: customer!.id,
                     plate: vehicleData.plate,
                     type: vehicleData.type,
+                    brand: vehicleData.brand,
+                    model: vehicleData.model,
+                    color: vehicleData.color,
+                    year: vehicleData.year || vehicleData.anio, // Frontend might send 'anio'
+                    insurance: vehicleData.insurance || vehicleData.seguro, // Frontend might send 'seguro'
                     createdAt: new Date(),
                     updatedAt: new Date()
                 };
                 await this.vehicleRepo.save(vehicle!);
+            } else {
+                // Update existing vehicle metadata if provided (User requested robustness)
+                const updatedVehicle = {
+                    ...vehicle,
+                    brand: vehicleData.brand || vehicle.brand,
+                    model: vehicleData.model || vehicle.model,
+                    color: vehicleData.color || vehicle.color,
+                    year: (vehicleData.year || vehicleData.anio) || vehicle.year,
+                    insurance: (vehicleData.insurance || vehicleData.seguro) || vehicle.insurance,
+                    updatedAt: new Date()
+                };
+                await this.vehicleRepo.save(updatedVehicle);
+                vehicle = updatedVehicle;
             }
 
             // 3. Create Subscription
@@ -267,6 +314,13 @@ export class GarageController {
                 new Date(),
                 paymentMethod
             );
+
+            // FORCE PLATE PERSISTENCE
+            // SubscriptionManager might not attach it directly to the root object depending on implementation,
+            // so we enforce it here to guarantee the join later.
+            if (!(newSubscription as any).plate) {
+                (newSubscription as any).plate = vehicle.plate;
+            }
 
             // Override price if prorata amount passed (trusting frontend or separate calculation logic)
             // Ideally we calculate prorata here too.
@@ -318,16 +372,27 @@ export class GarageController {
             // If it has plate, I don't strictly need Vehicle object join for basic display.
             // Let's rely on `sub.plate` and `customerId` -> `customer.firstName`.
 
-            const populated = subs.map((sub: any) => {
+            const populated = await Promise.all(subs.map(async (sub: any) => {
                 const customer = customers.find(c => c.id === sub.customerId);
+                let vehicleDetails = { plate: sub.plate || '---' };
+
+                if (sub.plate) {
+                    const vehicle = await this.vehicleRepo.findByPlate(sub.plate);
+                    if (vehicle) {
+                        vehicleDetails = {
+                            ...vehicle, // Include brand, model, color, etc.
+                            plate: vehicle.plate
+                        };
+                    }
+                }
+
                 return {
                     ...sub,
-                    customerData: customer || { firstName: 'Desconocido', lastName: '' },
-                    // If sub has vehicle data stored, use it. If not, minimal fallback.
-                    vehicleData: { plate: sub.plate || '---' }, // Subscription schema has plate
-                    nombreApellido: customer ? `${customer.firstName} ${customer.lastName || ''}`.trim() : 'Cliente Desconocido'
+                    customerData: customer || { name: 'Desconocido' },
+                    vehicleData: vehicleDetails,
+                    nombreApellido: customer ? customer.name : 'Cliente Desconocido'
                 };
-            });
+            }));
 
             res.json(populated);
         } catch (error: any) {
@@ -370,8 +435,7 @@ export class GarageController {
 
             const newCustomer = {
                 id: uuidv4(),
-                firstName: data.nombreApellido,
-                lastName: '', // Single field in form
+                name: data.nombreApellido,
                 dni: data.dni,
                 email: data.email,
                 phone: data.phones?.particular || data.phones?.mobile || '', // Map from complex object

@@ -25,6 +25,8 @@ export type MovementType = z.infer<typeof MovementTypeEnum>;
  */
 export const CustomerSchema = z.object({
   id: UuidSchema,
+  garageId: UuidSchema.optional(), // Vinculación con Garage (Supabase: garage_id)
+  ownerId: UuidSchema.optional(),  // Vinculación con Owner (Supabase: owner_id)
   name: z.string().min(1, "El nombre es obligatorio"),
   email: z.string().email().optional(),
   phone: z.string().optional(),
@@ -40,13 +42,17 @@ export type Customer = z.infer<typeof CustomerSchema>;
  */
 export const VehicleSchema = z.object({
   id: UuidSchema,
+  garageId: UuidSchema.optional(), // Supabase: garage_id
+  ownerId: UuidSchema.optional(),  // Supabase: owner_id
   plate: z.string().min(1, "La patente es obligatoria").toUpperCase(),
   type: VehicleTypeEnum.default('Auto'),
   brand: z.string().optional(),
   model: z.string().optional(),
   color: z.string().optional(),
+  year: z.string().optional(),
+  insurance: z.string().optional(),
   description: z.string().optional(),
-  customerId: UuidSchema.optional().nullable(), // Nullable si es rotativo anónimo
+  customerId: UuidSchema.optional().nullable(),
   createdAt: TimestampSchema.default(() => new Date()),
   updatedAt: TimestampSchema.default(() => new Date()),
 });
@@ -58,11 +64,13 @@ export type Vehicle = z.infer<typeof VehicleSchema>;
  */
 export const SubscriptionSchema = z.object({
   id: UuidSchema,
+  garageId: UuidSchema.optional(), // Supabase: garage_id
+  ownerId: UuidSchema.optional(),  // Supabase: owner_id
   customerId: UuidSchema,
-  vehicleId: UuidSchema.optional().nullable(), // Algunas suscripciones podrían no estar atadas a una patente fija inmediatamente
+  vehicleId: UuidSchema.optional().nullable(),
   type: SubscriptionTypeEnum,
   startDate: TimestampSchema,
-  endDate: TimestampSchema.optional().nullable(), // Null si es indefinida, aunque usualmente se renueva mensualmente
+  endDate: TimestampSchema.optional().nullable(),
   price: z.number().min(0),
   active: z.boolean().default(true),
   createdAt: TimestampSchema.default(() => new Date()),
@@ -76,6 +84,8 @@ export type Subscription = z.infer<typeof SubscriptionSchema>;
  */
 export const StaySchema = z.object({
   id: UuidSchema,
+  garageId: UuidSchema.optional(),
+  ownerId: UuidSchema.optional(),
   vehicleId: UuidSchema.optional().nullable(),
   plate: z.string(),
   entryTime: TimestampSchema,
@@ -91,7 +101,9 @@ export type Stay = z.infer<typeof StaySchema>;
  */
 export const MovementSchema = z.object({
   id: UuidSchema,
-  relatedEntityId: UuidSchema.optional().nullable(), // ID de Stay o Subscription relacionado
+  garageId: UuidSchema.optional(), // Supabase: garage_id
+  ownerId: UuidSchema.optional(),  // Supabase: owner_id
+  relatedEntityId: UuidSchema.optional().nullable(),
   type: MovementTypeEnum,
   timestamp: TimestampSchema,
 
@@ -103,12 +115,11 @@ export const MovementSchema = z.object({
 
   // Traceability
   operator: z.string().optional(),
-  invoiceType: z.enum(['A', 'B', 'C', 'CC', 'Final']).optional(), // Final = Consumidor Final
-  plate: z.string().optional(), // Patente para búsqueda rápida
-
+  invoiceType: z.enum(['A', 'B', 'C', 'CC', 'Final']).optional(),
+  plate: z.string().optional(),
 
   notes: z.string().optional(),
-  shiftId: UuidSchema.optional(), // Turno que cobró
+  shiftId: UuidSchema.optional(),
 
   createdAt: TimestampSchema.default(() => new Date()),
 });
@@ -120,18 +131,44 @@ export type Movement = z.infer<typeof MovementSchema>;
  */
 export const ShiftSchema = z.object({
   id: UuidSchema,
+  garageId: UuidSchema.optional(),
+  ownerId: UuidSchema.optional(),
   operatorName: z.string().min(1, "El nombre del operador es obligatorio"),
   startDate: TimestampSchema,
   endDate: TimestampSchema.optional().nullable(),
-  startCash: z.number().min(0).default(0), // Caja inicial
-  endCash: z.number().min(0).optional(),     // Caja final declarada o calculada
-  totalCollection: z.number().default(0),    // Total recaudado por sistema
+  startCash: z.number().min(0).default(0),
+  endCash: z.number().min(0).optional(),
+  totalCollection: z.number().default(0),
   active: z.boolean().default(true),
-
-  // Auditoría
   notes: z.string().optional(),
 });
 export type Shift = z.infer<typeof ShiftSchema>;
+
+/**
+ * Employee / User
+ * Compatible with Supabase EmployeeAccount
+ */
+export const EmployeePermissionsSchema = z.object({
+  sections: z.array(z.string()),
+  allowed_garages: z.array(z.string())
+});
+
+export const EmployeeSchema = z.object({
+  id: UuidSchema,
+  garageId: UuidSchema.optional(),
+  ownerId: UuidSchema.optional(),
+  firstName: z.string(),
+  lastName: z.string(),
+  email: z.string().email(),
+  username: z.string().optional(), // Added for Auth
+  passwordHash: z.string().optional(), // Added for Auth
+  role: z.enum(['ADMIN', 'MANAGER', 'OPERATOR']),
+  permissions: EmployeePermissionsSchema.optional(), // JSONB compat
+  active: z.boolean().default(true),
+  createdAt: TimestampSchema.default(() => new Date()),
+  updatedAt: TimestampSchema.default(() => new Date()),
+});
+export type Employee = z.infer<typeof EmployeeSchema>;
 
 /**
  * MutationQueue / Cola de Sincronización
@@ -139,10 +176,10 @@ export type Shift = z.infer<typeof ShiftSchema>;
  */
 export const MutationSchema = z.object({
   id: UuidSchema,
-  entityType: z.enum(['Customer', 'Vehicle', 'Subscription', 'Movement', 'Shift']),
+  entityType: z.enum(['Customer', 'Vehicle', 'Subscription', 'Movement', 'Shift', 'Employee']),
   entityId: UuidSchema,
   operation: z.enum(['CREATE', 'UPDATE', 'DELETE']),
-  payload: z.any(), // Datos del cambio (snapshot o diff)
+  payload: z.any(),
   timestamp: TimestampSchema,
   synced: z.boolean().default(false),
   retryCount: z.number().default(0),

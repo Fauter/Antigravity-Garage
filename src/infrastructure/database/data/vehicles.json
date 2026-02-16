@@ -76,5 +76,65 @@
     "color": "Azul",
     "createdAt": "2026-02-05T23:03:41.793Z",
     "updatedAt": "2026-02-05T23:03:41.793Z"
+  },
+  {
+    "id": "2c0363dc-bca1-4f37-97d4-93c4048e360d",
+    "customerId": "1152969c-f102-4746-8aed-eeeffd0f172b",
+    "plate": "ASD340",
+    "type": "Auto",
+    "createdAt": "2026-02-05T23:32:16.373Z",
+    "updatedAt": "2026-02-05T23:32:16.373Z"
+  },
+  {
+    "id": "f5c48440-6939-4430-b52b-552be68c0d4f",
+    "customerId": "306ada01-a531-46b8-986f-47e1aaded7ee",
+    "plate": "ZXD204",
+    "type": "Auto",
+    "brand": "Manguero",
+    "model": "Menribelia ",
+    "color": "Azul",
+    "year": "2013",
+    "insurance": "La Caja",
+    "createdAt": "2026-02-05T23:44:03.770Z",
+    "updatedAt": "2026-02-05T23:44:03.770Z"
+  },
+  {
+    "id": "d12fdf80-45fa-4593-8890-b784c6bd6ab8",
+    "customerId": "890bee13-95c9-4157-aab1-da28bce32571",
+    "plate": "ABWW2333",
+    "type": "Auto",
+    "brand": "Cabcer",
+    "model": "DAdf",
+    "color": "Rojio",
+    "year": "123",
+    "insurance": "Ader",
+    "createdAt": "2026-02-05T23:51:16.257Z",
+    "updatedAt": "2026-02-05T23:51:16.257Z"
+  },
+  {
+    "id": "8beefb88-28ce-4535-a8e5-8bda317502eb",
+    "customerId": "62d9b038-3248-40d8-b823-d1039440ad98",
+    "plate": "AZD511",
+    "type": "Auto",
+    "brand": "Carlosera",
+    "model": "Megovia",
+    "color": "rojo",
+    "year": "1999",
+    "insurance": "La Caja",
+    "createdAt": "2026-02-06T00:01:26.739Z",
+    "updatedAt": "2026-02-06T00:01:26.739Z"
+  },
+  {
+    "id": "97a601a3-54df-47cc-afb3-11da27d9ffaa",
+    "customerId": "2f0af489-10d5-4cc7-ad4e-2fbfaa23400e",
+    "plate": "MS203CN",
+    "type": "Auto",
+    "brand": "Ravioli",
+    "model": "Segovia",
+    "color": "Rojo",
+    "year": "2003",
+    "insurance": "La Caja",
+    "createdAt": "2026-02-06T01:17:32.726Z",
+    "updatedAt": "2026-02-06T01:17:32.726Z"
   }
 ]

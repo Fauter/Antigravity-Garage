@@ -1,12 +1,38 @@
 [
   {
-    "id": "01e86620-c5ee-4ee7-8534-a51718642750",
+    "id": "6952acae-f8a3-4817-acde-5d636d83c1cd",
     "vehicleId": null,
-    "plate": "AQR444",
-    "entryTime": "2026-02-05T23:04:15.541Z",
-    "active": false,
-    "createdAt": "2026-02-05T23:04:15.541Z",
-    "vehicleType": "Camioneta",
-    "exitTime": "2026-02-05T23:04:23.289Z"
+    "plate": "ABD341",
+    "entryTime": "2026-02-06T01:15:51.651Z",
+    "active": true,
+    "createdAt": "2026-02-06T01:15:51.651Z",
+    "vehicleType": "Camioneta"
+  },
+  {
+    "id": "ca419e07-3cf8-4ac6-bdf1-b75939d8997c",
+    "vehicleId": null,
+    "plate": "FGT341",
+    "entryTime": "2026-02-06T01:15:57.452Z",
+    "active": true,
+    "createdAt": "2026-02-06T01:15:57.452Z",
+    "vehicleType": "Auto"
+  },
+  {
+    "id": "89d50958-261a-442d-b88c-cbf1bea91f6f",
+    "vehicleId": null,
+    "plate": "LN455AQ",
+    "entryTime": "2026-02-06T01:16:06.031Z",
+    "active": true,
+    "createdAt": "2026-02-06T01:16:06.031Z",
+    "vehicleType": "Camioneta"
+  },
+  {
+    "id": "875aaf94-e44f-46ba-9e9a-a06a2c018a4f",
+    "vehicleId": null,
+    "plate": "ZVX233",
+    "entryTime": "2026-02-06T01:16:11.106Z",
+    "active": true,
+    "createdAt": "2026-02-06T01:16:11.106Z",
+    "vehicleType": "Moto"
   }
 ]

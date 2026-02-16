@@ -1,26 +1,15 @@
 [
   {
-    "id": "ea30a6b0-8328-4b8a-9531-d9b45bf1873d",
-    "customerId": "e9f59d7d-f52e-4237-9203-99a65cdbd288",
-    "vehicleId": "d7753192-bf7d-4368-9d72-05a45d6382a8",
-    "type": "Exclusiva",
-    "startDate": "2026-02-05T22:15:23.404Z",
-    "endDate": null,
-    "price": 78000,
-    "active": true,
-    "createdAt": "2026-02-05T22:15:23.404Z",
-    "updatedAt": "2026-02-05T22:15:23.404Z"
-  },
-  {
-    "id": "50e528e8-96b9-4abf-a293-09362f9ab9df",
-    "customerId": "e9f59d7d-f52e-4237-9203-99a65cdbd288",
-    "vehicleId": "da89140c-66cd-4c04-9db5-a1c74a384eca",
+    "id": "9b64a908-8e66-4656-89bc-657b428a424f",
+    "customerId": "2f0af489-10d5-4cc7-ad4e-2fbfaa23400e",
+    "vehicleId": "97a601a3-54df-47cc-afb3-11da27d9ffaa",
     "type": "Fija",
-    "startDate": "2026-02-05T23:02:10.859Z",
+    "startDate": "2026-02-06T01:17:32.728Z",
     "endDate": null,
     "price": 143000,
     "active": true,
-    "createdAt": "2026-02-05T23:02:10.860Z",
-    "updatedAt": "2026-02-05T23:02:10.860Z"
+    "createdAt": "2026-02-06T01:17:32.728Z",
+    "updatedAt": "2026-02-06T01:17:32.728Z",
+    "plate": "MS203CN"
   }
 ]

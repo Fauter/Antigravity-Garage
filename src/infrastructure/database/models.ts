@@ -1,15 +1,22 @@
 import mongoose, { Schema } from 'mongoose';
 import {
-    Vehicle, Customer, Subscription, Movement, Shift
+    Vehicle, Customer, Subscription, Movement, Shift, Employee
 } from '../../shared/schemas';
 
 // --- Vehicle ---
 const VehicleSchema = new Schema<Vehicle>({
     id: { type: String, required: true, unique: true, index: true },
+    garageId: { type: String }, // Supabase compatibility
+    ownerId: { type: String },  // Supabase compatibility
     plate: { type: String, required: true, unique: true, uppercase: true },
     type: { type: String, required: true, enum: ['Auto', 'Moto', 'Camioneta', 'Otro'] },
+    brand: { type: String },
+    model: { type: String },
+    color: { type: String },
+    year: { type: String },
+    insurance: { type: String },
     description: { type: String },
-    customerId: { type: String }, // Referencia loose
+    customerId: { type: String },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
 });
@@ -19,6 +26,8 @@ export const VehicleModel = mongoose.model<Vehicle>('Vehicle', VehicleSchema);
 // --- Customer ---
 const CustomerSchema = new Schema<Customer>({
     id: { type: String, required: true, unique: true },
+    garageId: { type: String },
+    ownerId: { type: String },
     name: { type: String, required: true },
     email: { type: String },
     phone: { type: String },
@@ -32,6 +41,8 @@ export const CustomerModel = mongoose.model<Customer>('Customer', CustomerSchema
 // --- Subscription ---
 const SubscriptionSchema = new Schema<Subscription>({
     id: { type: String, required: true, unique: true },
+    garageId: { type: String },
+    ownerId: { type: String },
     customerId: { type: String, required: true },
     vehicleId: { type: String },
     type: { type: String, required: true, enum: ['Exclusiva', 'Fija', 'Movil'] },
@@ -48,6 +59,8 @@ export const SubscriptionModel = mongoose.model<Subscription>('Subscription', Su
 // --- Stay ---
 const StaySchema = new Schema<import('../../shared/schemas').Stay>({
     id: { type: String, required: true, unique: true },
+    garageId: { type: String },
+    ownerId: { type: String },
     vehicleId: { type: String },
     plate: { type: String, required: true },
     entryTime: { type: Date, required: true },
@@ -61,13 +74,18 @@ export const StayModel = mongoose.model<import('../../shared/schemas').Stay>('St
 // --- Movement (Financial) ---
 const MovementSchema = new Schema<Movement>({
     id: { type: String, required: true, unique: true },
+    garageId: { type: String },
+    ownerId: { type: String },
     relatedEntityId: { type: String },
-    type: { type: String, required: true }, // Enum validado por TS/Zod
+    type: { type: String, required: true },
     timestamp: { type: Date, required: true },
     amount: { type: Number, required: true, min: 0 },
     paymentMethod: { type: String, default: 'Efectivo' },
     ticketNumber: { type: Number },
     ticketPago: { type: Number },
+    operator: { type: String },
+    invoiceType: { type: String },
+    plate: { type: String },
     notes: { type: String },
     shiftId: { type: String },
     createdAt: { type: Date, default: Date.now }
@@ -78,6 +96,8 @@ export const MovementModel = mongoose.model<Movement>('Movement', MovementSchema
 // --- Shift ---
 const ShiftSchema = new Schema<Shift>({
     id: { type: String, required: true, unique: true },
+    garageId: { type: String },
+    ownerId: { type: String },
     operatorName: { type: String, required: true },
     startDate: { type: Date, required: true },
     endDate: { type: Date },
@@ -89,6 +109,25 @@ const ShiftSchema = new Schema<Shift>({
 });
 
 export const ShiftModel = mongoose.model<Shift>('Shift', ShiftSchema);
+
+// --- Employee ---
+const EmployeeSchema = new Schema<Employee>({
+    id: { type: String, required: true, unique: true },
+    garageId: { type: String },
+    ownerId: { type: String },
+    firstName: { type: String, required: true },
+    lastName: { type: String, required: true },
+    email: { type: String, required: true },
+    username: { type: String },
+    passwordHash: { type: String },
+    role: { type: String, enum: ['ADMIN', 'MANAGER', 'OPERATOR'], default: 'OPERATOR' },
+    permissions: { type: Schema.Types.Mixed }, // JSONB
+    active: { type: Boolean, default: true },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now }
+});
+
+export const EmployeeModel = mongoose.model<Employee>('Employee', EmployeeSchema);
 
 // --- Mutation Queue ---
 const MutationSchema = new Schema<import('../../shared/schemas').Mutation>({

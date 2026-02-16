@@ -1,17 +1,20 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { api } from '../services/api';
 
-interface User {
+// Updated interface to match Supabase/Backend response
+export interface User {
     id: string;
-    nombre: string;
-    apellido: string;
     username: string;
-    role: string;
+    full_name: string;
+    role: 'OWNER' | 'ADMIN' | 'MANAGER' | 'OPERATOR';
+    owner_id: string;
+    garage_id?: string | null;
+    permissions?: any;
 }
 
 interface AuthContextType {
     user: User | null;
-    login: (username: string, password: string) => Promise<boolean>;
+    login: (username: string, password: string, garage_id?: string) => Promise<boolean>;
     logout: () => void;
     isAuthenticated: boolean;
     isLoading: boolean;
@@ -28,18 +31,25 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const storedUser = localStorage.getItem('ag_user');
         if (storedUser) {
             try {
-                setUser(JSON.parse(storedUser));
+                const parsed = JSON.parse(storedUser);
+                if (parsed.id) {
+                    setUser(parsed);
+                }
             } catch (e) {
+                console.error('Failed to parse stored user', e);
                 localStorage.removeItem('ag_user');
             }
         }
         setIsLoading(false);
     }, []);
 
-    const login = async (username: string, password: string): Promise<boolean> => {
+    const login = async (username: string, password: string, garage_id?: string): Promise<boolean> => {
         try {
-            const res = await api.post('/auth/login', { username, password });
-            const userData = res.data;
+            // Forward garage_id to backend for Isolation Check
+            const res = await api.post('/auth/login', { username, password, garage_id });
+
+            const userData: User = res.data;
+
             setUser(userData);
             localStorage.setItem('ag_user', JSON.stringify(userData));
             return true;

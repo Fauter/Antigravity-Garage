@@ -9,22 +9,37 @@ interface MainLayoutProps {
 }
 
 const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
-    // Determine active tab from location if needed, or simple local state if we want single-page feel
-    // For now we mix: router for persistent state, but simplified here.
     const [activeTab, setActiveTab] = useState<'operador' | 'abonos' | 'caja' | 'audit' | 'config'>('operador');
+    const [garageConfig, setGarageConfig] = useState<{ name: string; address: string } | null>(null);
 
-    // Sync logic: In a real app we'd adhere strictly to routes
     const location = useLocation();
-    useEffect(() => {
-        if (location.pathname === '/') setActiveTab('operador');
-        else if (location.pathname === '/abonos') setActiveTab('abonos');
-        else if (location.pathname === '/caja') setActiveTab('caja');
-        else if (location.pathname === '/audit') setActiveTab('audit');
-        else if (location.pathname === '/config') setActiveTab('config');
-    }, [location]);
-
     const { user, logout } = useAuth();
     const navigate = useNavigate();
+
+    // Load Terminal Config for Branding
+    useEffect(() => {
+        const stored = localStorage.getItem('ag_terminal_config');
+        if (stored) {
+            try {
+                const parsed = JSON.parse(stored);
+                if (parsed.name) {
+                    setGarageConfig(parsed);
+                }
+            } catch (e) {
+                console.error('Failed to parse terminal config for branding', e);
+            }
+        }
+    }, []);
+
+    // Sync active tab with URL 
+    useEffect(() => {
+        const path = location.pathname;
+        if (path === '/' || path.startsWith('/estadias')) setActiveTab('operador');
+        else if (path.startsWith('/abonos')) setActiveTab('abonos');
+        else if (path.startsWith('/caja')) setActiveTab('caja');
+        else if (path.startsWith('/audit')) setActiveTab('audit');
+        else if (path.startsWith('/config')) setActiveTab('config');
+    }, [location]);
 
     const handleTabChange = (tab: 'operador' | 'abonos' | 'caja' | 'audit' | 'config') => {
         setActiveTab(tab);
@@ -46,14 +61,14 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
             {/* --- HEADER --- */}
             <header className="h-14 border-b border-gray-800 bg-gray-950 flex items-center justify-between px-4 shrink-0 z-50">
 
-                {/* Brand */}
-                <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-emerald-900/20">
-                        <span className="font-bold text-white text-lg">AG</span>
-                    </div>
-                    <h1 className="font-bold text-lg tracking-tight text-white hidden md:block">
-                        Garage<span className="text-emerald-500">IA</span>
+                {/* Brand - Dynamic per Terminal Config */}
+                <div className="flex flex-col justify-center h-full max-w-[250px]">
+                    <h1 className="text-white font-bold text-base leading-tight tracking-tight truncate pb-0.5">
+                        {garageConfig?.name || 'ANTIGRAVITY'}
                     </h1>
+                    <span className="text-[10px] text-gray-500 uppercase tracking-tighter truncate">
+                        {garageConfig?.address || 'TERMINAL PROTOTYPE'}
+                    </span>
                 </div>
 
                 {/* Navigation Tabs */}
@@ -93,10 +108,10 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                 {/* User & Actions */}
                 <div className="flex items-center gap-4">
                     <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-900 rounded-full border border-gray-800">
-                        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                        <div className={`w-2 h-2 rounded-full animate-pulse ${user ? 'bg-emerald-500' : 'bg-gray-500'}`}></div>
                         <UserIcon className="w-3 h-3 text-gray-400" />
-                        <span className="text-xs font-mono font-bold text-gray-400">
-                            {user ? `${user.nombre} ${user.apellido}` : 'GUEST'}
+                        <span className="text-xs font-mono font-bold text-gray-400 uppercase">
+                            {user?.full_name || user?.username || 'GUEST'}
                         </span>
                     </div>
                     <button
@@ -117,7 +132,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     );
 };
 
-// Helper component for clearer code
+// Helper component
 const NavButton: React.FC<{ active: boolean; onClick: () => void; icon: React.ReactNode; label: string }> = ({ active, onClick, icon, label }) => (
     <button
         onClick={onClick}
