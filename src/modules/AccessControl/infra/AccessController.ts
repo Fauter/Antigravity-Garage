@@ -19,13 +19,13 @@ interface MatrixData {
 interface VehicleTypeData {
     id?: string;
     _id?: string;
-    nombre: string;
+    name: string;
     hora: boolean;
     mensual: boolean;
 }
 
 const pricingDB = new JsonDB<MatrixData>('prices');
-const vehicleDB = new JsonDB<VehicleTypeData>('vehicleTypes');
+// const vehicleDB = new JsonDB<VehicleTypeData>('vehicleTypes'); // REMOVED: Replaced by NeDB
 
 // Helper to get Matrix
 const getPricingMatrix = async () => {
@@ -52,7 +52,7 @@ export class AccessController {
 
     registerEntry = async (req: Request, res: Response) => {
         try {
-            const { plate, vehicleType } = req.body;
+            const { plate, vehicleTypeId } = req.body;
             const garageId = (req.headers['x-garage-id'] as string);
 
             if (!plate) return res.status(400).json({ error: 'Plate is required' });
@@ -66,22 +66,25 @@ export class AccessController {
                 return res.status(409).json({ error: 'Vehicle already in garage', stay: existingStay });
             }
 
-            // 1. Resolve Vehicle Type (UUID -> Name)
-            let resolvedType = 'Auto'; // Default
-            if (vehicleType) {
-                if (vehicleType.length > 20) {
-                    const allTypes = await vehicleDB.getAll();
-                    const found = allTypes.find(t => t.id === vehicleType || t._id === vehicleType);
-                    if (found) {
-                        resolvedType = found.nombre;
-                    }
+            // 1. Resolve Vehicle Type (UUID -> Name) con validación de Garage
+            let resolvedType = 'Auto'; // Default de seguridad
+
+            if (vehicleTypeId) {
+                // Buscar directamente en el datastore donde SyncService guarda los datos
+                const found: any = await db.vehicleTypes.findOne({
+                    $or: [{ id: vehicleTypeId }, { _id: vehicleTypeId }],
+                    garageId: garageId
+                });
+
+                if (found) {
+                    resolvedType = found.name;
+                    console.log(`✅ Tipo de vehículo resuelto desde NeDB: ${resolvedType} (${garageId})`);
                 } else {
-                    resolvedType = vehicleType;
+                    console.warn(`⚠️ ID ${vehicleTypeId} no encontrado en NeDB para el garage ${garageId}. Verificando fallback...`);
+                    const fallback: any = await db.vehicleTypes.findOne({ $or: [{ id: vehicleTypeId }, { _id: vehicleTypeId }] });
+                    if (fallback) resolvedType = fallback.name;
                 }
             }
-            // Map for Supabase Compliance
-            if (resolvedType === 'Camioneta') resolvedType = 'PickUp';
-            if (resolvedType === 'Automovil') resolvedType = 'Auto';
 
             // 3. Check for Active Subscription
             const activeSubscription = await this.subscriptionRepository.findActiveByPlate(plate);
@@ -173,13 +176,30 @@ export class AccessController {
             // Matrix is now handled internally by PricingEngine -> Repositories
             // const matrix = await getPricingMatrix();
 
+            // Metadata Injection
+            const userOperator = (operator && operator !== 'undefined undefined') ? operator : 'Sistema';
+
+            // Fetch Owner ID from Garage Config (if available)
+            let ownerId: string | undefined;
+            if (garageId) {
+                // Now db.garages exists
+                const garage: any = await db.garages.findOne({ id: garageId });
+                if (garage) ownerId = garage.owner_id || garage.ownerId;
+            }
+
+            // Generate Ticket Number (Numeric: last 9 digits of timestamp)
+            const ticketNumber = Number(Date.now().toString().slice(-9));
+
             // Pass to Manager (async)
             const { closedStay, exitMovement, price } = await AccessManager.processExit(
                 stay as any,
                 new Date(),
                 paymentMethod as any,
-                operator,
-                invoiceType
+                userOperator,
+                invoiceType,
+                garageId,
+                ownerId,
+                ticketNumber
             );
 
             await this.stayRepository.save(closedStay as any);
@@ -187,12 +207,16 @@ export class AccessController {
 
             // 🚀 SYNC: Enqueue Changes for Cloud
             try {
+                // Fix: Strip internal _id to prevent conflicts during Sync/Upsert
+                const { _id: sId, ...stayPayload } = closedStay as any;
+                const { _id: mId, ...movementPayload } = exitMovement as any;
+
                 await db.mutations.insert({
                     id: uuidv4(),
                     entityType: 'Stay',
                     operation: 'UPDATE',
                     entityId: closedStay.id,
-                    payload: closedStay,
+                    payload: stayPayload,
                     timestamp: new Date(),
                     synced: false
                 });
@@ -202,7 +226,7 @@ export class AccessController {
                     entityType: 'Movement',
                     operation: 'CREATE',
                     entityId: exitMovement.id,
-                    payload: exitMovement,
+                    payload: movementPayload,
                     timestamp: new Date(),
                     synced: false
                 });
@@ -319,20 +343,28 @@ export class AccessController {
     // Vehicle Types
     getVehicleTypes = async (req: Request, res: Response) => {
         try {
-            const types = await vehicleDB.getAll();
+            const garageId = (req.headers['x-garage-id'] as string);
+            // Fetch from NeDB directly
+            const types = await db.vehicleTypes.find({ garageId });
             res.json(types);
         } catch (error: any) {
+            console.error('Error getting vehicle types from NeDB:', error);
             res.status(500).json({ error: error.message });
         }
     }
 
     saveVehicleType = async (req: Request, res: Response) => {
         try {
+            const garageId = (req.headers['x-garage-id'] as string);
             // Add new type
-            const data = req.body; // { nombre, hora, mensual }
-            if (!data.nombre) return res.status(400).json({ error: 'Nombre es requerido' });
+            const data = req.body; // { name, hora, mensual }
+            if (!data.name) return res.status(400).json({ error: 'Name is required' });
 
-            await vehicleDB.create(data);
+            // Ensure garageId is saved
+            const typeToSave = { ...data, garageId };
+
+            // Use NeDB
+            await db.vehicleTypes.insert(typeToSave);
             res.json({ message: 'Tipo creado' });
         } catch (error: any) {
             res.status(500).json({ error: error.message });
@@ -342,12 +374,9 @@ export class AccessController {
     deleteVehicleType = async (req: Request, res: Response) => {
         try {
             const { id } = req.params;
-            const deleted = await vehicleDB.delete(String(id));
-            if (deleted) {
-                res.json({ message: 'Tipo eliminado' });
-            } else {
-                res.status(404).json({ error: 'Tipo no encontrado' });
-            }
+            // Use NeDB
+            await db.vehicleTypes.remove({ id: id }, {});
+            res.json({ message: 'Tipo eliminado (si existía)' });
         } catch (error: any) {
             res.status(500).json({ error: error.message });
         }

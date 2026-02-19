@@ -6,7 +6,7 @@ import { PrinterService } from '../services/PrinterService';
 
 export interface EntryFormData {
     plate: string;
-    vehicleType: string;
+    vehicleTypeId: string;
 }
 
 export const useEntryLogic = () => {
@@ -69,7 +69,10 @@ export const useEntryLogic = () => {
         e.preventDefault();
         if (!plate || !vehicleType) return;
 
-        entryMutation.mutate({ plate, vehicleType });
+        entryMutation.mutate({
+            plate,
+            vehicleTypeId: vehicleType
+        });
     };
 
     return {

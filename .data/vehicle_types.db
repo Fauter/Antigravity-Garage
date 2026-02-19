@@ -1,9 +1,3 @@
-{"id":"b9eda96a-7dab-421d-80cc-55bd285d5cc7","name":"Auto","icon_name":"car","sort_order":10,"icon_key":"car","createdAt":"2026-02-11T18:42:34.583464+00:00","garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"DXRkNYUnSxaFX1J3","updatedAt":{"$$date":1771495554380}}
-{"id":"ab47b631-3aaa-4894-a8b0-376aa50dd493","name":"Camioneta","icon_name":"car","sort_order":12,"icon_key":"truck","createdAt":"2026-02-17T23:18:04.620669+00:00","garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"RyqsehmDE4LynjYW","updatedAt":{"$$date":1771495554386}}
-{"id":"d1d79c0d-9280-4cd9-ab75-472e83950e6c","name":"Moto","icon_name":"car","sort_order":11,"icon_key":"bike","createdAt":"2026-02-11T18:42:38.691405+00:00","garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"hnPYFFYebfomTIiI","updatedAt":{"$$date":1771495554384}}
-{"$$deleted":true,"_id":"DXRkNYUnSxaFX1J3"}
-{"$$deleted":true,"_id":"RyqsehmDE4LynjYW"}
-{"$$deleted":true,"_id":"hnPYFFYebfomTIiI"}
-{"id":"b9eda96a-7dab-421d-80cc-55bd285d5cc7","name":"Auto","icon_name":"car","sort_order":10,"icon_key":"car","createdAt":"2026-02-11T18:42:34.583464+00:00","garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"zAvcQbxdJDAn9n7F","updatedAt":{"$$date":1771495810067}}
-{"id":"d1d79c0d-9280-4cd9-ab75-472e83950e6c","name":"Moto","icon_name":"car","sort_order":11,"icon_key":"bike","createdAt":"2026-02-11T18:42:38.691405+00:00","garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"8uKxltGmdlJIuYZC","updatedAt":{"$$date":1771495810068}}
-{"id":"ab47b631-3aaa-4894-a8b0-376aa50dd493","name":"Camioneta","icon_name":"car","sort_order":12,"icon_key":"truck","createdAt":"2026-02-17T23:18:04.620669+00:00","garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"iS8sNXd7OBqFVdu4","updatedAt":{"$$date":1771495810068}}
+{"id":"fff4949f-97ef-4b8b-8117-aafb83cca834","name":"Camioneta","icon_name":"car","sort_order":10,"icon_key":"truck","createdAt":"2026-02-19T10:43:09.42155+00:00","garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"mOp45z1V4PkxLb9G","updatedAt":{"$$date":1771499476043}}
+{"$$deleted":true,"_id":"mOp45z1V4PkxLb9G"}
+{"id":"fff4949f-97ef-4b8b-8117-aafb83cca834","name":"Camioneta","icon_name":"car","sort_order":10,"icon_key":"truck","createdAt":"2026-02-19T10:43:09.42155+00:00","garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"zz26CoSsTDUPLqP9","updatedAt":{"$$date":1771500240125}}

@@ -36,10 +36,13 @@ export class StayRepository {
             console.warn('⚠️ StayRepository: Saving Stay without garageId. Sync may fail or be inconsistent.');
         }
 
+        // Fix: NeDB throws if we try to update _id. We must exclude it from the $set payload.
+        // We use the public 'id' for query, and let NeDB manage the internal _id.
+        const { _id, ...dataWithoutInternalId } = stay;
+
         const doc = {
-            ...stay,
-            id: id,
-            _id: id, // NeDB compatibility
+            ...dataWithoutInternalId,
+            id: id, // Ensure public ID is explicit
             garageId: stay.garageId, // Explicitly ensure it's here
             updatedAt: new Date()
         };

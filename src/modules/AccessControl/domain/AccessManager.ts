@@ -8,7 +8,7 @@ import {
     StaySchema
 } from '../../../shared/schemas';
 import { PricingEngine } from '../../Billing/domain/PricingEngine';
-import { ConfigRepository } from '../../Configuration/infra/ConfigRepository';
+import { db } from '../../../infrastructure/database/datastore';
 
 export class AccessManager {
     /**
@@ -47,24 +47,55 @@ export class AccessManager {
         exitDate: Date,
         paymentMethod: 'Efectivo' | 'Transferencia' | 'Debito' | 'Credito' | 'QR' = 'Efectivo',
         operator?: string,
-        invoiceType?: 'A' | 'B' | 'C' | 'CC' | 'Final'
+        invoiceType?: 'A' | 'B' | 'C' | 'CC' | 'Final',
+        garageId?: string,
+        ownerId?: string,
+        ticketNumber?: number
     ): Promise<{ closedStay: Stay; exitMovement: Movement; price: number }> {
         if (!stay.active) {
             throw new Error('La estancia ya está cerrada.');
         }
 
-        // Dynamically instantiate PricingEngine for this Garage
-        const garageId = (stay as any).garageId;
-        if (!garageId) console.warn('⚠️ AccessManager: Stay missing garageId, pricing might fail.');
+        // Ensure garageId is available (from stay or arg)
+        const finalGarageId = garageId || (stay as any).garageId;
+        if (!finalGarageId) console.warn('⚠️ AccessManager: Stay missing garageId, pricing might fail.');
 
-        const configRepo = new ConfigRepository();
+        // Direct DB Access for Pricing (Unified Logic with routes.ts)
+        // We bypass ConfigRepo to ensure we read exactly what is in the local NeDB
+        const priceRepo = {
+            getPrices: async (method: string) => {
+                const listFilter = (method === 'EFECTIVO') ? 'standard' : 'electronic';
 
-        // Adapters
-        const tariffRepo = { getAll: () => configRepo.getTariffs(garageId) };
-        const paramRepo = { getParams: () => configRepo.getParams() };
-        const priceRepo = { getPrices: (m: string) => configRepo.getPrices(garageId, m) };
+                // Fetch from Local DB
+                const prices: any[] = await db.prices.find({ garageId: finalGarageId, priceList: listFilter });
+                const schemas: any[] = await db.vehicleTypes.find({ garageId: finalGarageId });
+                const tariffs: any[] = await db.tariffs.find({ garageId: finalGarageId });
 
-        const engine = new PricingEngine(tariffRepo, paramRepo, priceRepo);
+                const matrix: any = {};
+                const vMap = new Map(schemas.map((v: any) => [v.id, v.name]));
+                const tMap = new Map(tariffs.map((t: any) => [t.id, t.name]));
+
+                prices.forEach((p: any) => {
+                    const vId = p.vehicleTypeId || p.vehicle_type_id;
+                    const tId = p.tariffId || p.tariff_id;
+                    const vName = vMap.get(vId);
+                    const tName = tMap.get(tId);
+
+                    if (vName && tName) {
+                        if (!matrix[vName]) matrix[vName] = {};
+                        matrix[vName][tName] = Number(p.amount);
+                    }
+                });
+                console.log("Matriz Generada para Engine (Direct DB):", JSON.stringify(matrix));
+                return matrix;
+            }
+        };
+
+        // Mock Repos (Engine only needs getAll/getParams)
+        const tariffRepo = { getAll: () => db.tariffs.find({ garageId: finalGarageId }) };
+        const paramRepo = { getParams: async () => ({ toleranciaInicial: 15, fraccionarDesde: 0 }) }; // Default for now, or fetch from db.params if exists
+
+        const engine = new PricingEngine(tariffRepo as any, paramRepo as any, priceRepo);
 
         // 1. Calculate Price
         let price = 0;
@@ -97,12 +128,15 @@ export class AccessManager {
 
         const exitMovement: Movement = {
             id: uuidv4(),
+            garageId: finalGarageId,
+            ownerId: ownerId,
+            ticketNumber: ticketNumber,
             relatedEntityId: stay.id,
             type: 'CobroEstadia',
             timestamp: exitDate,
-            amount: price,
+            amount: Number(price), // Safety Cast
             paymentMethod,
-            operator,
+            operator: operator || 'Sistema',
             invoiceType: invoiceType || 'Final',
             plate: stay.plate,
 

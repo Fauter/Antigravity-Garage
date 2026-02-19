@@ -172,12 +172,14 @@ export class SyncService {
             case 'VehicleType': collection = db.vehicleTypes; break;
             case 'Tariff': collection = db.tariffs; break;
             case 'Price': collection = db.prices; break; // New: Prices
-            case 'Checkpoint': collection = db.checkpoints; break;
             case 'Customer': collection = db.customers; break;
             case 'Vehicle': collection = db.vehicles; break;
             case 'Stay': collection = db.stays; break;
             case 'Movement': collection = db.movements; break;
+            case 'Stay': collection = db.stays; break;
+            case 'Movement': collection = db.movements; break;
             case 'Subscription': collection = db.subscriptions; break;
+            case 'Garage': collection = db.garages; break;
         }
 
         if (collection) {
