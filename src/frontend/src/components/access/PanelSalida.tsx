@@ -106,6 +106,7 @@ const PanelSalida: React.FC = () => {
             console.log(`[PanelSalida] Calculating for ${stay.plate} (${stay.vehicleType}) - Method: ${paymentMethod} - Duration: ${durationMinutes} min`);
 
             try {
+                console.log("[PanelSalida] Llamando a PricingEngine con:", stay.plate, paymentMethod);
                 let calculated = await pricingEngine.calculateParkingFee(
                     { ...stay, vehicleType: stay.vehicleType || 'Auto' },
                     exitDate,

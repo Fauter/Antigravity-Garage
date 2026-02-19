@@ -7,6 +7,7 @@ import { CustomerRepository } from '../../Garage/infra/CustomerRepository';
 import { SubscriptionRepository } from '../../Garage/infra/SubscriptionRepository';
 
 import { JsonDB } from '../../../infrastructure/database/json-db';
+import { db } from '../../../infrastructure/database/datastore';
 import { v4 as uuidv4 } from 'uuid';
 
 interface MatrixData {
@@ -183,6 +184,33 @@ export class AccessController {
 
             await this.stayRepository.save(closedStay as any);
             await this.movementRepository.save(exitMovement);
+
+            // 🚀 SYNC: Enqueue Changes for Cloud
+            try {
+                await db.mutations.insert({
+                    id: uuidv4(),
+                    entityType: 'Stay',
+                    operation: 'UPDATE',
+                    entityId: closedStay.id,
+                    payload: closedStay,
+                    timestamp: new Date(),
+                    synced: false
+                });
+
+                await db.mutations.insert({
+                    id: uuidv4(),
+                    entityType: 'Movement',
+                    operation: 'CREATE',
+                    entityId: exitMovement.id,
+                    payload: exitMovement,
+                    timestamp: new Date(),
+                    synced: false
+                });
+                console.log(`📡 Exit: Queued mutations for Stay ${closedStay.id} and Movement ${exitMovement.id}`);
+            } catch (syncErr) {
+                console.error('⚠️ Exit: Failed to queue mutations via AccessController', syncErr);
+                // Non-blocking: We proceed to respond success to frontend
+            }
 
             res.json({ stay: closedStay, movement: exitMovement, price });
         } catch (error: any) {

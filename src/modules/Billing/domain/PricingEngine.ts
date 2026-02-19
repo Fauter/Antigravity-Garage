@@ -16,6 +16,11 @@ export class PricingEngine {
         this.priceRepo = priceRepo;
     }
 
+    // --- Helper: Canonical Identity Comparator (Robust String Matching) ---
+    private toCanonical(text: string): string {
+        return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+    }
+
     // --- Dynamic Parking Logic (DP Optimization) ---
     async calculateParkingFee(
         stay: { entryTime: Date | string; exitTime?: Date | string | null; plate: string; vehicleType?: string },
@@ -23,6 +28,10 @@ export class PricingEngine {
         paymentMethod: string = 'Efectivo'
     ): Promise<number> {
         // 1. Validation & Setup
+        console.log("--- INICIO CÁLCULO ---");
+        const rawType = stay.vehicleType || 'Auto';
+        console.log("Vehículo buscado:", rawType, "-> Canonical:", this.toCanonical(rawType));
+
         const start = new Date(stay.entryTime);
         const end = new Date(exitTime);
         if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
@@ -32,14 +41,40 @@ export class PricingEngine {
         const minutesTotal = Math.ceil(durationMs / 60000);
 
         // 2. Load Configuration (Async)
-        // Map UI Payment Methods to Repository Keys ('efectivo' | 'otros')
-        const repoMethod = paymentMethod === 'Efectivo' ? 'efectivo' : 'otros';
+        // Map UI Payment Methods to Repository Keys
+        // Logic: 'Efectivo' -> 'standard', Others -> 'electronic' (handled by ConfigRepo via method arg)
+        const repoMethod = paymentMethod === 'Efectivo' ? 'EFECTIVO' : 'ELECTRONIC';
 
-        const [tariffs, params, matrix] = await Promise.all([
+        let tariffs: any[] = [];
+        let params: any = { toleranciaInicial: 15, fraccionarDesde: 0 };
+        let matrix: any = {};
+
+        // Robust Loading: Fail individually, not collectively
+        const [tariffsResult, paramsResult, matrixResult] = await Promise.allSettled([
             this.tariffRepo.getAll(),
             this.paramRepo.getParams(),
             this.priceRepo.getPrices(repoMethod)
         ]);
+
+        if (tariffsResult.status === 'fulfilled') {
+            tariffs = tariffsResult.value;
+            console.log("Total Tarifas cargadas:", tariffs.length);
+        } else {
+            console.warn('⚠️ PricingEngine: Failed to load Tariffs', tariffsResult.reason);
+        }
+
+        if (paramsResult.status === 'fulfilled') {
+            params = paramsResult.value;
+        } else {
+            console.warn('⚠️ PricingEngine: Failed to load Params. Using defaults (Tol: 15m).', paramsResult.reason);
+        }
+
+        if (matrixResult.status === 'fulfilled') {
+            matrix = matrixResult.value;
+            console.log(`[PricingEngine] Matrix Received (Keys):`, Object.keys(matrix));
+        } else {
+            console.warn('⚠️ PricingEngine: Failed to load PriceMatrix', matrixResult.reason);
+        }
 
         // 3. Tolerance Logic:
         // User requested to IGNORE tolerance if we are here (calculating payment).
@@ -49,62 +84,100 @@ export class PricingEngine {
         // }
 
         // 4. Resolve Prices for Vehicle
-        const type = stay.vehicleType || 'Auto';
 
         // Normalize helper: exact match for keys like 'Media Estadía' vs 'Media Estadia'
-        const normalize = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-
         // Find vehicle prices object with fuzzy matching
         let vehiclePrices: any = null;
-        // Try exact match first
-        if (matrix[type]) {
-            vehiclePrices = matrix[type];
-        } else {
-            // Try normalized match
-            const normalizedType = normalize(type);
-            const foundKey = Object.keys(matrix).find(k => normalize(k) === normalizedType);
-            if (foundKey) vehiclePrices = matrix[foundKey];
-        }
 
-        // Fallback to 'Auto' if still not found
-        if (!vehiclePrices && matrix['Auto']) {
-            console.log(`[PricingEngine] Vehicle type '${type}' not found. Falling back to 'Auto'.`);
-            vehiclePrices = matrix['Auto'];
+        // 1. Try Exact Match
+        if (matrix[rawType]) {
+            vehiclePrices = matrix[rawType];
+        } else {
+            // 2. Try Canonical Match
+            const canonicalType = this.toCanonical(rawType);
+            const foundKey = Object.keys(matrix).find(k => this.toCanonical(k) === canonicalType);
+            if (foundKey) {
+                console.log(`[PricingEngine] Fuzzy Match: '${rawType}' -> '${foundKey}'`);
+                vehiclePrices = matrix[foundKey];
+            } else {
+                // 3. Try "Auto" Fallback if original type not found
+                if (matrix['Auto']) {
+                    console.log(`[PricingEngine] Type '${rawType}' not found. Fallback to 'Auto'.`);
+                    vehiclePrices = matrix['Auto'];
+                }
+            }
         }
 
         if (!vehiclePrices) {
-            console.warn(`[PricingEngine] No prices found for '${type}' and no fallback.`);
+            console.error(`[PricingEngine] Error: El vehículo '${rawType}' no existe en la matriz recibida. Llaves disponibles: ${Object.keys(matrix)}`);
             return 0;
         }
 
+        console.log("Contenido de vehiclePrices para este vehículo:", JSON.stringify(vehiclePrices, null, 2));
+
+        // 5. Build Combinations (Chunks)
         // 5. Build Combinations (Chunks)
         const chunks: Chunk[] = [];
 
         for (const t of tariffs) {
+            // Debug: Validate what Frontend/Engine is actually processing
+            console.log("Tarifa recibida en front:", JSON.stringify(t));
+
             // Filter: Only process 'hora' type tariffs for parking stays.
-            // Ignore 'turno', 'abono', or other types as requested.
-            if (t.tipo !== 'hora') continue;
+            // Data Fix: Property is 'type', not 'tipo'
+            if (t.type !== 'hora') continue;
 
             // Calculate total minutes for this block
-            const blockMinutes = (t.dias * 1440) + (t.horas * 60) + t.minutos;
-            if (blockMinutes <= 0) continue;
+            // Data Fix: Properties are days, hours, minutes (Ensure Numbers to prevent NaN)
+            const d = Number(t.days || 0);
+            const h = Number(t.hours || 0);
+            const m = Number(t.minutes || 0);
+            const blockMinutes = (d * 1440) + (h * 60) + m;
 
-            // Find price for this tariff name with fuzzy matching
-            let price = vehiclePrices[t.nombre];
+            console.log(`Analizando Tarifa DB: ${t.name} | Tipo: ${t.type} | D:${d} H:${h} M:${m} -> Total: ${blockMinutes}m`);
+
+            if (isNaN(blockMinutes) || blockMinutes <= 0) {
+                console.warn(`[PricingEngine] Invalid duration for tariff ${t.name}: ${blockMinutes}m`);
+                continue;
+            }
+
+            // Find price for this tariff name with robust matching
+            // Data Fix: Property is 'name', not 'nombre'
+            let price = vehiclePrices[t.name];
+            const canonicalName = this.toCanonical(t.name);
+
+            const priceAttempt = vehiclePrices[t.name];
+            const canonicalAttempt = this.toCanonical(t.name);
+
+            console.log("  > Búsqueda directa:", priceAttempt !== undefined ? "OK: " + priceAttempt : "FALLÓ");
+            console.log("  > Búsqueda canónica ('" + canonicalAttempt + "'):", Object.keys(vehiclePrices).find(k => this.toCanonical(k) === canonicalAttempt) ? "ENCONTRADA" : "FALLÓ");
+
             if (price === undefined) {
-                const normalizedTariffName = normalize(t.nombre);
-                const foundPriceKey = Object.keys(vehiclePrices).find(k => normalize(k) === normalizedTariffName);
-                if (foundPriceKey) price = vehiclePrices[foundPriceKey];
+                // Fuzzy match against keys in vehiclePrices (Verified Robust Match)
+                const matchedKey = Object.keys(vehiclePrices).find(k => this.toCanonical(k) === canonicalName);
+
+                if (matchedKey) {
+                    price = vehiclePrices[matchedKey];
+                    console.log(`[PricingEngine] Tariff Match (Fuzzy): '${t.name}' -> '${matchedKey}'`);
+                }
             }
 
             if (price !== undefined && price !== null) {
                 // Ensure price is number
                 const numPrice = Number(price);
                 if (!isNaN(numPrice)) {
-                    chunks.push({ minutes: blockMinutes, price: numPrice, name: t.nombre });
+                    chunks.push({ minutes: blockMinutes, price: numPrice, name: t.name });
+                    console.log(`[PricingEngine] Linked: ${t.name} -> $${numPrice}`);
+                } else {
+                    console.warn(`[PricingEngine] Invalid price for ${t.name}: ${price}`);
                 }
+            } else {
+                console.warn(`[PricingEngine] Price not found for tariff '${t.name}' (Canonical: ${canonicalName})`);
             }
         }
+
+        console.log("Chunks finales enviados a optimización:", JSON.stringify(chunks, null, 2));
+        if (chunks.length === 0) console.error("ALERTA: No se generaron chunks. El motor no tiene precios válidos para procesar.");
 
         if (chunks.length === 0) return 0;
 
@@ -126,6 +199,12 @@ export class PricingEngine {
         // To be safe, buffer by the largest chunk size.
         const maxChunkSize = Math.max(...chunks.map(c => c.minutes));
         const limit = targetMinutes + maxChunkSize;
+
+        // Safety Check: Prevent RangeError if limit is NaN or ridiculous
+        if (isNaN(limit) || limit <= 0 || !Number.isFinite(limit)) {
+            console.error("[PricingEngine] Invalid limit for optimizeCost:", limit);
+            return 0;
+        }
 
         // dp[i] = Min cost to get EXACTLY i minutes capacity (or reachable capacity)
         // Initialize with Infinity

@@ -114,10 +114,14 @@ export class SyncService {
             console.log('🧹 Sync: Purging local transactional data...');
             await db.stays.remove({}, { multi: true });
             await db.movements.remove({}, { multi: true });
+            await db.tariffs.remove({}, { multi: true });
+            await db.vehicleTypes.remove({}, { multi: true });
+            await db.prices.remove({}, { multi: true }); // Clean Prices to avoid duplicates
 
             // 1. Config (CRITICAL: Fetch first to populate UI dropdowns)
             await this.fetchTable('vehicle_types', garageId, 'VehicleType');
             await this.fetchTable('tariffs', garageId, 'Tariff');
+            await this.fetchTable('prices', garageId, 'Price'); // New: Sync Prices
 
             // 2. Core Operational Entities
             await this.fetchTable('customers', garageId, 'Customer');
@@ -137,7 +141,7 @@ export class SyncService {
 
     private async fetchTable(tableName: string, garageId: string, entityType: string) {
         try {
-            // Basic query filtering by garage_id mostly
+            // Basic query filtering by nature
             let query = supabase.from(tableName).select('*');
 
             if (tableName === 'garages') {
@@ -167,6 +171,7 @@ export class SyncService {
         switch (entityType) {
             case 'VehicleType': collection = db.vehicleTypes; break;
             case 'Tariff': collection = db.tariffs; break;
+            case 'Price': collection = db.prices; break; // New: Prices
             case 'Checkpoint': collection = db.checkpoints; break;
             case 'Customer': collection = db.customers; break;
             case 'Vehicle': collection = db.vehicles; break;
@@ -212,6 +217,22 @@ export class SyncService {
             if (local.end_date) { local.endDate = local.end_date; delete local.end_date; }
             if (local.vehicle_id) { local.vehicleId = local.vehicle_id; delete local.vehicle_id; }
             if (local.customer_id) { local.customerId = local.customer_id; delete local.customer_id; }
+        }
+
+        if (type === 'Tariff') {
+            local.days = Number(item.days || 0);
+            local.hours = Number(item.hours || 0);
+            local.minutes = Number(item.minutes || 0);
+            // Log de seguridad para ver qué estamos guardando
+            console.log(`[Sync] Mapeando Tarifa: ${local.name} -> ${local.days}d ${local.hours}h ${local.minutes}m`);
+        }
+
+        if (type === 'Price') {
+            if (local.vehicle_type_id) { local.vehicleTypeId = local.vehicle_type_id; delete local.vehicle_type_id; }
+            if (local.tariff_id) { local.tariffId = local.tariff_id; delete local.tariff_id; }
+            if (local.price_list) { local.priceList = local.price_list; delete local.price_list; }
+            if (local.amount !== undefined) { local.amount = Number(local.amount); }
+            if (local.id) { local.id = String(local.id); } // Usar ID único de Supabase
         }
 
         return local;

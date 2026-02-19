@@ -1,10 +1,21 @@
 import { Router } from 'express';
 import { ConfigRepository } from '../infra/ConfigRepository.js';
+import { db } from '../../../infrastructure/database/datastore.js';
 
 const router = Router();
 const configRepo = new ConfigRepository();
 
 // --- READ-ONLY CONFIGURATION ROUTES (Resilient) ---
+
+// 0. PARAMETERS (First to avoid shadowing)
+router.get('/parametros', async (req, res) => {
+    try {
+        const params = await configRepo.getParams();
+        res.json(params);
+    } catch (e) {
+        res.status(500).json({ error: e });
+    }
+});
 
 // 1. TARIFAS
 router.get('/tarifas', async (req, res) => {
@@ -13,7 +24,8 @@ router.get('/tarifas', async (req, res) => {
         if (!garageId) {
             return res.json([]);
         }
-        const tariffs = await configRepo.getTariffs(garageId);
+        // Direct DB Access (Source of Truth: Local Sync)
+        const tariffs = await db.tariffs.find({ garageId });
         res.json(tariffs);
     } catch (e) {
         res.status(500).json({ error: e });
@@ -26,7 +38,8 @@ router.get('/tipos-vehiculo', async (req, res) => {
         const garageId = (req.query.garageId as string) || (req.headers['x-garage-id'] as string);
         if (!garageId) return res.json([]);
 
-        const types = await configRepo.getVehicleTypes(garageId);
+        // Direct DB Access (Source of Truth: Local Sync)
+        const types: any[] = await db.vehicleTypes.find({ garageId });
         // Filter active only (safe default for frontend)
         const activeTypes = types.filter(t => t.active !== false);
         res.json(activeTypes);
@@ -42,38 +55,56 @@ router.get('/precios', async (req, res) => {
         if (!garageId) return res.json({});
 
         const metodoParam = req.query.metodo as string;
-        const methodFilter = metodoParam ? metodoParam.toUpperCase() : 'EFECTIVO';
+        // Map UI Method -> Repo Method
+        // 'EFECTIVO' -> 'standard', anything else -> 'electronic'
+        const listFilter = (metodoParam && metodoParam.toUpperCase() === 'EFECTIVO') ? 'standard' : 'electronic';
 
-        // Fetch Data from Repo (Parallel)
+        // Fetch Data from Local DB (Sync Source of Truth)
+        // We use the local DB because SyncService ensures it's up to date.
+        // This avoids round-trips and ensures property consistency (camelCase).
         const [prices, vehicleTypes, tariffs] = await Promise.all([
-            configRepo.getPrices(garageId, methodFilter),
-            configRepo.getVehicleTypes(garageId),
-            configRepo.getTariffs(garageId)
+            db.prices.find({ garageId, priceList: listFilter }),
+            db.vehicleTypes.find({ garageId }),
+            db.tariffs.find({ garageId })
         ]);
 
         // Transform to Nested Structure: { "Auto": { "Hora": 1000, "Estadia": 5000 } }
         const matrix: Record<string, Record<string, number>> = {};
 
-        // Helper maps for ID -> Name
-        const vTypeMap = new Map(vehicleTypes.map(v => [v.id.trim(), v.name]));
-        const tariffMap = new Map(tariffs.map(t => [t.id.trim(), t.name]));
+        // Helper maps for ID -> Name (Source of Truth: DB Name)
+        const vTypeMap = new Map(vehicleTypes.map((v: any) => [v.id.trim(), v.name]));
+        const tariffMap = new Map(tariffs.map((t: any) => [t.id.trim(), t.name]));
 
-        prices.forEach(p => {
-            // Ensure IDs exist and are trimmed
-            const vId = p.vehicleTypeId ? p.vehicleTypeId.trim() : 'MISSING_VID';
-            const tId = p.tariffId ? p.tariffId.trim() : 'MISSING_TID';
+        if (prices.length > 0) {
+            console.log("Muestra de Precio Local (1er objeto):", JSON.stringify(prices[0], null, 2));
+        } else {
+            console.warn("⚠️ No local prices found for garage:", garageId);
+        }
 
-            const vName = vTypeMap.get(vId);
-            const tName = tariffMap.get(tId);
+        prices.forEach((p: any) => {
+            // Dual Property Check (Bulletproof: camelCase OR snake_case)
+            const vIdRaw = (p.vehicleTypeId || p.vehicle_type_id || '').trim();
+            const tIdRaw = (p.tariffId || p.tariff_id || '').trim();
+
+            if (!vIdRaw || !tIdRaw) return;
+
+            // Resolve Name by ID
+            const vName = vTypeMap.get(vIdRaw);
+            const tName = tariffMap.get(tIdRaw);
 
             if (vName && tName) {
-                if (!matrix[vName]) matrix[vName] = {};
-                // Use p.amount (repo guarantees this is set)
-                matrix[vName][tName] = p.amount;
+                const vKey = String(vName);
+                const tKey = String(tName);
+                if (!matrix[vKey]) matrix[vKey] = {};
+                // Use p.amount 
+                matrix[vKey][tKey] = Number(p.amount || 0);
             } else {
-                console.warn(`⚠️ ConfigMatrix Mapping Fail: Price ${p.id} -> VType: ${vId} [${vName || 'NOT_FOUND'}], Tariff: ${tId} [${tName || 'NOT_FOUND'}]`);
+                // Only warn if IDs are present but not found in maps (avoid noise for phantom records)
+                // console.warn(`⚠️ ConfigMatrix Mapping Fail: Price ${p.id} -> VType: ${vIdRaw} [${vName || 'NOT_FOUND'}], Tariff: ${tIdRaw} [${tName || 'NOT_FOUND'}]`);
             }
         });
+
+        console.log("Matriz Generada:", JSON.stringify(matrix, null, 2)); // DEBUG: Verify Matrix Structure on Server
 
         res.json(matrix);
     } catch (e) {
