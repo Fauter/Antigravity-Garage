@@ -2,10 +2,10 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
-import mongoose from 'mongoose';
-import { connectDB } from '../database/mongodb.js';
 
-console.log('🚀 [BACKEND] Proceso de arranque iniciado...');
+// Mongoose removed. Zero-Install Arch.
+
+console.log('🚀 [BACKEND] Proceso de arranque iniciado (Modo: Zero-Install / Offline-First)...');
 
 export const startServer = async () => {
     const app = express();
@@ -14,7 +14,7 @@ export const startServer = async () => {
     app.use(cors({
         origin: 'http://localhost:5173',
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-        allowedHeaders: ['Content-Type', 'Authorization']
+        allowedHeaders: ['Content-Type', 'Authorization', 'x-garage-id']
     }));
 
     app.use(express.json());
@@ -33,7 +33,7 @@ export const startServer = async () => {
     const { AccessController } = await import('../../modules/AccessControl/infra/AccessController.js');
     const { GarageController } = await import('../../modules/Garage/infra/GarageController.js');
     const { AuthController } = await import('../../modules/Identity/infra/AuthController.js');
-    const { SyncService } = await import('../../modules/Sync/application/SyncService.js');
+    const { syncService } = await import('../../modules/Sync/application/SyncService.js');
 
     // Configuration Module Routes
     const { default: configRoutes } = await import('../../modules/Configuration/http/routes.js');
@@ -41,7 +41,7 @@ export const startServer = async () => {
     const accessController = new AccessController();
     const garageController = new GarageController();
     const authController = new AuthController();
-    const syncService = new SyncService();
+    // syncService is already instantiated
 
     // Mount Configuration Routes
     app.use('/api', configRoutes);
@@ -76,21 +76,12 @@ export const startServer = async () => {
     // Auth Routes
     app.post('/api/auth/login', authController.login.bind(authController));
 
-    // Sync Bootstrap Endpoint (Explicit)
+    // Sync Bootstrap Endpoint
     app.post('/api/sync/bootstrap', async (req, res) => {
         const { garageId } = req.body;
         if (!garageId) return res.status(400).json({ error: 'garageId required' });
 
-        // Safety Check: Only sync if DB is connected, otherwise we risk errors (or just rely on Supabase if SyncService supported it, but SyncService writes to Mongo)
-        if (mongoose.connection.readyState !== 1) {
-            return res.status(503).json({
-                message: 'Local Database Offline. Cannot sync to local cache.',
-                mode: 'Cloud-Only'
-            });
-        }
-
         console.log(`🔌 Manual Sync Triggered for ${garageId}`);
-        // Non-blocking
         syncService.pullAllData(garageId).then(() => {
             syncService.initRealtime(garageId);
         }).catch(err => console.error('Sync Error', err));
@@ -98,33 +89,12 @@ export const startServer = async () => {
         res.json({ message: 'Sync started' });
     });
 
-
-    // --- Start Server (Non-blocking DB) ---
+    // --- Start Server ---
     const PORT = process.env.PORT || 3000;
 
     httpServer.listen(PORT, async () => {
         console.log(`✅ Servidor GarageIA escuchando en http://localhost:${PORT}`);
-
-        // --- ASYNC DATABASE INIT (Non-Blocking) ---
-        (async () => {
-            try {
-                // Try to connect, but don't hold the server hostage
-                await connectDB();
-
-                if (mongoose.connection.readyState === 1) {
-                    // Only wait for Hydration if we have a DB.
-                    // Actually, we don't Hydrate automatically anymore, we wait for Login.
-                    console.log('⏳ Sistema listo. Esperando Login para sincronizar.');
-                } else {
-                    console.log('⚠️ Sistema iniciado en modo CLOUD-ONLY (Sin caché local).');
-                }
-
-            } catch (dbError: any) {
-                // This catch might not be reached if connectDB handles its own errors, 
-                // but good for safety.
-                console.warn('⚠️ Error crítico en inicialización de DB (Ignorado):', dbError.message);
-            }
-        })();
+        console.log(`✅ Base de Datos Local: LISTA (Archivo ./.data/)`);
     });
 };
 

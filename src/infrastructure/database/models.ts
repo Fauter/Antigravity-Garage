@@ -130,7 +130,7 @@ const EmployeeSchema = new Schema<Employee>({
 export const EmployeeModel = mongoose.model<Employee>('Employee', EmployeeSchema);
 
 // --- Mutation Queue ---
-const MutationSchema = new Schema<import('../../shared/schemas').Mutation>({
+const MutationSchema = new Schema<Mutation>({
     id: { type: String, required: true, unique: true },
     entityType: { type: String, required: true },
     entityId: { type: String, required: true },
@@ -141,10 +141,10 @@ const MutationSchema = new Schema<import('../../shared/schemas').Mutation>({
     retryCount: { type: Number, default: 0 }
 });
 
-export const MutationModel = mongoose.model<import('../../shared/schemas').Mutation>('Mutation', MutationSchema);
+export const MutationModel = mongoose.model<Mutation>('Mutation', MutationSchema);
 
 // --- Sync Conflict ---
-const SyncConflictSchema = new Schema<import('../../shared/schemas').SyncConflict>({
+const SyncConflictSchema = new Schema<SyncConflict>({
     id: { type: String, required: true, unique: true },
     mutationId: { type: String, required: true },
     error: { type: String, required: true },
@@ -153,4 +153,42 @@ const SyncConflictSchema = new Schema<import('../../shared/schemas').SyncConflic
     resolved: { type: Boolean, default: false }
 });
 
-export const SyncConflictModel = mongoose.model<import('../../shared/schemas').SyncConflict>('SyncConflict', SyncConflictSchema);
+export const SyncConflictModel = mongoose.model<SyncConflict>('SyncConflict', SyncConflictSchema);
+
+
+// --- CONFIGURATION TABLES (Read-Only via Sync) ---
+
+// Vehicle Types (Icon mapping)
+const VehicleTypeSchema = new Schema<VehicleType>({
+    id: { type: String, required: true, unique: true },
+    garageId: { type: String },
+    ownerId: { type: String },
+    name: { type: String, required: true },
+    icon: { type: String }, // Mapped from icon_key
+    active: { type: Boolean, default: true }
+});
+export const VehicleTypeModel = mongoose.model<VehicleType>('VehicleType', VehicleTypeSchema);
+
+// Tariffs (Rules)
+const TariffSchema = new Schema<Tariff>({
+    id: { type: String, required: true, unique: true },
+    garageId: { type: String },
+    ownerId: { type: String },
+    name: { type: String, required: true },
+    type: { type: String, required: true }, // 'Hora', 'Estadia', etc.
+    priority: { type: Number, default: 0 }
+});
+export const TariffModel = mongoose.model<Tariff>('Tariff', TariffSchema);
+
+// Prices (Matrix)
+const PriceSchema = new Schema<Price>({
+    id: { type: String, required: true, unique: true },
+    garageId: { type: String },
+    ownerId: { type: String },
+    tariffId: { type: String, required: true },
+    vehicleTypeId: { type: String, required: true },
+    amount: { type: Number, required: true },
+    method: { type: String }, // Mapped from price_list (e.g., 'EFECTIVO', 'MERCADO_PAGO')
+    createdAt: { type: Date, default: Date.now }
+});
+export const PriceModel = mongoose.model<Price>('Price', PriceSchema);

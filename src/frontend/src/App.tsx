@@ -7,7 +7,7 @@ import GestorAbonos from './components/subscription/GestorAbonos';
 import AltaSuscriptor from './pages/AltaSuscriptor';
 import CajaPage from './pages/CajaPage';
 import AuditoriaVehiculos from './components/audit/AuditoriaVehiculos';
-import ConfigPage from './pages/ConfigPage';
+import ConfigAuditPage from './pages/ConfigAuditPage'; // New Audit Page
 
 // Protected Route Wrapper
 const ProtectedRoute = () => {
@@ -38,7 +38,7 @@ function App() {
                         <Route path="/abonos/alta" element={<AltaSuscriptor />} />
                         <Route path="/caja" element={<CajaPage />} />
                         <Route path="/audit" element={<AuditoriaVehiculos />} />
-                        <Route path="/config" element={<ConfigPage />} />
+                        <Route path="/config" element={<ConfigAuditPage />} />
                     </Route>
 
                     {/* Fallback */}

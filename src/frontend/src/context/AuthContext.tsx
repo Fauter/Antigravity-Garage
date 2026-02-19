@@ -6,6 +6,8 @@ export interface User {
     id: string;
     username: string;
     full_name: string;
+    first_name?: string; // Added for display logic
+    last_name?: string;  // Added for display logic
     role: 'OWNER' | 'ADMIN' | 'MANAGER' | 'OPERATOR';
     owner_id: string;
     garage_id?: string | null;

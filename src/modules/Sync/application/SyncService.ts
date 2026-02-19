@@ -1,296 +1,304 @@
-import { v4 as uuidv4 } from 'uuid';
-import { supabase } from '../../../infrastructure/lib/supabase';
-import { Mutation, SyncConflict, Vehicle, Customer, Subscription, Movement, Employee } from '../../../shared/schemas';
-import { VehicleRepository } from '../../Garage/infra/VehicleRepository';
-import { CustomerRepository } from '../../Garage/infra/CustomerRepository';
-import { SubscriptionRepository } from '../../Garage/infra/SubscriptionRepository';
-import { MovementRepository } from '../../Billing/infra/MovementRepository';
-import { EmployeeModel, MutationModel, SyncConflictModel } from '../../../infrastructure/database/models';
-
-class EmployeeRepository {
-    async save(employee: Employee) {
-        await EmployeeModel.findOneAndUpdate({ id: employee.id }, employee, { upsert: true, new: true });
-    }
-}
+import { db } from '../../../infrastructure/database/datastore.js';
+import { supabase } from '../../../infrastructure/lib/supabase.js';
+import { QueueService } from '../../Sync/application/QueueService.js';
 
 export class SyncService {
-    private vehicleRepo = new VehicleRepository();
-    private customerRepo = new CustomerRepository();
-    private subRepo = new SubscriptionRepository();
-    private movementRepo = new MovementRepository();
-    private employeeRepo = new EmployeeRepository();
-
-    private garageId: string | null = null;
+    private queue = new QueueService();
     private isSyncing = false;
+    private syncInterval: NodeJS.Timeout | null = null;
+    private garageId: string | null = null;
 
     constructor() {
-        console.log('🔄 SyncService Initialized');
+        console.log('🔄 SyncService Initialized (Offline-First Worker)');
+        this.startBackgroundSync();
     }
 
     /**
-     * Bootstrap: Hidratación inicial desde Supabase
+     * Starts the background loop to process the mutation queue.
      */
-    async pullAllData(garageId: string) {
-        this.garageId = garageId;
-        console.log(`📡 [Sync] Iniciando hidratación para Garage ID: ${garageId}`);
+    startBackgroundSync() {
+        if (this.syncInterval) return;
+
+        console.log('🚀 Background Sync Started...');
+        this.syncInterval = setInterval(async () => {
+            await this.processQueue();
+        }, 10000); // Check every 10 seconds
+    }
+
+    async processQueue() {
+        if (this.isSyncing) return;
+        this.isSyncing = true;
 
         try {
-            // 1. Fetch Data with consistent snake_case from DB
-            const [vehicles, customers, subscriptions, movements, employees] = await Promise.all([
-                this.fetchTable('vehicles', garageId),
-                this.fetchTable('customers', garageId),
-                this.fetchTable('subscriptions', garageId),
-                this.fetchTable('movements', garageId),
-                this.fetchTable('employee_accounts', garageId)
-            ]);
+            const pending = await this.queue.getPending(10); // Batch of 10
+            if (pending.length === 0) {
+                this.isSyncing = false;
+                return;
+            }
 
-            // 2. Log Sample Data for Verification
-            console.log('👀 [Sync] Muestra de datos (Vehículos):', vehicles.slice(0, 3));
-            console.log('👀 [Sync] Muestra de datos (Clientes):', customers.slice(0, 3));
-            console.log('👀 [Sync] Muestra de datos (Empleados):', employees.slice(0, 3));
+            console.log(`📡 Sync: Processing ${pending.length} pending mutations...`);
 
-            // 3. Upsert Local with Mapping and Identity Enforcement
-            await this.upsertLocalBatch(this.vehicleRepo, vehicles, 'Vehicle');
-            await this.upsertLocalBatch(this.customerRepo, customers, 'Customer');
-            await this.upsertLocalBatch(this.subRepo, subscriptions, 'Subscription');
-            await this.upsertLocalBatch(this.movementRepo, movements, 'Movement');
-            await this.upsertLocalBatch(this.employeeRepo, employees, 'Employee');
+            for (const mutation of pending) {
+                try {
+                    await this.pushToCloud(mutation);
+                    await this.queue.markSynced(mutation.id);
+                    console.log(`✅ Sync: Synced [${mutation.entityType} ${mutation.operation}]`);
+                } catch (err: any) {
+                    console.error(`❌ Sync: Failed to sync mutation ${mutation.id}`, err);
 
-            console.log(`📡 [Sync] Hidratación completa: ${vehicles.length} v, ${customers.length} c, ${subscriptions.length} s, ${movements.length} m.`);
-            console.log(`📡 [Sync] Cuentas de personal actualizadas: ${employees.length} operarios detectados.`);
+                    // POISON PILL: Integrity Violations (Foreign Key, Unique, Check) + Missing Table + Extra Columns
+                    // 23503: FK Violation, 23505: Unique Violation, 23514: Check Violation
+                    // PGRST205: Relation not found (Table missing)
+                    // PGRST204: Columns not found (Extra columns in payload)
+                    if (['23503', '23505', '23514', 'PGRST205', '42P01', 'PGRST204'].includes(err?.code) || err?.message?.includes('vehicles_type_check')) {
+                        console.warn(`☣️ Sync: Mutación ${mutation.id} descartada por Error Irrecuperable (Error ${err?.code}).`);
+                        await this.queue.markSynced(mutation.id); // Mark as synced effectively "skips" it
+                    } else {
+                        await this.queue.incrementRetry(mutation.id);
+                    }
+                }
+            }
 
         } catch (error) {
-            console.error('❌ [Sync] Error en hidratación inicial:', error);
+            console.error('❌ Sync Loop Error', error);
+        } finally {
+            this.isSyncing = false;
         }
     }
 
-    private async fetchTable(table: string, garageId: string) {
-        let query = supabase.from(table).select('*');
+    private async pushToCloud(mutation: any) {
+        const { entityType, operation, data } = mutation;
+        const tableMap: any = {
+            'Stay': 'stays',
+            'Movement': 'movements',
+            'Garage': 'garages',
+            'Customer': 'customers',
+            'Vehicle': 'vehicles',
+            'VehicleType': 'vehicle_types',
+            'Tariff': 'tariffs',
+            'Subscription': 'subscriptions'
+        };
 
-        if (table === 'employee_accounts') {
-            // We assume employee_accounts has garage_id as per schema alignment requirements
-            query = query.eq('garage_id', garageId);
-        } else {
-            query = query.eq('garage_id', garageId);
+        const tableName = tableMap[entityType];
+        if (!tableName) throw new Error(`Unknown Table for Entity: ${entityType}`);
+
+        // Sanitize Payload
+        const payload = this.mapLocalToRemote(data, entityType);
+
+        if (operation === 'CREATE') {
+            const { error } = await supabase.from(tableName).insert(payload);
+            if (error) throw error;
+        } else if (operation === 'UPDATE') {
+            const { error } = await supabase.from(tableName).update(payload).eq('id', payload.id);
+            if (error) throw error;
+        } else if (operation === 'DELETE') {
+            const { error } = await supabase.from(tableName).delete().eq('id', payload.id);
+            if (error) throw error;
         }
+    }
 
-        const { data, error } = await query;
+    async pullAllData(garageId: string) {
+        console.log(`📥 Sync: Pulling all data for Garage ${garageId}...`);
+        this.garageId = garageId;
 
-        if (error) {
-            console.error(`Error fetching ${table}:`, error.message);
-            // Default to empty array for employees if scheme mismatch to avoid crashing core sync
-            if (table === 'employee_accounts') return [];
+        try {
+            // 0. Clean Local State (Avoid Ghost Records)
+            console.log('🧹 Sync: Purging local transactional data...');
+            await db.stays.remove({}, { multi: true });
+            await db.movements.remove({}, { multi: true });
+
+            // 1. Config
+            await this.fetchTable('vehicle_types', garageId, 'VehicleType');
+            await this.fetchTable('tariffs', garageId, 'Tariff');
+
+            // 2. Core Operational Entities
+            await this.fetchTable('customers', garageId, 'Customer');
+            await this.fetchTable('vehicles', garageId, 'Vehicle');
+
+            // 3. Transactional
+            await this.fetchTable('stays', garageId, 'Stay');
+            await this.fetchTable('movements', garageId, 'Movement');
+            await this.fetchTable('subscriptions', garageId, 'Subscription');
+
+            console.log('✅ Sync: Bootstrap Complete.');
+        } catch (error) {
+            console.error('❌ Sync: Bootstrap Failed', error);
             throw error;
         }
-        return data || [];
     }
 
-    private async upsertLocalBatch(repo: any, items: any[], type: string) {
-        for (const item of items) {
-            const mapped = this.mapRemoteToLocal(item, type);
+    private async fetchTable(tableName: string, garageId: string, entityType: string) {
+        try {
+            // Basic query filtering by garage_id mostly
+            let query = supabase.from(tableName).select('*');
 
-            if (!mapped.id) {
-                console.warn(`[Sync] Skipping item without ID in ${type}`, item);
-                continue;
+            if (tableName === 'garages') {
+                query = query.eq('id', garageId);
+            } else {
+                query = query.eq('garage_id', garageId);
             }
 
-            await repo.save(mapped);
-        }
-    }
+            const { data, error } = await query;
+            if (error) throw error;
 
-    /**
-     * CONVERSIÓN DE SNAKE_CASE (DB/Supabase) -> CAMELCASE (App/Mongo)
-     */
-    private mapRemoteToLocal(item: any, type: string): any {
-        const mapped: any = { ...item };
-
-        // Common Fields
-        if (item.garage_id !== undefined) { mapped.garageId = item.garage_id; delete mapped.garage_id; }
-        if (item.owner_id !== undefined) { mapped.ownerId = item.owner_id; delete mapped.owner_id; }
-        if (item.created_at !== undefined) { mapped.createdAt = new Date(item.created_at); delete mapped.created_at; }
-        if (item.updated_at !== undefined) { mapped.updatedAt = new Date(item.updated_at); delete mapped.updated_at; }
-
-        // Entity Specifics
-        if (type === 'Vehicle') {
-            if (item.customer_id !== undefined) { mapped.customerId = item.customer_id; delete mapped.customer_id; }
-            if (mapped.plate) mapped.plate = mapped.plate.toUpperCase();
-        }
-
-        if (type === 'Subscription') {
-            if (item.customer_id !== undefined) { mapped.customerId = item.customer_id; delete mapped.customer_id; }
-            if (item.vehicle_id !== undefined) { mapped.vehicleId = item.vehicle_id; delete mapped.vehicle_id; }
-            if (item.start_date !== undefined) { mapped.startDate = new Date(item.start_date); delete mapped.start_date; }
-            if (item.end_date !== undefined) { mapped.endDate = item.end_date ? new Date(item.end_date) : null; delete mapped.end_date; }
-        }
-
-        if (type === 'Movement') {
-            if (item.related_entity_id !== undefined) { mapped.relatedEntityId = item.related_entity_id; delete mapped.related_entity_id; }
-            if (item.payment_method !== undefined) { mapped.paymentMethod = item.payment_method; delete mapped.payment_method; }
-            if (item.ticket_number !== undefined) { mapped.ticketNumber = item.ticket_number; delete mapped.ticket_number; }
-            if (item.ticket_pago !== undefined) { mapped.ticketPago = item.ticket_pago; delete mapped.ticket_pago; }
-            if (item.shift_id !== undefined) { mapped.shiftId = item.shift_id; delete mapped.shift_id; }
-            if (item.invoice_type !== undefined) { mapped.invoiceType = item.invoice_type; delete mapped.invoice_type; }
-        }
-
-        if (type === 'Employee') {
-            if (item.first_name !== undefined) { mapped.firstName = item.first_name; delete mapped.first_name; }
-            if (item.last_name !== undefined) { mapped.lastName = item.last_name; delete mapped.last_name; }
-            if (item.password_hash !== undefined) { mapped.passwordHash = item.password_hash; delete mapped.password_hash; }
-        }
-
-        // Identity Injection if missing (Safety Net)
-        if (!mapped.garageId && this.garageId) {
-            mapped.garageId = this.garageId;
-        }
-
-        return mapped;
-    }
-
-    /**
-     * CONVERSIÓN DE CAMELCASE (App/Mongo) -> SNAKE_CASE (DB/Supabase)
-     */
-    private mapLocalToRemote(item: any, type: string): any {
-        const mapped: any = { ...item };
-
-        // Common Fields
-        if (item.garageId !== undefined) { mapped.garage_id = item.garageId; delete mapped.garageId; }
-        if (item.ownerId !== undefined) { mapped.owner_id = item.ownerId; delete mapped.ownerId; }
-        if (item.createdAt !== undefined) { mapped.created_at = item.createdAt; delete mapped.createdAt; }
-        if (item.updatedAt !== undefined) { mapped.updated_at = item.updatedAt; delete mapped.updatedAt; }
-
-        if (type === 'Vehicle') {
-            if (item.customerId !== undefined) { mapped.customer_id = item.customerId; delete mapped.customerId; }
-        }
-
-        if (type === 'Subscription') {
-            if (item.customerId !== undefined) { mapped.customer_id = item.customerId; delete mapped.customerId; }
-            if (item.vehicleId !== undefined) { mapped.vehicle_id = item.vehicleId; delete mapped.vehicleId; }
-            if (item.startDate !== undefined) { mapped.start_date = item.startDate; delete mapped.startDate; }
-            if (item.endDate !== undefined) { mapped.end_date = item.endDate; delete mapped.endDate; }
-        }
-
-        if (type === 'Movement') {
-            if (item.relatedEntityId !== undefined) { mapped.related_entity_id = item.relatedEntityId; delete mapped.relatedEntityId; }
-            if (item.paymentMethod !== undefined) { mapped.payment_method = item.paymentMethod; delete mapped.paymentMethod; }
-            if (item.ticketNumber !== undefined) { mapped.ticket_number = item.ticketNumber; delete mapped.ticketNumber; }
-            if (item.ticketPago !== undefined) { mapped.ticket_pago = item.ticketPago; delete mapped.ticketPago; }
-            if (item.shiftId !== undefined) { mapped.shift_id = item.shiftId; delete mapped.shiftId; }
-            if (item.invoiceType !== undefined) { mapped.invoice_type = item.invoiceType; delete mapped.invoiceType; }
-        }
-
-        if (type === 'Employee') {
-            if (item.firstName !== undefined) { mapped.first_name = item.firstName; delete mapped.firstName; }
-            if (item.lastName !== undefined) { mapped.last_name = item.lastName; delete mapped.lastName; }
-            if (item.passwordHash !== undefined) { mapped.password_hash = item.passwordHash; delete mapped.passwordHash; }
-        }
-
-        return mapped;
-    }
-
-    /**
-     * Process Local Mutations (Push to Cloud)
-     */
-    async processMutations(mutations: Mutation[]): Promise<{ processed: number; conflicts: number }> {
-        if (!this.garageId) {
-            console.warn('[Sync] Cannot process mutations without garageId');
-            return { processed: 0, conflicts: 0 };
-        }
-
-        let processedCount = 0;
-        let conflictCount = 0;
-
-        for (const mut of mutations) {
-            try {
-                // Determine Table
-                const table = this.getTableName(mut.entityType);
-                if (!table) continue;
-
-                // LWW Check (Last Write Wins)
-                const { data: remote } = await supabase
-                    .from(table)
-                    .select('updated_at')
-                    .eq('id', mut.entityId)
-                    .single();
-
-                if (remote && new Date(remote.updated_at) > new Date(mut.timestamp)) {
-                    console.log(`[Sync] Conflict LWW: Remote is newer for ${mut.entityId}. Discarding local mutation.`);
-                    processedCount++;
-                    continue;
+            if (data) {
+                console.log(`📥 Sync: Fetched ${data.length} records for ${entityType}`);
+                for (const item of data) {
+                    await this.upsertLocal(entityType, item);
                 }
-
-                // Apply Change
-                const payload = this.mapLocalToRemote(mut.payload, mut.entityType);
-
-                // Enforce Context (Garage)
-                payload.garage_id = this.garageId;
-
-                const { error } = await supabase.from(table).upsert(payload);
-
-                if (error) throw error;
-
-                processedCount++;
-            } catch (error: any) {
-                console.error(`[Sync] Mutation Failed ${mut.id}:`, error.message);
-
-                const conflict: SyncConflict = {
-                    id: uuidv4(),
-                    mutationId: mut.id,
-                    error: error.message || 'Unknown error',
-                    receivedPayload: mut.payload,
-                    timestamp: new Date(),
-                    resolved: false
-                };
-                await SyncConflictModel.create(conflict);
-                conflictCount++;
             }
-        }
-
-        return { processed: processedCount, conflicts: conflictCount };
-    }
-
-    private getTableName(type: string): string | null {
-        switch (type) {
-            case 'Vehicle': return 'vehicles';
-            case 'Customer': return 'customers';
-            case 'Subscription': return 'subscriptions';
-            case 'Movement': return 'movements';
-            case 'Shift': return 'shifts';
-            case 'Employee': return 'employee_accounts';
-            default: return null;
+        } catch (err) {
+            console.error(`❌ Sync: Error fetching ${tableName}`, err);
         }
     }
 
-    /**
-     * Realtime Listener using Supabase
-     */
+    private async upsertLocal(entityType: string, remoteItem: any) {
+        const localItem = this.mapRemoteToLocalImport(remoteItem, entityType);
+
+        let collection: any;
+        switch (entityType) {
+            case 'VehicleType': collection = db.vehicleTypes; break;
+            case 'Tariff': collection = db.tariffs; break;
+            case 'Checkpoint': collection = db.checkpoints; break;
+            case 'Customer': collection = db.customers; break;
+            case 'Vehicle': collection = db.vehicles; break;
+            case 'Stay': collection = db.stays; break;
+            case 'Movement': collection = db.movements; break;
+            case 'Subscription': collection = db.subscriptions; break;
+        }
+
+        if (collection) {
+            await collection.update({ id: localItem.id }, localItem, { upsert: true });
+        }
+    }
+
+    private mapRemoteToLocalImport(item: any, type: string) {
+        const local: any = { ...item };
+
+        // Convert key timestamps to string (NeDB friendly?) or Date objects? 
+        // NeDB stores what you give it. Code usually expects ISO strings or Date objects.
+        // Let's stick to keeping them as is or converting common fields.
+        // Actually, matching the reverse of mapLocalToRemote is good practice.
+
+        if (local.created_at) { local.createdAt = local.created_at; delete local.created_at; }
+        if (local.updated_at) { local.updatedAt = local.updated_at; delete local.updated_at; }
+        if (local.garage_id) { local.garageId = local.garage_id; delete local.garage_id; }
+
+        if (type === 'Stay') {
+            if (local.entry_time) { local.entryTime = local.entry_time; delete local.entry_time; }
+            if (local.exit_time) { local.exitTime = local.exit_time; delete local.exit_time; }
+            if (local.vehicle_id) { local.vehicleId = local.vehicle_id; delete local.vehicle_id; }
+            if (local.vehicle_type) { local.vehicleType = local.vehicle_type; delete local.vehicle_type; }
+        }
+
+        if (type === 'Movement') {
+            if (local.payment_method) { local.paymentMethod = local.payment_method; delete local.payment_method; }
+            if (local.shift_id) { local.shiftId = local.shift_id; delete local.shift_id; }
+            if (local.related_entity_id) { local.relatedEntityId = local.related_entity_id; delete local.related_entity_id; }
+            if (local.invoice_type) { local.invoiceType = local.invoice_type; delete local.invoice_type; }
+            if (local.ticket_number) { local.ticketNumber = local.ticket_number; delete local.ticket_number; }
+        }
+
+        if (type === 'Vehicle') {
+            if (local.customer_id) { local.customerId = local.customer_id; delete local.customer_id; }
+            if (local.vehicle_type_id) { local.vehicleTypeId = local.vehicle_type_id; delete local.vehicle_type_id; }
+        }
+
+        if (type === 'Subscription') {
+            if (local.start_date) { local.startDate = local.start_date; delete local.start_date; }
+            if (local.end_date) { local.endDate = local.end_date; delete local.end_date; }
+            if (local.vehicle_id) { local.vehicleId = local.vehicle_id; delete local.vehicle_id; }
+            if (local.customer_id) { local.customerId = local.customer_id; delete local.customer_id; }
+        }
+
+        return local;
+    }
+
+    private mapLocalToRemote(item: any, type: string) {
+        const base = { ...item };
+
+        // 0. GLOBAL SANITIZATION (The "Purification")
+        delete base._id;      // Remove NeDB internal ID
+        delete base.updatedAt; // Let Supabase handle updated_at
+
+        // 1. Generic ID & Timestamp Mappings (Global)
+        if (base.garageId) {
+            base.garage_id = base.garageId;
+            delete base.garageId;
+        }
+        if (base.ownerId) {
+            base.owner_id = base.ownerId;
+            delete base.ownerId;
+        }
+        if (base.createdAt) {
+            base.created_at = new Date(base.createdAt).toISOString();
+            delete base.createdAt;
+        }
+        if (base.updatedAt) {
+            base.updated_at = new Date(base.updatedAt).toISOString();
+            delete base.updatedAt;
+        }
+
+        // 2. Entity Specific Mappings
+        if (type === 'Stay') {
+            if (base.entryTime) { base.entry_time = new Date(base.entryTime).toISOString(); delete base.entryTime; }
+            if (base.exitTime) { base.exit_time = new Date(base.exitTime).toISOString(); delete base.exitTime; }
+            if (base.vehicleType) { base.vehicle_type = base.vehicleType; delete base.vehicleType; }
+            if (base.vehicleId) { base.vehicle_id = base.vehicleId; delete base.vehicleId; }
+
+            // STRICT CLEANUP: Remove customer_id as it doesn't exist on Stays table
+            delete base.customerId;
+            delete base.customer_id;
+        }
+
+        if (type === 'Movement') {
+            if (base.paymentMethod) { base.payment_method = base.paymentMethod; delete base.paymentMethod; }
+            if (base.shiftId) { base.shift_id = base.shiftId; delete base.shiftId; }
+            if (base.relatedEntityId) { base.related_entity_id = base.relatedEntityId; delete base.relatedEntityId; }
+            if (base.invoiceType) { base.invoice_type = base.invoiceType; delete base.invoiceType; }
+            if (base.ticketNumber) { base.ticket_number = base.ticketNumber; delete base.ticketNumber; }
+        }
+
+        if (type === 'Subscription') {
+            if (base.startDate) { base.start_date = new Date(base.startDate).toISOString(); delete base.startDate; }
+            if (base.endDate) { base.end_date = new Date(base.endDate).toISOString(); delete base.endDate; }
+            if (base.vehicleId) { base.vehicle_id = base.vehicleId; delete base.vehicleId; }
+            if (base.customerId) { base.customer_id = base.customerId; delete base.customerId; }
+        }
+
+        if (type === 'Vehicle') {
+            if (base.customerId) { base.customer_id = base.customerId; delete base.customerId; }
+            if (base.vehicleTypeId) { base.vehicle_type_id = base.vehicleTypeId; delete base.vehicleTypeId; }
+
+            // DATA CORRECTION for Check Constraint
+            if (base.type === 'Automovil') base.type = 'Auto';
+            if (base.type === 'Camioneta') base.type = 'PickUp';
+        }
+
+        // SANITIZE FKs (Integrity Protection)
+        const fks = ['garage_id', 'owner_id', 'customer_id', 'vehicle_id', 'vehicle_type_id', 'tariff_id', 'related_entity_id', 'shift_id'];
+        fks.forEach(fk => {
+            // Only modify if key exists in object to avoid adding nulls for non-existent columns
+            if (Object.prototype.hasOwnProperty.call(base, fk)) {
+                if (base[fk] === '' || base[fk] === null || base[fk] === undefined || base[fk] === 'null') {
+                    base[fk] = null;
+                }
+            }
+        });
+
+        return base;
+    }
+
     initRealtime(garageId: string) {
-        console.log('📡 [Realtime] Subscribing to changes...');
-        supabase.channel('public:any')
-            .on('postgres_changes', { event: '*', schema: 'public' }, (payload) => {
-                // Filter by garage_id
-                if (payload.new && (payload.new as any).garage_id === garageId) {
-                    this.handleRemoteChange(payload.table, payload.new);
-                }
-            })
-            .subscribe();
-    }
-
-    private async handleRemoteChange(table: string, newItem: any) {
-        let type = '';
-        let repo: any = null;
-
-        switch (table) {
-            case 'vehicles': type = 'Vehicle'; repo = this.vehicleRepo; break;
-            case 'customers': type = 'Customer'; repo = this.customerRepo; break;
-            case 'subscriptions': type = 'Subscription'; repo = this.subRepo; break;
-            case 'movements': type = 'Movement'; repo = this.movementRepo; break;
-            case 'employee_accounts': type = 'Employee'; repo = this.employeeRepo; break;
-        }
-
-        if (repo && type) {
-            console.log(`✨ Realtime Update for ${type}`);
-            const mapped = this.mapRemoteToLocal(newItem, type);
-            await repo.save(mapped);
-        }
+        console.log('🔌 Realtime listeners ready (Stub)');
     }
 }
+
+const instance = new SyncService();
+
+// Exportación con binding explícito para preservar el contexto de la clase
+export const syncService = {
+    pullAllData: instance.pullAllData.bind(instance),
+    initRealtime: instance.initRealtime.bind(instance),
+    processQueue: instance.processQueue.bind(instance)
+};

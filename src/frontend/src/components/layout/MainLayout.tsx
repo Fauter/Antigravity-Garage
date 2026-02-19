@@ -9,6 +9,7 @@ interface MainLayoutProps {
 }
 
 const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
+    // Added 'config' back to activeTab
     const [activeTab, setActiveTab] = useState<'operador' | 'abonos' | 'caja' | 'audit' | 'config'>('operador');
     const [garageConfig, setGarageConfig] = useState<{ name: string; address: string } | null>(null);
 
@@ -55,6 +56,14 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
         navigate('/login');
     };
 
+    // Helper to calculate display name
+    const getUserDisplayName = () => {
+        if (!user) return 'GUEST';
+        if (user.full_name) return user.full_name;
+        if (user.first_name && user.last_name) return `${user.first_name} ${user.last_name}`;
+        return user.username;
+    };
+
     return (
         <div className="h-screen overflow-hidden bg-black text-gray-200 font-sans selection:bg-emerald-500/30 flex flex-col">
 
@@ -97,6 +106,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                         icon={<Wallet className="w-4 h-4" />}
                         label="Caja"
                     />
+                    {/* RESTORED Config Button */}
                     <NavButton
                         active={activeTab === 'config'}
                         onClick={() => handleTabChange('config')}
@@ -110,8 +120,8 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                     <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-900 rounded-full border border-gray-800">
                         <div className={`w-2 h-2 rounded-full animate-pulse ${user ? 'bg-emerald-500' : 'bg-gray-500'}`}></div>
                         <UserIcon className="w-3 h-3 text-gray-400" />
-                        <span className="text-xs font-mono font-bold text-gray-400 uppercase">
-                            {user?.full_name || user?.username || 'GUEST'}
+                        <span className="text-xs font-mono font-bold text-gray-400 uppercase truncate max-w-[150px]">
+                            {getUserDisplayName()}
                         </span>
                     </div>
                     <button

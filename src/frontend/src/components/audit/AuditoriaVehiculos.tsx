@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../../services/api';
-import { toast } from 'sonner';
 
 interface Stay {
     id: string;
@@ -10,29 +10,32 @@ interface Stay {
 }
 
 const AuditoriaVehiculos: React.FC = () => {
-    const [stays, setStays] = useState<Stay[]>([]);
-    const [loading, setLoading] = useState(true);
-
-    const fetchStays = async () => {
+    // 1. Get Garage ID from Local Storage Configuration
+    const configStr = localStorage.getItem('ag_terminal_config');
+    let garageId = '';
+    if (configStr) {
         try {
-            setLoading(true);
-            const res = await api.get<Stay[]>('/estadias');
+            const config = JSON.parse(configStr);
+            garageId = config.garage_id;
+        } catch (e) {
+            console.error('Error parsing config', e);
+        }
+    }
+
+    const { data: stays = [], isLoading: loading } = useQuery({
+        queryKey: ['activeStays', garageId],
+        queryFn: async () => {
+            if (!garageId) return [];
+            const res = await api.get<Stay[]>('/estadias', {
+                params: { garageId }
+            });
             // Filter strictly by no exitTime just in case backend returns all
             // Note: Backend /estadias should only return active, but double check
-            setStays(res.data.filter((s: any) => !s.exitTime && s.active !== false));
-        } catch (error) {
-            console.error('Error fetching auditoria', error);
-            toast.error('No se pudo cargar la auditoría');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    useEffect(() => {
-        fetchStays();
-        const interval = setInterval(fetchStays, 30000); // Refresh every 30s
-        return () => clearInterval(interval);
-    }, []);
+            return res.data.filter((s: any) => !s.exitTime && s.active !== false);
+        },
+        refetchInterval: 5000, // Real-time feel
+        enabled: !!garageId
+    });
 
     const calculateDuration = (entryTime: string) => {
         const start = new Date(entryTime);

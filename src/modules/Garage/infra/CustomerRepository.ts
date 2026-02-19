@@ -1,38 +1,41 @@
 import { Customer } from '../../../shared/schemas';
-import { JsonDB } from '../../../infrastructure/database/json-db';
-
-const customerDB = new JsonDB<Customer>('customers');
+import { db } from '../../../infrastructure/database/datastore.js';
+import { QueueService } from '../../Sync/application/QueueService.js';
+import { v4 as uuidv4 } from 'uuid';
 
 export class CustomerRepository {
+    private queue = new QueueService();
+
     async save(customer: Customer): Promise<Customer> {
-        // Validation: Ensure ID
         if (!customer.id) {
-            throw new Error("Customer ID is required for save");
+            customer.id = uuidv4();
         }
 
-        const existing = await customerDB.getById(customer.id);
-        if (existing) {
-            await customerDB.updateOne({ id: customer.id }, customer);
-        } else {
-            await customerDB.create(customer);
+        try {
+            await db.customers.update({ id: customer.id }, customer, { upsert: true });
+            console.log(`💾 Repo: Customer Saved Local (${customer.id})`);
+        } catch (err) {
+            console.error('❌ Repo: Customer Save Failed', err);
+            throw err;
         }
+
+        await this.queue.enqueue('Customer', 'UPDATE', customer);
         return customer;
     }
 
     async findById(id: string): Promise<Customer | null> {
-        return await customerDB.getById(id);
+        return await db.customers.findOne({ id }) as Customer | null;
     }
 
     async findByDni(dni: string): Promise<Customer | null> {
-        const all = await customerDB.getAll();
-        return all.find(c => c.dni === dni) || null;
+        return await db.customers.findOne({ dni }) as Customer | null;
     }
 
     async findAll(): Promise<Customer[]> {
-        return await customerDB.getAll();
+        return await db.customers.find({}) as Customer[];
     }
 
     async reset(): Promise<void> {
-        await customerDB.reset();
+        await db.customers.remove({}, { multi: true });
     }
 }

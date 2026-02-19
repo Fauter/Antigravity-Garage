@@ -7,7 +7,23 @@ export const api = axios.create({
     }
 });
 
-// Optional: Interceptors for logging or error handling
+// Request Interceptor: Inject Tenant ID (Offline-First Strategy)
+api.interceptors.request.use((config) => {
+    try {
+        const storedConfig = localStorage.getItem('ag_terminal_config');
+        if (storedConfig) {
+            const parsed = JSON.parse(storedConfig);
+            if (parsed.garage_id) {
+                config.headers['x-garage-id'] = parsed.garage_id;
+            }
+        }
+    } catch (e) {
+        console.warn('Error reading terminal config for headers', e);
+    }
+    return config;
+});
+
+// Response Interceptor
 api.interceptors.response.use(
     response => response,
     error => {

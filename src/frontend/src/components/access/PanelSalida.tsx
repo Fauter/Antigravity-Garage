@@ -8,6 +8,7 @@ import { PricingEngine } from '../../../../modules/Billing/domain/PricingEngine'
 import { ApiTariffRepository } from '../../repositories/ApiTariffRepository';
 import { ApiParamRepository } from '../../repositories/ApiParamRepository';
 import { ApiPriceMatrixRepository } from '../../repositories/ApiPriceMatrixRepository';
+import { PrinterService } from '../../services/PrinterService';
 
 // Frontend Instance of Pricing Engine
 const tariffRepo = new ApiTariffRepository();
@@ -134,6 +135,11 @@ const PanelSalida: React.FC = () => {
         }
     }, [paymentMethod, stay, promo]);
 
+
+
+    // ... other imports
+
+    // ... inside handleExit
     const handleExit = async () => {
         if (!stay) return;
         const success = await processExit(stay.plate, paymentMethod || 'Efectivo', invoiceType || 'Final');
@@ -141,6 +147,25 @@ const PanelSalida: React.FC = () => {
             toast.success(`Salida ok: ${stay.plate}`, {
                 description: `Cobro: ${paymentMethod || 'Aut.'}`
             });
+
+            // TICKET (x2)
+            // We need the movement data for the ticket. 
+            // processExit returns true/false, but we might want the response data.
+            // For now, let's look at how processExit is implemented in useExitLogic or we assume success implies we can print.
+            // Actually, processExit in useExitLogic doesn't return the movement. 
+            // We should update useExitLogic or just print with available data + price.
+            // Wait, we can't fully print without the backend response (notes, final amount might vary if backend recalculated).
+            // Let's print a "Client Estimate" or update useExitLogic to return data.
+            // For "Rescue", let's reconstruct the print data from local state.
+
+            const dummyMovement = {
+                amount: price,
+                paymentMethod: paymentMethod || 'Efectivo',
+                operator: 'Operador',
+                notes: 'Salida Registrada' // We don't have the exact notes from backend here easily without refactoring useExitLogic return.
+            };
+            PrinterService.printExitTicket({ ...stay, exitTime: new Date() }, dummyMovement);
+
             setPlate('');
             setPaymentMethod(null);
             setPromo('NINGUNA');

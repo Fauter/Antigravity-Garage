@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '../services/api';
+import { PrinterService } from '../services/PrinterService';
 
 export interface EntryFormData {
     plate: string;
@@ -18,18 +19,10 @@ export const useEntryLogic = () => {
         queryKey: ['vehicleTypes'],
         queryFn: async () => {
             const res = await api.get('/tipos-vehiculo');
-            // Map to simplified structure if needed, or use directly
+            // Map to simplified structure
             return (res.data || []).map((v: any) => ({
-                id: v.nombre, // Using name as ID for the engine logic if needed, OR v.id. 
-                // Engine expects 'vehicleType' string in Stay. If we use UUID here, Stay will have UUID. 
-                // But PricingEngine logic `matrix[type]` uses keys like "Auto".
-                // So if we save UUID, we break PricingEngine unless we map back.
-                // DECISION: Map ID to Name for now to keep PricingEngine happy with string keys.
-                // OR: ensure EntryPanel saves the Name.
-                // The PanelEntrada <select> uses value={type.id}.
-                // If I set id: v.nombre, then value is "Auto". 
-                // This aligns with PricingEngine expecting "Auto".
-                label: v.nombre
+                id: v.id, // Use UUID from DB
+                label: v.name // Display Name
             }));
         }
     });
@@ -54,6 +47,9 @@ export const useEntryLogic = () => {
             toast.success(`Ingreso registrado: ${data.plate || 'Vehículo'}`, {
                 description: 'Entrada autorizada correctamente'
             });
+            // TICKET
+            PrinterService.printEntryTicket(data);
+
             resetForm();
         },
         onError: (error: any) => {

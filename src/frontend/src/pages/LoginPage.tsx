@@ -22,6 +22,9 @@ const LoginPage: React.FC = () => {
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
 
+    // Error State for Visual Feedback
+    const [authError, setAuthError] = useState<string | null>(null);
+
     // Config State
     const [config, setConfig] = useState<TerminalConfig | null>(null);
     const [showConfigModal, setShowConfigModal] = useState(false);
@@ -43,6 +46,10 @@ const LoginPage: React.FC = () => {
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
+
+        // Reset previous errors
+        setAuthError(null);
+
         if (!username || !password) return;
         if (!config) {
             toast.error('Terminal no configurada.');
@@ -58,6 +65,9 @@ const LoginPage: React.FC = () => {
             toast.success(`Bienvenido a ${config.name}`);
             navigate('/');
         } else {
+            // Set Inline Error
+            setAuthError('Credenciales Incorrectas');
+            // Toast fallback optional, but inline is preferred now
             toast.error('Credenciales inválidas o Personal no autorizado.');
         }
     };
@@ -148,8 +158,11 @@ const LoginPage: React.FC = () => {
                                 <input
                                     type="text"
                                     value={username}
-                                    onChange={(e) => setUsername(e.target.value)}
-                                    className="w-full bg-gray-950 border border-gray-800 rounded-lg p-3 text-white outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all placeholder:text-gray-700"
+                                    onChange={(e) => {
+                                        setUsername(e.target.value);
+                                        if (authError) setAuthError(null); // Clear error on type
+                                    }}
+                                    className={`w-full bg-gray-950 border rounded-lg p-3 text-white outline-none focus:ring-1 transition-all placeholder:text-gray-700 ${authError ? 'border-red-500/50 focus:border-red-500 focus:ring-red-500' : 'border-gray-800 focus:border-emerald-500 focus:ring-emerald-500'}`}
                                     placeholder="Ingrese su usuario..."
                                     autoFocus
                                 />
@@ -160,11 +173,22 @@ const LoginPage: React.FC = () => {
                                 <input
                                     type="password"
                                     value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                    className="w-full bg-gray-950 border border-gray-800 rounded-lg p-3 text-white outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all placeholder:text-gray-700 font-mono"
+                                    onChange={(e) => {
+                                        setPassword(e.target.value);
+                                        if (authError) setAuthError(null); // Clear error on type
+                                    }}
+                                    className={`w-full bg-gray-950 border rounded-lg p-3 text-white outline-none focus:ring-1 transition-all placeholder:text-gray-700 font-mono ${authError ? 'border-red-500/50 focus:border-red-500 focus:ring-red-500' : 'border-gray-800 focus:border-emerald-500 focus:ring-emerald-500'}`}
                                     placeholder="••••••••"
                                 />
                             </div>
+
+                            {/* INLINE ALERT COMPONENT */}
+                            {authError && (
+                                <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 flex items-center gap-3 animate-in slide-in-from-top-1 fade-in">
+                                    <AlertTriangle className="w-5 h-5 text-red-400 shrink-0" />
+                                    <span className="text-sm font-medium text-red-400">{authError}</span>
+                                </div>
+                            )}
 
                             <button
                                 type="submit"

@@ -1,13 +1,18 @@
 import { Request, Response } from 'express';
-import mongoose from 'mongoose';
 import { supabase } from '../../../infrastructure/lib/supabase';
-import { EmployeeModel } from '../../../infrastructure/database/models.js';
+import { db } from '../../../infrastructure/database/datastore.js';
+import { syncService } from '../../Sync/application/SyncService.js';
 
 export class AuthController {
 
     login = async (req: Request, res: Response) => {
         try {
-            const { username, password, garage_id } = req.body;
+            // Extract garage_id from body OR header (Hybrid support)
+            let { username, password, garage_id } = req.body;
+
+            if (!garage_id) {
+                garage_id = req.headers['x-garage-id'] as string;
+            }
 
             if (!username || !password) {
                 return res.status(400).json({ message: 'Username/Email y password requeridos' });
@@ -20,54 +25,57 @@ export class AuthController {
 
             // --- 1. AUTHENTICATE USER (Remote or Local) ---
 
-            // A. REMOTE FIRST (Cloud Priority)
-            if (isEmail) {
-                // Owner (Profiles)
-                const { data: profiles, error: profError } = await supabase
-                    .from('profiles')
-                    .select('*')
-                    .eq('email', username)
-                    .limit(1);
+            // A. REMOTE FIRST (Cloud Priority) - If Supabase reachable
+            try {
+                if (isEmail) {
+                    // Owner (Profiles)
+                    const { data: profiles, error: profError } = await supabase
+                        .from('profiles')
+                        .select('*')
+                        .eq('email', username)
+                        .limit(1);
 
-                if (profiles && profiles.length > 0) {
-                    authenticatedUser = { ...profiles[0], role: 'OWNER', owner_id: profiles[0].id };
-                }
-            } else {
-                // Employee
-                const { data: employees, error: empError } = await supabase
-                    .from('employee_accounts')
-                    .select('*')
-                    .eq('username', username)
-                    .limit(1);
-
-                if (employees && employees.length > 0 && employees[0].password_hash === password) {
-                    authenticatedUser = employees[0];
-                }
-            }
-
-            // B. LOCAL FALLBACK (Offline Resilience)
-            // Strict Check: Only attempt Mongoose query if completely connected.
-            if (!authenticatedUser && !isEmail) {
-                if (mongoose.connection.readyState === 1) {
-                    try {
-                        const localUser = await EmployeeModel.findOne({ username }).maxTimeMS(2000);
-                        if (localUser && localUser.passwordHash === password) {
-                            const obj = localUser.toObject();
-                            authenticatedUser = {
-                                id: obj.id,
-                                username: obj.username,
-                                full_name: `${obj.firstName} ${obj.lastName}`,
-                                role: obj.role,
-                                owner_id: obj.ownerId,
-                                garage_id: obj.garageId,
-                                permissions: obj.permissions
-                            };
-                        }
-                    } catch (e) {
-                        console.error('Local Auth Error', e);
+                    if (profiles && profiles.length > 0) {
+                        authenticatedUser = { ...profiles[0], role: 'OWNER', owner_id: profiles[0].id };
                     }
                 } else {
-                    console.warn('⚠️ Skipping Local Auth fallback: MongoDB not connected.');
+                    // Employee
+                    const { data: employees, error: empError } = await supabase
+                        .from('employee_accounts')
+                        .select('*')
+                        .eq('username', username)
+                        .limit(1);
+
+                    if (employees && employees.length > 0 && employees[0].password_hash === password) {
+                        authenticatedUser = employees[0];
+                    }
+                }
+            } catch (err) {
+                console.warn('⚠️ Cloud Auth Unreachable');
+            }
+
+            // B. LOCAL FALLBACK (Offline Resilience - NeDB)
+            if (!authenticatedUser && !isEmail) {
+                try {
+                    // NeDB findOne
+                    const localUser: any = await db.employees.findOne({ username });
+
+                    if (localUser && localUser.passwordHash === password) {
+                        authenticatedUser = {
+                            id: localUser.id,
+                            username: localUser.username,
+                            full_name: `${localUser.firstName} ${localUser.lastName}`,
+                            first_name: localUser.firstName,
+                            last_name: localUser.lastName,
+                            role: localUser.role,
+                            owner_id: localUser.ownerId,
+                            garage_id: localUser.garageId,
+                            permissions: localUser.permissions
+                        };
+                        console.log('✅ Local Auth Success (NeDB)');
+                    }
+                } catch (e) {
+                    console.error('Local Auth Error', e);
                 }
             }
 
@@ -93,27 +101,28 @@ export class AuthController {
                     }
 
                     // --- 3. TRIGGER SYNC (Bootstrap) ---
-                    // Only start sync if we have a Local DB to write to!
-                    if (mongoose.connection.readyState === 1) {
+                    if (garage_id) {
                         (async () => {
                             try {
-                                const { SyncService } = await import('../../Sync/application/SyncService.js');
-                                const syncService = new SyncService();
+                                console.log('🔄 Init Bootstrap for:', garage_id);
+                                console.log('💉 Injecting SyncService. Available methods:', Object.keys(syncService || {}));
                                 await syncService.pullAllData(garage_id);
                                 syncService.initRealtime(garage_id);
                             } catch (syncErr) {
                                 console.error('background Sync init Error', syncErr);
                             }
                         })();
-                    } else {
-                        console.log('⚠️ Skipping Local Sync: MongoDB Disconnected (Cloud-Only Session).');
                     }
                 }
 
                 return res.status(200).json({
                     id: authenticatedUser.id,
                     username: authenticatedUser.username || authenticatedUser.email,
-                    full_name: authenticatedUser.full_name || authenticatedUser.username,
+                    // Prioritize existing full_name, or construct it, or fallback.
+                    full_name: authenticatedUser.full_name || (authenticatedUser.first_name && authenticatedUser.last_name ? `${authenticatedUser.first_name} ${authenticatedUser.last_name}` : authenticatedUser.username),
+                    // SEND RAW NAMES for Frontend Logic
+                    first_name: authenticatedUser.first_name,
+                    last_name: authenticatedUser.last_name,
                     role: authenticatedUser.role,
                     owner_id: authenticatedUser.owner_id,
                     garage_id: authenticatedUser.garage_id,

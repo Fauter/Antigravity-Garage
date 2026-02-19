@@ -8,15 +8,7 @@ import {
     StaySchema
 } from '../../../shared/schemas';
 import { PricingEngine } from '../../Billing/domain/PricingEngine';
-import { JsonTariffRepository } from '../../Configuration/infrastructure/JsonTariffRepository';
-import { JsonParamRepository } from '../../Configuration/infrastructure/JsonParamRepository';
-import { JsonPriceMatrixRepository } from '../../Configuration/infrastructure/JsonPriceMatrixRepository';
-
-// Backend Instance of Pricing Engine
-const tariffRepo = new JsonTariffRepository();
-const paramRepo = new JsonParamRepository();
-const priceRepo = new JsonPriceMatrixRepository();
-const pricingEngine = new PricingEngine(tariffRepo, paramRepo, priceRepo);
+import { ConfigRepository } from '../../Configuration/infra/ConfigRepository';
 
 export class AccessManager {
     /**
@@ -57,12 +49,32 @@ export class AccessManager {
             throw new Error('La estancia ya está cerrada.');
         }
 
-        // 1. Calcular estadía (Dynamically using Repositories hidden in PricingEngine)
-        const price = await pricingEngine.calculateParkingFee(
+        // Dynamically instantiate PricingEngine for this Garage
+        const garageId = (stay as any).garageId;
+        if (!garageId) console.warn('⚠️ AccessManager: Stay missing garageId, pricing might fail.');
+
+        const configRepo = new ConfigRepository();
+
+        // Adapters
+        const tariffRepo = { getAll: () => configRepo.getTariffs(garageId) };
+        const paramRepo = { getParams: () => configRepo.getParams() };
+        const priceRepo = { getPrices: (m: string) => configRepo.getPrices(garageId, m) };
+
+        const engine = new PricingEngine(tariffRepo, paramRepo, priceRepo);
+
+        // 1. Calculate Price
+        const price = await engine.calculateParkingFee(
             stay,
             exitDate,
             paymentMethod
         );
+
+        // Calculate Duration for Notes
+        const durationMs = exitDate.getTime() - new Date(stay.entryTime).getTime();
+        const durationMin = Math.ceil(durationMs / 60000);
+        const hours = Math.floor(durationMin / 60);
+        const mins = durationMin % 60;
+        const timeString = `${hours}:${mins.toString().padStart(2, '0')}hs`;
 
         const exitMovement: Movement = {
             id: uuidv4(),
@@ -75,7 +87,7 @@ export class AccessManager {
             invoiceType: invoiceType || 'Final',
             plate: stay.plate,
 
-            notes: `Salida de: ${stay.plate}`,
+            notes: `Por ${timeString}`,
 
             createdAt: new Date(),
         };
