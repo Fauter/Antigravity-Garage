@@ -4,9 +4,8 @@ import { StayRepository } from './StayRepository';
 import { MovementRepository } from '../../Billing/infra/MovementRepository';
 import { VehicleRepository } from '../../Garage/infra/VehicleRepository';
 import { CustomerRepository } from '../../Garage/infra/CustomerRepository';
+import { SubscriptionRepository } from '../../Garage/infra/SubscriptionRepository';
 
-// TODO: Move to config
-// TODO: Move to config
 import { JsonDB } from '../../../infrastructure/database/json-db';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -40,12 +39,14 @@ export class AccessController {
     private movementRepository: MovementRepository;
     private vehicleRepository: VehicleRepository;
     private customerRepository: CustomerRepository;
+    private subscriptionRepository: SubscriptionRepository;
 
     constructor() {
         this.stayRepository = new StayRepository();
         this.movementRepository = new MovementRepository();
         this.vehicleRepository = new VehicleRepository();
         this.customerRepository = new CustomerRepository();
+        this.subscriptionRepository = new SubscriptionRepository();
     }
 
     registerEntry = async (req: Request, res: Response) => {
@@ -55,32 +56,89 @@ export class AccessController {
 
             if (!plate) return res.status(400).json({ error: 'Plate is required' });
             if (!garageId) {
-                // Warning or strict error? User said "Filtro Obligatorio". 
-                // But legacy clients might break. Let's warn but proceed if possible, or fail if Critical.
-                // "Filtro Obligatorio" implies failure.
                 console.warn('⚠️ AccessController: Missing x-garage-id header on entry');
-                // return res.status(400).json({ error: 'System Error: Tenant ID missing' });
             }
 
+            // 0. Check for existing Active Stay (Prevent Double Entry)
             const existingStay = await this.stayRepository.findActiveByPlate(plate, garageId);
             if (existingStay) {
                 return res.status(409).json({ error: 'Vehicle already in garage', stay: existingStay });
             }
 
-            // Optional: Populate vehicle data if persistent?
-            if (garageId) {
-                // Here we could check/create Vehicle record via VehicleRepository.
-                // For now, AccessManager processEntry relies on minimal data.
+            // 1. Resolve Vehicle Type (UUID -> Name)
+            let resolvedType = 'Auto'; // Default
+            if (vehicleType) {
+                if (vehicleType.length > 20) {
+                    const allTypes = await vehicleDB.getAll();
+                    const found = allTypes.find(t => t.id === vehicleType || t._id === vehicleType);
+                    if (found) {
+                        resolvedType = found.nombre;
+                    }
+                } else {
+                    resolvedType = vehicleType;
+                }
+            }
+            // Map for Supabase Compliance
+            if (resolvedType === 'Camioneta') resolvedType = 'PickUp';
+            if (resolvedType === 'Automovil') resolvedType = 'Auto';
+
+            // 3. Check for Active Subscription
+            const activeSubscription = await this.subscriptionRepository.findActiveByPlate(plate);
+            const isSubscriber = !!activeSubscription;
+            const subscriptionId = activeSubscription ? activeSubscription.id : null;
+
+            if (isSubscriber) {
+                console.log(`💎 Entry: Subscriber Detected for ${plate}`);
             }
 
-            const entry = AccessManager.processEntry(plate, null, null);
-            // Patch type if passed (dirty fix until schema update)
-            if (vehicleType) (entry as any).vehicleType = vehicleType;
+            // 2. Resolve Vehicle Identity & Persist Subscriber Status
+            let vehicleId: string;
+            let existingVehicle = await this.vehicleRepository.findByPlate(plate, garageId);
+
+            if (existingVehicle) {
+                // REUSE & UPDATE
+                vehicleId = existingVehicle.id!;
+                // Update isSubscriber status if changed
+                if (existingVehicle.isSubscriber !== isSubscriber) {
+                    existingVehicle.isSubscriber = isSubscriber;
+                    await this.vehicleRepository.save(existingVehicle);
+                    console.log(`🚗 Entry: Updated Vehicle ${vehicleId} subscriber status to ${isSubscriber}`);
+                }
+            } else {
+                // CREATE NEW
+                vehicleId = uuidv4();
+                if (garageId) {
+                    await this.vehicleRepository.save({
+                        id: vehicleId,
+                        plate,
+                        type: resolvedType,
+                        garageId,
+                        isSubscriber, // Persist status
+                        createdAt: new Date(),
+                        updatedAt: new Date(),
+                    } as any);
+                    console.log(`🆕 Entry: Created new vehicle ${vehicleId} for ${plate} (Subscriber: ${isSubscriber})`);
+                }
+            }
+
+            // 4. Process Entry
+            const entry = AccessManager.processEntry(
+                plate,
+                existingVehicle || ({ id: vehicleId } as any),
+                null,
+                isSubscriber,
+                subscriptionId
+            );
+
+            // Patch linking details
+            (entry as any).vehicleType = resolvedType;
+            (entry as any).vehicleId = vehicleId;
             if (garageId) (entry as any).garageId = garageId;
 
             const savedStay = await this.stayRepository.save(entry as any);
             res.json(savedStay);
         } catch (error: any) {
+            console.error('Entry Error:', error);
             res.status(500).json({ error: error.message });
         }
     };
@@ -95,6 +153,20 @@ export class AccessController {
             const stay = await this.stayRepository.findActiveByPlate(plate, garageId);
             if (!stay) {
                 return res.status(404).json({ error: 'No active stay found for plate' });
+            }
+
+            // 🔍 Phase 2: Re-validate Subscription Link on Exit
+            const activeSubscription = await this.subscriptionRepository.findActiveByPlate(plate);
+            const isSubscriber = !!activeSubscription;
+
+            // Override stay status based on CURRENT validity
+            stay.isSubscriber = isSubscriber;
+            stay.subscriptionId = activeSubscription ? activeSubscription.id : null;
+
+            if (isSubscriber) {
+                console.log(`💎 Exit: Verified Active Subscription for ${plate} (ID: ${stay.subscriptionId})`);
+            } else if (stay.isSubscriber && !isSubscriber) {
+                console.warn(`⚠️ Exit: Subscription Expired or Invalid for ${plate}. Charging normal price.`);
             }
 
             // Matrix is now handled internally by PricingEngine -> Repositories

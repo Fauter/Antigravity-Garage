@@ -22,6 +22,10 @@ export const PrinterService = {
     },
 
     printExitTicket: (stay: any, movement: any) => {
+        // Wrapper to determine Ticket Title
+        const isSubscriber = stay.isSubscriber || (movement.amount === 0 && movement.notes?.includes('Abonado'));
+        const ticketType = isSubscriber ? 'COMPROBANTE DE SALIDA - ABONADO' : 'TICKET CLIENTE';
+
         // Ticket content generation helper
         const generateTicket = (title: string) => `
             <div style="font-family: monospace; font-size: 12px; width: 300px; text-align: center; page-break-after: always;">
@@ -46,7 +50,7 @@ export const PrinterService = {
             </div>
         `;
 
-        const clientTicket = generateTicket("TICKET CLIENTE");
+        const clientTicket = generateTicket(ticketType);
         const controlTicket = generateTicket("CONTROL INTERNO");
 
         // Print both in one job

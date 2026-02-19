@@ -12,6 +12,8 @@ export interface Stay {
     exitTime?: Date;
     vehicleType?: string;
     active?: boolean;
+    isSubscriber?: boolean;
+    subscriptionId?: string | null;
 }
 
 export class StayRepository {
@@ -65,7 +67,9 @@ export class StayRepository {
             entryTime: new Date(stay.entryTime),
             exitTime: stay.exitTime ? new Date(stay.exitTime) : undefined,
             vehicleType: stay.vehicleType,
-            active: stay.active
+            active: stay.active,
+            isSubscriber: stay.isSubscriber,
+            subscriptionId: stay.subscriptionId
         };
     }
 

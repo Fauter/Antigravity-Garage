@@ -53,6 +53,7 @@ export const VehicleSchema = z.object({
   insurance: z.string().optional(),
   description: z.string().optional(),
   customerId: UuidSchema.optional().nullable(),
+  isSubscriber: z.boolean().default(false),
   createdAt: TimestampSchema.default(() => new Date()),
   updatedAt: TimestampSchema.default(() => new Date()),
 });
@@ -91,6 +92,8 @@ export const StaySchema = z.object({
   entryTime: TimestampSchema,
   exitTime: TimestampSchema.optional().nullable(),
   active: z.boolean().default(true),
+  isSubscriber: z.boolean().default(false),
+  subscriptionId: UuidSchema.optional().nullable(),
   createdAt: TimestampSchema.default(() => new Date()),
 });
 export type Stay = z.infer<typeof StaySchema>;

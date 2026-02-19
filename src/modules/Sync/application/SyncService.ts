@@ -16,8 +16,12 @@ export class SyncService {
     /**
      * Starts the background loop to process the mutation queue.
      */
-    startBackgroundSync() {
+    async startBackgroundSync() {
         if (this.syncInterval) return;
+
+        // EMERGENCY FLUSH: Clear stuck mutations on startup
+        console.log('🧹 Sync: Flushing legacy mutations...');
+        await db.mutations.remove({}, { multi: true });
 
         console.log('🚀 Background Sync Started...');
         this.syncInterval = setInterval(async () => {
@@ -67,7 +71,9 @@ export class SyncService {
     }
 
     private async pushToCloud(mutation: any) {
-        const { entityType, operation, data } = mutation;
+        // FIX: Extract 'payload' as 'rawData' (QueueService stores it as 'payload')
+        const { entityType, operation, payload: rawData } = mutation;
+
         const tableMap: any = {
             'Stay': 'stays',
             'Movement': 'movements',
@@ -83,16 +89,18 @@ export class SyncService {
         if (!tableName) throw new Error(`Unknown Table for Entity: ${entityType}`);
 
         // Sanitize Payload
-        const payload = this.mapLocalToRemote(data, entityType);
+        const payload = this.mapLocalToRemote(rawData, entityType);
 
-        if (operation === 'CREATE') {
-            const { error } = await supabase.from(tableName).insert(payload);
-            if (error) throw error;
-        } else if (operation === 'UPDATE') {
-            const { error } = await supabase.from(tableName).update(payload).eq('id', payload.id);
+        if (operation === 'CREATE' || operation === 'UPDATE') {
+            // UPSERT strategy for resilience
+            const { data: syncData, error, status } = await supabase.from(tableName).upsert(payload).select();
+            console.log(`📡 DEBUG SYNC [${entityType}]: Status ${status}, Data:`, syncData, `Error:`, error);
+
             if (error) throw error;
         } else if (operation === 'DELETE') {
-            const { error } = await supabase.from(tableName).delete().eq('id', payload.id);
+            // For DELETE, we might only have ID, but mapLocalToRemote handles safe extraction
+            const { error, status } = await supabase.from(tableName).delete().eq('id', payload.id);
+            console.log(`📡 DEBUG SYNC [${entityType} DELETE]: Status ${status}, Error:`, error);
             if (error) throw error;
         }
     }
@@ -107,7 +115,7 @@ export class SyncService {
             await db.stays.remove({}, { multi: true });
             await db.movements.remove({}, { multi: true });
 
-            // 1. Config
+            // 1. Config (CRITICAL: Fetch first to populate UI dropdowns)
             await this.fetchTable('vehicle_types', garageId, 'VehicleType');
             await this.fetchTable('tariffs', garageId, 'Tariff');
 
@@ -175,11 +183,6 @@ export class SyncService {
     private mapRemoteToLocalImport(item: any, type: string) {
         const local: any = { ...item };
 
-        // Convert key timestamps to string (NeDB friendly?) or Date objects? 
-        // NeDB stores what you give it. Code usually expects ISO strings or Date objects.
-        // Let's stick to keeping them as is or converting common fields.
-        // Actually, matching the reverse of mapLocalToRemote is good practice.
-
         if (local.created_at) { local.createdAt = local.created_at; delete local.created_at; }
         if (local.updated_at) { local.updatedAt = local.updated_at; delete local.updated_at; }
         if (local.garage_id) { local.garageId = local.garage_id; delete local.garage_id; }
@@ -215,48 +218,65 @@ export class SyncService {
     }
 
     private mapLocalToRemote(item: any, type: string) {
-        const base = { ...item };
+        if (!item) return {}; // Fail-Safe
 
-        // 0. GLOBAL SANITIZATION (The "Purification")
-        delete base._id;      // Remove NeDB internal ID
-        delete base.updatedAt; // Let Supabase handle updated_at
-
-        // 1. Generic ID & Timestamp Mappings (Global)
-        if (base.garageId) {
-            base.garage_id = base.garageId;
-            delete base.garageId;
-        }
-        if (base.ownerId) {
-            base.owner_id = base.ownerId;
-            delete base.ownerId;
-        }
-        if (base.createdAt) {
-            base.created_at = new Date(base.createdAt).toISOString();
-            delete base.createdAt;
-        }
-        if (base.updatedAt) {
-            base.updated_at = new Date(base.updatedAt).toISOString();
-            delete base.updatedAt;
-        }
-
-        // 2. Entity Specific Mappings
+        // 1. STAY: Strict Manual Mapping (The "Ironclad" approach)
         if (type === 'Stay') {
-            if (base.entryTime) { base.entry_time = new Date(base.entryTime).toISOString(); delete base.entryTime; }
-            if (base.exitTime) { base.exit_time = new Date(base.exitTime).toISOString(); delete base.exitTime; }
-            if (base.vehicleType) { base.vehicle_type = base.vehicleType; delete base.vehicleType; }
-            if (base.vehicleId) { base.vehicle_id = base.vehicleId; delete base.vehicleId; }
+            let vType = item.vehicleType || item.vehicle_type;
 
-            // STRICT CLEANUP: Remove customer_id as it doesn't exist on Stays table
-            delete base.customerId;
-            delete base.customer_id;
+            // Safety: If it's still a UUID (missed by controller?), force fallback
+            if (vType && vType.length > 20 && !vType.includes(' ')) {
+                console.warn(`⚠️ Sync: Detected UUID in Stay vehicle_type (${vType}). Fallback to 'Auto'`);
+                vType = 'Auto';
+            }
+
+            return {
+                id: item.id,
+                garage_id: item.garageId || item.garage_id,
+                plate: item.plate,
+                vehicle_type: vType,
+                vehicle_id: item.vehicleId || item.vehicle_id, // Added vehicle_id logic
+                active: item.active,
+                is_subscriber: item.isSubscriber || false,
+                subscription_id: item.subscriptionId || item.subscription_id || null,
+                entry_time: item.entryTime ? new Date(item.entryTime).toISOString() : (item.entry_time || null),
+                exit_time: item.exitTime ? new Date(item.exitTime).toISOString() : (item.exit_time || null)
+            };
         }
 
+        // 2. Generic Base Mappings for others
+        const base: any = { ...item };
+
+        // Remove Internal Fields
+        delete base._id;
+        // Supabase handles updated_at, but we map created_at if present
+        delete base.updatedAt;
+        delete base.createdAt;
+
+        if (item.createdAt) base.created_at = new Date(item.createdAt).toISOString();
+        if (item.updatedAt) base.updated_at = new Date(item.updatedAt).toISOString();
+        if (item.garageId) { base.garage_id = item.garageId; delete base.garageId; }
+        if (item.ownerId) { base.owner_id = item.ownerId; delete base.ownerId; }
+
+        // Entity Specifics
         if (type === 'Movement') {
             if (base.paymentMethod) { base.payment_method = base.paymentMethod; delete base.paymentMethod; }
             if (base.shiftId) { base.shift_id = base.shiftId; delete base.shiftId; }
             if (base.relatedEntityId) { base.related_entity_id = base.relatedEntityId; delete base.relatedEntityId; }
             if (base.invoiceType) { base.invoice_type = base.invoiceType; delete base.invoiceType; }
             if (base.ticketNumber) { base.ticket_number = base.ticketNumber; delete base.ticketNumber; }
+        }
+
+        if (type === 'Vehicle') {
+            if (base.customerId) { base.customer_id = base.customerId; delete base.customerId; }
+            if (base.vehicleTypeId) { base.vehicle_type_id = base.vehicleTypeId; delete base.vehicleTypeId; }
+            // Constraint Check
+            if (base.type === 'Camioneta') base.type = 'PickUp';
+            // Ensure Plate
+            if (!base.plate && item.plate) base.plate = item.plate;
+            // Map Subscriber Status
+            base.is_subscriber = item.isSubscriber || item.is_subscriber || false;
+            delete base.isSubscriber; // Prevent PGRST204 (Extra column)
         }
 
         if (type === 'Subscription') {
@@ -266,21 +286,11 @@ export class SyncService {
             if (base.customerId) { base.customer_id = base.customerId; delete base.customerId; }
         }
 
-        if (type === 'Vehicle') {
-            if (base.customerId) { base.customer_id = base.customerId; delete base.customerId; }
-            if (base.vehicleTypeId) { base.vehicle_type_id = base.vehicleTypeId; delete base.vehicleTypeId; }
-
-            // DATA CORRECTION for Check Constraint
-            if (base.type === 'Automovil') base.type = 'Auto';
-            if (base.type === 'Camioneta') base.type = 'PickUp';
-        }
-
-        // SANITIZE FKs (Integrity Protection)
+        // SANITIZE FKs
         const fks = ['garage_id', 'owner_id', 'customer_id', 'vehicle_id', 'vehicle_type_id', 'tariff_id', 'related_entity_id', 'shift_id'];
         fks.forEach(fk => {
-            // Only modify if key exists in object to avoid adding nulls for non-existent columns
             if (Object.prototype.hasOwnProperty.call(base, fk)) {
-                if (base[fk] === '' || base[fk] === null || base[fk] === undefined || base[fk] === 'null') {
+                if (base[fk] === '' || base[fk] === null || base[fk] === 'null') {
                     base[fk] = null;
                 }
             }

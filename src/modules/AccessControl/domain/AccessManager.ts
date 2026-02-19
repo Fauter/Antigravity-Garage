@@ -18,7 +18,9 @@ export class AccessManager {
     static processEntry(
         plate: string,
         vehicle?: Vehicle | null,
-        customer?: Customer | null
+        customer?: Customer | null,
+        isSubscriber: boolean = false,
+        subscriptionId?: string | null
     ): Stay {
         const entryStay: Stay = {
             id: uuidv4(),
@@ -26,6 +28,8 @@ export class AccessManager {
             vehicleId: vehicle ? vehicle.id : null,
             entryTime: new Date(),
             active: true,
+            isSubscriber,
+            subscriptionId: subscriptionId || null,
 
             createdAt: new Date(),
         };
@@ -63,18 +67,33 @@ export class AccessManager {
         const engine = new PricingEngine(tariffRepo, paramRepo, priceRepo);
 
         // 1. Calculate Price
-        const price = await engine.calculateParkingFee(
-            stay,
-            exitDate,
-            paymentMethod
-        );
+        let price = 0;
+        let notes = '';
 
-        // Calculate Duration for Notes
+        if (stay.isSubscriber) {
+            price = 0;
+            notes = `Salida Abonado - (ID: ${stay.subscriptionId?.slice(0, 8) || 'N/A'})`;
+            console.log(`💎 Exit: Subscriber Departure for ${stay.plate}. Price set to $0.`);
+        } else {
+            price = await engine.calculateParkingFee(
+                stay,
+                exitDate,
+                paymentMethod
+            );
+        }
+
+        // Calculate Duration for Notes (Append if subscriber)
         const durationMs = exitDate.getTime() - new Date(stay.entryTime).getTime();
         const durationMin = Math.ceil(durationMs / 60000);
         const hours = Math.floor(durationMin / 60);
         const mins = durationMin % 60;
         const timeString = `${hours}:${mins.toString().padStart(2, '0')}hs`;
+
+        if (!stay.isSubscriber) {
+            notes = `Por ${timeString}`;
+        } else {
+            notes += ` - Tiempo: ${timeString}`;
+        }
 
         const exitMovement: Movement = {
             id: uuidv4(),
@@ -87,7 +106,7 @@ export class AccessManager {
             invoiceType: invoiceType || 'Final',
             plate: stay.plate,
 
-            notes: `Por ${timeString}`,
+            notes: notes,
 
             createdAt: new Date(),
         };

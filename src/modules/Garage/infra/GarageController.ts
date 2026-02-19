@@ -200,6 +200,7 @@ export class GarageController {
                                 brand: v.brand,
                                 model: v.model,
                                 color: v.color,
+                                isSubscriber: false,
                                 createdAt: new Date(),
                                 updatedAt: new Date()
                             });
@@ -273,6 +274,7 @@ export class GarageController {
                     color: vehicleData.color,
                     year: vehicleData.year || vehicleData.anio, // Frontend might send 'anio'
                     insurance: vehicleData.insurance || vehicleData.seguro, // Frontend might send 'seguro'
+                    isSubscriber: true, // Created via Subscription -> True
                     createdAt: new Date(),
                     updatedAt: new Date()
                 };
@@ -286,6 +288,7 @@ export class GarageController {
                     color: vehicleData.color || vehicle.color,
                     year: (vehicleData.year || vehicleData.anio) || vehicle.year,
                     insurance: (vehicleData.insurance || vehicleData.seguro) || vehicle.insurance,
+                    isSubscriber: true, // Mark as subscriber on new sub
                     updatedAt: new Date()
                 };
                 await this.vehicleRepo.save(updatedVehicle);

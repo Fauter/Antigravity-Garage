@@ -16,7 +16,7 @@ const getEnv = (key: string, fallback: string): string => {
 };
 
 // Configuration
-const SUPABASE_URL = getEnv('VITE_SUPABASE_URL', 'https://phugzitegoskgfisxouf.supabase.co');
+export const SUPABASE_URL = getEnv('VITE_SUPABASE_URL', 'https://phugzitegoskgfisxouf.supabase.co');
 const SUPABASE_ANON_KEY = getEnv('VITE_SUPABASE_ANON_KEY', 'sb_publishable_ka-USKd1XuxVHbfXpQh3Gw_MoDb6mP8');
 
 // Initialize Client

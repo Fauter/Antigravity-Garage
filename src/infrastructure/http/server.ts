@@ -4,8 +4,10 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 
 // Mongoose removed. Zero-Install Arch.
+import { SUPABASE_URL } from '../lib/supabase.js';
 
 console.log('🚀 [BACKEND] Proceso de arranque iniciado (Modo: Zero-Install / Offline-First)...');
+console.log(`🔗 Conectado a Supabase en: ${SUPABASE_URL}`);
 
 export const startServer = async () => {
     const app = express();
