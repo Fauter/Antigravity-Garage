@@ -59,7 +59,7 @@ export class SubscriptionManager {
             vehicleId: vehicle ? vehicle.id : null,
             type,
             startDate,
-            endDate: null, // Indefinida/Renorable
+            endDate, // Ahora persiste la fecha real de fin de mes
             price,
             active: true,
             createdAt: new Date(),

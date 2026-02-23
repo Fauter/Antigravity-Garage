@@ -32,6 +32,8 @@ const CustomerSchema = new Schema<Customer>({
     email: { type: String },
     phone: { type: String },
     dni: { type: String },
+    address: { type: String },
+    localidad: { type: String },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
 });

@@ -22,6 +22,7 @@ interface CustomerDetailViewProps {
 const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onBack }) => {
     const [cocheras, setCocheras] = useState<any[]>([]);
     const [subscriptions, setSubscriptions] = useState<any[]>([]); // To enrich vehicle data
+    const [realVehicles, setRealVehicles] = useState<any[]>([]); // Real vehicle table datastore
     const [loading, setLoading] = useState(true);
 
     // --- Configuration State ---
@@ -237,8 +238,12 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
             // Refresh logic
             setLoading(true);
-            const res = await api.get(`/cocheras?clienteId=${clientId}`);
-            setCocheras(res.data || []);
+            const [cocherasRes, vehiclesRes] = await Promise.all([
+                api.get(`/cocheras?clienteId=${clientId}`),
+                api.get(`/vehiculos?customerId=${clientId}`)
+            ]);
+            setCocheras(cocherasRes.data || []);
+            setRealVehicles(vehiclesRes.data || []);
             setLoading(false);
 
             // Reset Form (Optional but good UX)
@@ -305,8 +310,12 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
             // Refresh
             setLoading(true);
-            const res = await api.get(`/cocheras?clienteId=${clientId}`);
-            setCocheras(res.data || []);
+            const [cocherasRes, vehiclesRes] = await Promise.all([
+                api.get(`/cocheras?clienteId=${clientId}`),
+                api.get(`/vehiculos?customerId=${clientId}`)
+            ]);
+            setCocheras(cocherasRes.data || []);
+            setRealVehicles(vehiclesRes.data || []);
             setLoading(false);
 
         } catch (error) {
@@ -344,14 +353,16 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         const fetchAssets = async () => {
             if (!clientId) return;
             try {
-                // Fetch Cocheras and Subscriptions in parallel
-                const [cocherasRes, subsRes] = await Promise.all([
+                // Fetch Cocheras, Subscriptions, and Vehicles in parallel
+                const [cocherasRes, subsRes, vehiclesRes] = await Promise.all([
                     api.get(`/cocheras?clienteId=${clientId}`),
-                    api.get(`/abonos?clientId=${clientId}`) // Use clientId to get vehicle details
+                    api.get(`/abonos?clientId=${clientId}`), // Use clientId to get vehicle details
+                    api.get(`/vehiculos?customerId=${clientId}`)
                 ]);
 
                 setCocheras(cocherasRes.data || []);
                 setSubscriptions(subsRes.data || []);
+                setRealVehicles(vehiclesRes.data || []);
             } catch (err) {
                 console.error('Error fetching client assets:', err);
                 toast.error("Error al cargar datos del cliente");
@@ -374,21 +385,24 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         // 2. Base Object (from Cochera)
         const baseObj = typeof vehicleVal === 'object' ? vehicleVal : {};
 
-        // 3. Find Subscription Match
+        // 3. Find Primary Metadata from Database (realVehicles)
+        const realMatch = realVehicles.find((v: any) => v.plate === plate);
+
+        // 4. Find Subscription Match (Fallback)
         const subMatch = subscriptions.find((s: any) => {
             const sPlate = s.vehicleData?.plate || s.plate;
             return sPlate === plate;
         });
 
-        // 4. Merge (Subscription data takes precedence for details if cochera is just string)
+        // 5. Merge (realVehicles takes priority -> Subscription -> Cochera)
         return {
             plate,
-            brand: baseObj.brand || subMatch?.vehicleData?.brand || subMatch?.brand || 'No registrado',
-            model: baseObj.model || subMatch?.vehicleData?.model || subMatch?.model || 'No registrado',
-            color: baseObj.color || subMatch?.vehicleData?.color || subMatch?.color || 'No registrado',
-            year: baseObj.year || subMatch?.vehicleData?.year || subMatch?.year || 'No registrado',
-            insurance: baseObj.insurance || subMatch?.vehicleData?.insurance || subMatch?.insurance || 'No registrado',
-            type: baseObj.type || subMatch?.vehicleData?.type || subMatch?.type || (subMatch?.subscriptionType === 'Exclusiva' ? 'Auto' : subMatch?.subscriptionType) || 'Generico'
+            brand: realMatch?.brand || baseObj.brand || subMatch?.vehicleData?.brand || subMatch?.brand || 'No registrado',
+            model: realMatch?.model || baseObj.model || subMatch?.vehicleData?.model || subMatch?.model || 'No registrado',
+            color: realMatch?.color || baseObj.color || subMatch?.vehicleData?.color || subMatch?.color || 'No registrado',
+            year: realMatch?.year || baseObj.year || subMatch?.vehicleData?.year || subMatch?.year || 'No registrado',
+            insurance: realMatch?.insurance || baseObj.insurance || subMatch?.vehicleData?.insurance || subMatch?.insurance || 'No registrado',
+            type: realMatch?.type || baseObj.type || subMatch?.vehicleData?.type || subMatch?.type || (subMatch?.subscriptionType === 'Exclusiva' ? 'Auto' : subMatch?.subscriptionType) || 'Generico'
         };
     };
 
@@ -459,9 +473,37 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                     ) : (
                         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-8">
                             {cocheras.map((cochera) => {
+                                // Encontrar la subscripción asociada primariamente por cochera, o por patente del vehículo
+                                const associatedSub = subscriptions.find(s =>
+                                    s.spotNumber === cochera.numero ||
+                                    (cochera.vehiculos && cochera.vehiculos.includes(s.plate || s.vehicleData?.plate))
+                                );
+
+                                // Logic for checking expiration: Compare to subscription endDate (if Exists), 
+                                // otherwise assume standard month based calculation from startDate
                                 const now = new Date();
-                                const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-                                const expirationDate = nextMonth.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                                let isExpired = false;
+                                let expirationDate = "Sin Vencimiento";
+
+                                if (associatedSub) {
+                                    let rawD: Date | null = null;
+                                    if (associatedSub.endDate) {
+                                        rawD = new Date(associatedSub.endDate);
+                                    } else if (associatedSub.startDate) {
+                                        const sDate = new Date(associatedSub.startDate);
+                                        rawD = new Date(sDate.getFullYear(), sDate.getMonth() + 1, 0); // Fin de mes local extrapolado
+                                    }
+
+                                    if (rawD) {
+                                        isExpired = now > rawD;
+                                        expirationDate = rawD.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                                    }
+                                } else {
+                                    // Fallback to end of month if no sub found at all (Edge case)
+                                    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+                                    expirationDate = nextMonth.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                                    isExpired = false; // Cannot definitively say expired if no sub
+                                }
 
                                 return (
                                     <div key={cochera.id} className="group relative bg-gray-900/40 backdrop-blur-md border border-gray-800 rounded-2xl p-6 hover:border-indigo-500/50 transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl hover:shadow-indigo-900/10 flex flex-col justify-between overflow-hidden">
@@ -561,12 +603,20 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                             )}
                                         </div>
 
-                                        <div className="pt-5 border-t border-gray-800/50 flex items-center justify-between text-xs">
-                                            <span className="text-gray-500 font-medium uppercase tracking-wider">Vencimiento</span>
-                                            <div className="flex items-center gap-2 px-2 py-1 bg-indigo-500/10 rounded text-indigo-300 border border-indigo-500/10">
-                                                <Calendar className="w-3.5 h-3.5" />
-                                                <span className="font-mono font-medium">{expirationDate}</span>
+                                        <div className="pt-5 border-t border-gray-800/50 flex flex-col gap-3">
+                                            <div className="flex items-center justify-between text-xs">
+                                                <span className="text-gray-500 font-medium uppercase tracking-wider">Vencimiento</span>
+                                                <div className={`flex items-center gap-2 px-2 py-1 rounded border ${isExpired ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-indigo-500/10 text-indigo-300 border-indigo-500/10'}`}>
+                                                    {isExpired ? <AlertTriangle className="w-3.5 h-3.5" /> : <Calendar className="w-3.5 h-3.5" />}
+                                                    <span className="font-mono font-medium">{expirationDate}</span>
+                                                </div>
                                             </div>
+
+                                            {isExpired && (
+                                                <button className="w-full py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 rounded-lg text-xs font-bold uppercase tracking-widest transition-all">
+                                                    Renovar Abono
+                                                </button>
+                                            )}
                                         </div>
                                     </div>
                                 );
@@ -594,7 +644,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                         >
                                             <option value="" disabled>Seleccione...</option>
                                             {vehicleTypes.map((v: any) => (
-                                                <option key={v.id} value={v.nombre}>{v.nombre}</option>
+                                                <option key={v.id} value={v.name}>{v.name}</option>
                                             ))}
                                         </select>
                                     </div>
@@ -693,7 +743,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                 {['Movil', 'Fija'].map(t => (
                                                     <button
                                                         key={t}
-                                                        onClick={() => setNewCocheraData({ ...newCocheraData, tipo: t, numero: t === 'Movil' ? '' : newCocheraData.numero })}
+                                                        onClick={() => setNewCocheraData({ ...newCocheraData, tipo: t, exclusiva: false, numero: t === 'Movil' ? '' : newCocheraData.numero })}
                                                         className={`flex-1 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${newCocheraData.tipo === t ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-500 hover:text-gray-300'}`}
                                                     >
                                                         {t}
@@ -710,14 +760,15 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                 placeholder="N°"
                                             />
                                         </div>
-                                        <div className="flex items-center gap-2 pb-2">
+                                        <div className={`flex items-center gap-2 pb-2 ${newCocheraData.tipo === 'Movil' ? 'opacity-50 pointer-events-none' : ''}`}>
                                             <input
                                                 type="checkbox"
-                                                className="w-4 h-4 accent-amber-500 bg-gray-900 border-gray-700 rounded"
+                                                className="w-4 h-4 accent-amber-500 bg-gray-900 border-gray-700 rounded cursor-pointer"
                                                 checked={newCocheraData.exclusiva}
+                                                disabled={newCocheraData.tipo === 'Movil'}
                                                 onChange={e => setNewCocheraData({ ...newCocheraData, exclusiva: e.target.checked })}
                                             />
-                                            <span className="text-xs font-bold text-amber-500 uppercase tracking-wide">Exclusiva</span>
+                                            <span className="text-xs font-bold text-amber-500 uppercase tracking-wide cursor-pointer" onClick={() => { if (newCocheraData.tipo !== 'Movil') setNewCocheraData({ ...newCocheraData, exclusiva: !newCocheraData.exclusiva }) }}>Exclusiva</span>
                                         </div>
                                     </div>
                                 </div>
@@ -737,7 +788,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                             >
                                                 <option value="" disabled>Seleccione...</option>
                                                 {vehicleTypes.map((v: any) => (
-                                                    <option key={v.id} value={v.nombre}>{v.nombre}</option>
+                                                    <option key={v.id} value={v.name}>{v.name}</option>
                                                 ))}
                                             </select>
                                         </div>
@@ -768,6 +819,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                     <div>
                                         <label className={labelStyle}>Método Pago</label>
                                         <select className={`${inputStyle} appearance-none bg-gray-900`} value={newCocheraData.metodoPago} onChange={e => setNewCocheraData({ ...newCocheraData, metodoPago: e.target.value })}>
+                                            <option value="" disabled hidden>Seleccionar...</option>
                                             <option value="Efectivo">Efectivo</option>
                                             <option value="Transferencia">Transferencia</option>
                                             <option value="Debito">Débito</option>
@@ -778,6 +830,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                     <div>
                                         <label className={labelStyle}>Tipo Factura</label>
                                         <select className={`${inputStyle} appearance-none bg-gray-900`} value={newCocheraData.tipoFactura} onChange={e => setNewCocheraData({ ...newCocheraData, tipoFactura: e.target.value })}>
+                                            <option value="" disabled hidden>Seleccionar...</option>
                                             <option value="Final">Consumidor Final</option>
                                             <option value="A">Factura A</option>
                                             <option value="B">Factura B</option>

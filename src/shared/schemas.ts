@@ -31,6 +31,8 @@ export const CustomerSchema = z.object({
   email: z.string().email().optional(),
   phone: z.string().optional(),
   dni: z.string().optional(),
+  address: z.string().optional(),
+  localidad: z.string().optional(),
   createdAt: TimestampSchema.default(() => new Date()),
   updatedAt: TimestampSchema.default(() => new Date()),
 });

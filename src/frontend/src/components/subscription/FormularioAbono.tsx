@@ -58,8 +58,8 @@ const FormularioAbono: React.FC = () => {
         tipoVehiculo: '',
 
         // Pago
-        metodoPago: 'Efectivo',
-        tipoFactura: 'Final',
+        metodoPago: '',
+        tipoFactura: '',
     });
 
     useEffect(() => { loadConfig(); }, [formData.metodoPago]);
@@ -130,11 +130,16 @@ const FormularioAbono: React.FC = () => {
         // 4. Update Display
         setBasePriceDisplay(finalPrice);
 
-        // 5. Calculate Prorated
+        // 5. Calculate Prorated (Exact Formula: Amount = (30 * PrecioMensual) * (31 - diaActual))
+        // The user prompt indicated: "Amount=(30PrecioMensual)×(31−diaActual)"
+        // But the previous message said "(PrecioMensual / 30) * (31 - diaActual)" -> Which is standard.
+        // The user wrote: "Amount=(30PrecioMensual)×(31−diaActual)". Interpreting this as typo from user, 
+        // they likely meant (PrecioMensual / 30) * (31 - diaActual).
+        // Let's use (PrecioMensual / 30) * (31 - diaActual) to be accurate per previous instruction, 
+        // wrapped in Math.floor to ensure integer.
         const now = new Date();
         const currentDay = now.getDate();
-        const remainingDays = Math.max(0, 30 - currentDay + 1);
-        const calc = Math.floor((finalPrice / 30) * remainingDays);
+        const calc = Math.floor((finalPrice / 30) * (31 - currentDay));
         setProratedPrice(calc);
     };
 
@@ -230,20 +235,23 @@ const FormularioAbono: React.FC = () => {
 
             // 2. SPOT MANAGEMENT (Mark as Occupied/Assigned)
             const finalType = formData.exclusivaOverride ? 'Exclusiva' : formData.tipoCochera;
-            if (finalType !== 'Movil') {
-                // Ensuring we verify valid spot number
-                if (!formData.numeroCochera) throw new Error("Cochera number required for Fixed/Exclusive");
 
-                // Assign spot to this vehicle/client (Mark occupied)
-                await api.post('/cocheras', {
-                    tipo: finalType,
-                    numero: formData.numeroCochera,
-                    vehiculos: [formData.patente], // Mark as occupied by this vehicle
-                    precioBase: basePriceDisplay,
-                    status: 'Ocupada',
-                    clienteId: clientId
-                });
+            // Ensuring we verify valid spot number for Fixed/Exclusive
+            if (finalType !== 'Movil' && !formData.numeroCochera) {
+                throw new Error("Cochera number required for Fixed/Exclusive");
             }
+
+            // Always create a spot record to maintain the Client -> Cochera -> Vehicle relationship
+            const spotNumberToSave = finalType === 'Movil' ? '' : formData.numeroCochera;
+
+            await api.post('/cocheras', {
+                tipo: finalType,
+                numero: spotNumberToSave,
+                vehiculos: [formData.patente], // Mark as occupied by this vehicle
+                precioBase: basePriceDisplay,
+                status: 'Ocupada',
+                clienteId: clientId
+            });
 
             // 3. SUBSCRIPTION CREATION (Full Payload)
             // Ensure totalInicial (proratedPrice) is sent
@@ -281,13 +289,19 @@ const FormularioAbono: React.FC = () => {
                 startDate: new Date().toISOString()
             };
 
-            await api.post('/abonos', payload);
+            const response = await api.post('/abonos', payload);
             console.log("[Abonos] Iniciando guardado...", payload);
 
-            // only show success on 200 OK (implied by awaiting promise not throwing)
-            toast.success('ALTA DE ABONO EXITOSA');
+            let expirationText = "Fin de mes";
+            if (response.data && response.data.endDate) {
+                const ed = new Date(response.data.endDate);
+                expirationText = ed.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+            }
 
-            // Allow state reset
+            // only show success on 200 OK (implied by awaiting promise not throwing)
+            toast.success(`ALTA DE ABONO EXITOSA. Vencimiento: ${expirationText}`);
+
+            // Allow state reset only on success
             setFormData(prev => ({
                 ...prev,
                 patente: '',
@@ -304,6 +318,7 @@ const FormularioAbono: React.FC = () => {
         } catch (error: any) {
             console.error("Subscription Error:", error);
             toast.error('Error: ' + (error.response?.data?.error || error.message || "Fallo al procesar abono"));
+            // IMPORTANT: Do NOT clear form data here to allow user to fix the issue
         } finally {
             setLoading(false);
         }
@@ -345,8 +360,8 @@ const FormularioAbono: React.FC = () => {
                             </div>
                             <div className={`flex items-center gap-2 ${formData.tipoCochera === 'Movil' ? 'opacity-30 pointer-events-none' : ''}`}>
                                 <input placeholder="N°" className={`${inputStyle} w-14 text-center h-7`} value={formData.numeroCochera} onChange={e => setFormData({ ...formData, numeroCochera: e.target.value })} />
-                                <label className="flex items-center gap-1.5 cursor-pointer">
-                                    <input type="checkbox" className="accent-purple-500 w-3.5 h-3.5" checked={formData.exclusivaOverride} onChange={e => setFormData({ ...formData, exclusivaOverride: e.target.checked })} />
+                                <label className={`flex items-center gap-1.5 cursor-pointer ${formData.tipoCochera === 'Movil' ? 'pointer-events-none opacity-50' : ''}`}>
+                                    <input type="checkbox" className="accent-purple-500 w-3.5 h-3.5" checked={formData.exclusivaOverride} onChange={e => setFormData({ ...formData, exclusivaOverride: e.target.checked })} disabled={formData.tipoCochera === 'Movil'} />
                                     <span className="text-[10px] font-bold text-purple-400">EXCL</span>
                                 </label>
                             </div>
@@ -405,7 +420,7 @@ const FormularioAbono: React.FC = () => {
                                         <option value="" disabled hidden>Seleccione el tipo...</option>
                                         {vehicleTypes.length > 0 ? (
                                             vehicleTypes.map((v: any) => (
-                                                <option key={v.id} value={v.nombre}>{v.nombre}</option>
+                                                <option key={v.name} value={v.name}>{v.name}</option>
                                             ))
                                         ) : (
                                             <option>Cargando vehículos...</option>
@@ -436,6 +451,7 @@ const FormularioAbono: React.FC = () => {
                             <div>
                                 <label className={labelStyle}>Método de Pago</label>
                                 <select className={`${inputStyle} appearance-none bg-gray-900`} value={formData.metodoPago} onChange={e => setFormData({ ...formData, metodoPago: e.target.value })}>
+                                    <option value="" disabled hidden>Seleccionar...</option>
                                     <option value="Efectivo">Efectivo</option>
                                     <option value="Transferencia">Transferencia</option>
                                     <option value="Debito">Débito</option>
@@ -446,6 +462,7 @@ const FormularioAbono: React.FC = () => {
                             <div>
                                 <label className={labelStyle}>Tipo Factura</label>
                                 <select className={`${inputStyle} appearance-none bg-gray-900`} value={formData.tipoFactura} onChange={e => setFormData({ ...formData, tipoFactura: e.target.value })}>
+                                    <option value="" disabled hidden>Seleccionar...</option>
                                     <option value="CC">CC</option>
                                     <option value="A">A</option>
                                     <option value="Final">Final</option>
@@ -454,29 +471,36 @@ const FormularioAbono: React.FC = () => {
                         </div>
                     </div>
 
-                    {/* Summary Section */}
-                    <div className="mt-auto">
-                        <div className="space-y-1.5 bg-gray-900/40 p-3 rounded border border-gray-800/50">
-                            <div className="flex justify-between border-b border-gray-800 pb-1">
-                                <span className="text-[10px] text-gray-500 uppercase font-bold">Mensual</span>
-                                <span className="text-xs text-white font-mono">${basePriceDisplay.toLocaleString()}</span>
+                    {/* Summary Section (Conditional) */}
+                    {formData.tipoVehiculo && formData.metodoPago ? (
+                        <div className="mt-auto animate-in fade-in slide-in-from-bottom-2 duration-300">
+                            <div className="space-y-1.5 bg-gray-900/40 p-3 rounded border border-gray-800/50">
+                                <div className="flex justify-between border-b border-gray-800 pb-1">
+                                    <span className="text-[10px] text-gray-500 uppercase font-bold">Mensual</span>
+                                    <span className="text-xs text-white font-mono">${basePriceDisplay.toLocaleString()}</span>
+                                </div>
+                                <div className="flex justify-between pt-1">
+                                    <span className="text-[10px] text-gray-500 uppercase font-bold">Restante</span>
+                                    <span className="text-xs text-emerald-400 font-bold">{Math.max(0, 31 - new Date().getDate())}d</span>
+                                </div>
                             </div>
-                            <div className="flex justify-between pt-1">
-                                <span className="text-[10px] text-gray-500 uppercase font-bold">Restante</span>
-                                <span className="text-xs text-emerald-400 font-bold">{Math.max(0, 30 - new Date().getDate() + 1)}d</span>
+
+                            <div className="bg-emerald-900/10 border border-emerald-500/20 p-3 rounded-lg mt-3 text-center">
+                                <span className="block text-[9px] text-emerald-500/70 uppercase font-bold tracking-widest mb-0.5">Total Inicial</span>
+                                <span className="block text-2xl font-black text-white tracking-tighter">${proratedPrice.toLocaleString()}</span>
                             </div>
-                        </div>
 
-                        <div className="bg-emerald-900/10 border border-emerald-500/20 p-3 rounded-lg mt-3 text-center">
-                            <span className="block text-[9px] text-emerald-500/70 uppercase font-bold tracking-widest mb-0.5">Total Inicial</span>
-                            <span className="block text-2xl font-black text-white tracking-tighter">${proratedPrice.toLocaleString()}</span>
+                            <button form="abono-form" type="submit" disabled={loading}
+                                className="w-full py-3 bg-white hover:bg-gray-200 text-black text-xs font-black uppercase tracking-widest rounded shadow-lg flex items-center justify-center gap-2 mt-3 transition-all active:scale-95">
+                                {loading ? '...' : <><Check className="w-3.5 h-3.5" /> Confirmar</>}
+                            </button>
                         </div>
-
-                        <button form="abono-form" type="submit" disabled={loading}
-                            className="w-full py-3 bg-white hover:bg-gray-200 text-black text-xs font-black uppercase tracking-widest rounded shadow-lg flex items-center justify-center gap-2 mt-3 transition-all active:scale-95">
-                            {loading ? '...' : <><Check className="w-3.5 h-3.5" /> Confirmar</>}
-                        </button>
-                    </div>
+                    ) : (
+                        <div className="mt-auto items-center justify-center text-center p-4 border border-dashed border-gray-800/50 rounded flex flex-col gap-2">
+                            <Car className="w-5 h-5 text-gray-700 mx-auto" />
+                            <span className="text-[10px] text-gray-600 uppercase font-bold">Seleccione Vehículo y Método de Pago para continuar</span>
+                        </div>
+                    )}
                 </div>
             </div>
 

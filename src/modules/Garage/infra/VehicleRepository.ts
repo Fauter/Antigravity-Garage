@@ -47,6 +47,12 @@ export class VehicleRepository {
         return await db.vehicles.findOne(query) as Vehicle | null;
     }
 
+    async findByCustomerId(customerId: string, garageId?: string): Promise<Vehicle[]> {
+        const query: any = { customerId };
+        if (garageId) query.garageId = garageId;
+        return await db.vehicles.find(query) as Vehicle[];
+    }
+
     async reset(): Promise<void> {
         await db.vehicles.remove({}, { multi: true });
     }

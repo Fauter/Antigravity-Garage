@@ -93,8 +93,8 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                             const customerId = sub.clientId || sub.customerData?.id || sub.id;
                             const isActive = sub.aggregatedValues.isActive;
 
+                            // --- COMIENZO DEL BLOQUE CORREGIDO ---
                             // Lookup Vehicles from Cocheras
-                            // Filter cocheras belonging to this client
                             const clientCocheras = cocheras.filter(c => c.clienteId === customerId);
 
                             // Extract unique plates
@@ -102,14 +102,30 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                             clientCocheras.forEach(c => {
                                 if (c.vehiculos && Array.isArray(c.vehiculos)) {
                                     c.vehiculos.forEach((v: any) => {
-                                        // Handle both string and Object formats from backend
-                                        if (typeof v === 'string') uniquePlates.add(v);
-                                        else if (typeof v === 'object' && v.plate) uniquePlates.add(v.plate);
+                                        // Filtro estricto: No agregamos si es "---", vacío o nulo
+                                        if (typeof v === 'string' && v.trim() !== '' && v !== '---') {
+                                            uniquePlates.add(v);
+                                        }
+                                        else if (typeof v === 'object' && v.plate && v.plate !== '---' && v.plate.trim() !== '') {
+                                            uniquePlates.add(v.plate);
+                                        }
                                     });
                                 }
                             });
 
+                            // También extraemos de las suscripciones (backup) con el mismo filtro
+                            const currentSubscribers = subscribers || [];
+                            const clientSubs = currentSubscribers.filter((s: any) => (s.clientId || s.customerData?.id || s.id) === customerId);
+                            clientSubs.forEach((s: any) => {
+                                const plate = s.vehicleData?.plate || s.plate;
+                                // Filtro estricto de seguridad
+                                if (plate && plate !== '---' && plate.trim() !== '') {
+                                    uniquePlates.add(plate);
+                                }
+                            });
+
                             const displayPlates = Array.from(uniquePlates);
+                            // --- FIN DEL BLOQUE CORREGIDO ---
 
                             return (
                                 <tr key={sub.id || sub._id}

@@ -55,4 +55,15 @@ export class SubscriptionRepository {
     async reset(): Promise<void> {
         await db.subscriptions.remove({}, { multi: true });
     }
+
+    async delete(id: string): Promise<void> {
+        try {
+            await db.subscriptions.remove({ id }, { multi: false });
+            // Queue delete operation
+            await this.queue.enqueue('Subscription', 'DELETE', { id });
+        } catch (err) {
+            console.error(`❌ Repo: Sub Delete Failed for ID ${id}`, err);
+            throw err;
+        }
+    }
 }

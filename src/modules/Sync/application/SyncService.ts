@@ -117,6 +117,13 @@ export class SyncService {
             await db.tariffs.remove({}, { multi: true });
             await db.vehicleTypes.remove({}, { multi: true });
             await db.prices.remove({}, { multi: true }); // Clean Prices to avoid duplicates
+            await db.customers.remove({}, { multi: true }); // Required Purge for Ghost syncs
+            await db.vehicles.remove({}, { multi: true }); // Required Purge for Ghost syncs
+            await db.subscriptions.remove({}, { multi: true }); // Required Purge for Ghost syncs
+
+            // DELAY TO ALLOW OS/ANTIVIRUS TO RELEASE FILE LOCKS ON THE .db~ FILES
+            console.log('⏳ Sync: Pausing for 1000ms to allow OS to release DB locks...');
+            await new Promise(resolve => setTimeout(resolve, 1000));
 
             // 1. Config (CRITICAL: Fetch first to populate UI dropdowns)
             await this.fetchTable('vehicle_types', garageId, 'VehicleType');
@@ -153,37 +160,34 @@ export class SyncService {
             const { data, error } = await query;
             if (error) throw error;
 
-            if (data) {
-                console.log(`📥 Sync: Fetched ${data.length} records for ${entityType}`);
-                for (const item of data) {
-                    await this.upsertLocal(entityType, item);
+            if (data && data.length > 0) {
+                console.log(`📥 Sync: Fetched ${data.length} records for ${entityType}, preparing bulk insert...`);
+
+                // Map all data exactly as before
+                const localItems = data.map(item => this.mapRemoteToLocalImport(item, entityType));
+
+                // Determine collection
+                let collection: any;
+                switch (entityType) {
+                    case 'VehicleType': collection = db.vehicleTypes; break;
+                    case 'Tariff': collection = db.tariffs; break;
+                    case 'Price': collection = db.prices; break; // New: Prices
+                    case 'Customer': collection = db.customers; break;
+                    case 'Vehicle': collection = db.vehicles; break;
+                    case 'Stay': collection = db.stays; break;
+                    case 'Movement': collection = db.movements; break;
+                    case 'Subscription': collection = db.subscriptions; break;
+                    case 'Garage': collection = db.garages; break;
+                }
+
+                if (collection) {
+                    // Bulk insert to prevent rapid file rewrites and EPERM errors
+                    await collection.insert(localItems);
+                    console.log(`✅ Sync: Bulk inserted ${localItems.length} records into ${entityType}`);
                 }
             }
         } catch (err) {
             console.error(`❌ Sync: Error fetching ${tableName}`, err);
-        }
-    }
-
-    private async upsertLocal(entityType: string, remoteItem: any) {
-        const localItem = this.mapRemoteToLocalImport(remoteItem, entityType);
-
-        let collection: any;
-        switch (entityType) {
-            case 'VehicleType': collection = db.vehicleTypes; break;
-            case 'Tariff': collection = db.tariffs; break;
-            case 'Price': collection = db.prices; break; // New: Prices
-            case 'Customer': collection = db.customers; break;
-            case 'Vehicle': collection = db.vehicles; break;
-            case 'Stay': collection = db.stays; break;
-            case 'Movement': collection = db.movements; break;
-            case 'Stay': collection = db.stays; break;
-            case 'Movement': collection = db.movements; break;
-            case 'Subscription': collection = db.subscriptions; break;
-            case 'Garage': collection = db.garages; break;
-        }
-
-        if (collection) {
-            await collection.update({ id: localItem.id }, localItem, { upsert: true });
         }
     }
 
@@ -290,16 +294,44 @@ export class SyncService {
             if (base.ticketNumber) { base.ticket_number = base.ticketNumber; delete base.ticketNumber; }
         }
 
+        if (type === 'Customer') {
+            console.log('📡 DEBUG SYNC: Objeto Customer recibido de NeDB:', JSON.stringify(item));
+
+            if (base.customerId) { base.customer_id = base.customerId; delete base.customerId; }
+            if (base.garageId) { base.garage_id = base.garageId; delete base.garageId; }
+            if (base.ownerId) { base.owner_id = base.ownerId; delete base.ownerId; }
+
+            console.log('📡 DEBUG SYNC: Objeto tras mapeo (antes de whitelist):', JSON.stringify(base));
+
+            // Strip unauthorized fields from Customer to prevent PGRST204
+            const allowedCustomerFields = ['id', 'garage_id', 'owner_id', 'name', 'email', 'phone', 'dni', 'address', 'localidad', 'created_at', 'updated_at'];
+            Object.keys(base).forEach(key => {
+                if (!allowedCustomerFields.includes(key)) {
+                    delete base[key];
+                }
+            });
+
+            console.log('📡 DEBUG SYNC: Objeto final enviado a Supabase:', JSON.stringify(base));
+        }
+
         if (type === 'Vehicle') {
             if (base.customerId) { base.customer_id = base.customerId; delete base.customerId; }
             if (base.vehicleTypeId) { base.vehicle_type_id = base.vehicleTypeId; delete base.vehicleTypeId; }
-            // Constraint Check
-            if (base.type === 'Camioneta') base.type = 'PickUp';
+            if (base.garageId) { base.garage_id = base.garageId; delete base.garageId; }
+            // CRITICAL: Type should be freeform, do NOT map 'Camioneta' to 'PickUp' anymore as requested by user
+
             // Ensure Plate
             if (!base.plate && item.plate) base.plate = item.plate;
             // Map Subscriber Status
             base.is_subscriber = item.isSubscriber || item.is_subscriber || false;
             delete base.isSubscriber; // Prevent PGRST204 (Extra column)
+
+            const allowedVehicleFields = ['id', 'garage_id', 'owner_id', 'plate', 'type', 'brand', 'model', 'color', 'year', 'insurance', 'is_subscriber', 'vehicle_type_id', 'customer_id', 'created_at', 'updated_at'];
+            Object.keys(base).forEach(key => {
+                if (!allowedVehicleFields.includes(key)) {
+                    delete base[key];
+                }
+            });
         }
 
         if (type === 'Subscription') {
@@ -307,6 +339,14 @@ export class SyncService {
             if (base.endDate) { base.end_date = new Date(base.endDate).toISOString(); delete base.endDate; }
             if (base.vehicleId) { base.vehicle_id = base.vehicleId; delete base.vehicleId; }
             if (base.customerId) { base.customer_id = base.customerId; delete base.customerId; }
+            if (base.garageId) { base.garage_id = base.garageId; delete base.garageId; }
+
+            const allowedSubFields = ['id', 'garage_id', 'owner_id', 'customer_id', 'vehicle_id', 'type', 'price', 'start_date', 'end_date', 'active', 'created_at', 'updated_at'];
+            Object.keys(base).forEach(key => {
+                if (!allowedSubFields.includes(key)) {
+                    delete base[key];
+                }
+            });
         }
 
         // SANITIZE FKs

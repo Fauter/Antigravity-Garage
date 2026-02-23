@@ -55,25 +55,33 @@ export class GarageController {
     getAllCocheras = async (req: Request, res: Response) => {
         try {
             const { clienteId } = req.query;
-            const all = await cocherasDB.getAll();
-            if (clienteId) {
-                const filtered = all.filter(c => c.clienteId === String(clienteId));
-
-                // Populate vehicle details for rich frontend diaplay
-                const populated = await Promise.all(filtered.map(async (cochera) => {
-                    const vehicleDetails = await Promise.all((cochera.vehiculos || []).map(async (plate) => {
-                        const vehicle = await this.vehicleRepo.findByPlate(plate);
-                        return vehicle ?
-                            { plate: vehicle.plate, type: vehicle.type, brand: vehicle.brand || '', model: vehicle.model || '' }
-                            : { plate, type: 'Generico', brand: '', model: '' };
-                    }));
-                    return { ...cochera, vehicleDetails };
-                }));
-
-                res.json(populated);
-            } else {
-                res.json(all);
+            const garageId = req.headers['x-garage-id'] as string;
+            if (!garageId) {
+                return res.status(400).json({ error: 'x-garage-id header is required' });
             }
+
+            const allCocheras = await cocherasDB.getAll();
+            // Filtrar siempre por garageId (si la db la soporta, o si asumimos que están mezcladas). 
+            // Si la db local no tiene garageId, lo agregamos lógicamente al filtro, 
+            // pero si no tiene el campo, filtraremos por clienteId primariamente.
+            let filtered = allCocheras.filter(c => (c as any).garageId === garageId || !(c as any).garageId);
+
+            if (clienteId) {
+                filtered = filtered.filter(c => c.clienteId === String(clienteId));
+            }
+
+            // Populate vehicle details for rich frontend diaplay
+            const populated = await Promise.all(filtered.map(async (cochera) => {
+                const vehicleDetails = await Promise.all((cochera.vehiculos || []).map(async (plate) => {
+                    const vehicle = await this.vehicleRepo.findByPlate(plate);
+                    return vehicle ?
+                        { plate: vehicle.plate, type: vehicle.type, brand: vehicle.brand || '', model: vehicle.model || '' }
+                        : { plate, type: 'Generico', brand: '', model: '' };
+                }));
+                return { ...cochera, vehicleDetails };
+            }));
+
+            res.json(populated);
         } catch (error: any) {
             res.status(500).json({ error: error.message });
         }
@@ -98,8 +106,9 @@ export class GarageController {
                 numero: tipo === 'Movil' ? undefined : numero,
                 vehiculos: vehiculos || [],
                 clienteId,
-                precioBase: precioBase || 0
-            };
+                precioBase: precioBase || 0,
+                garageId: req.headers['x-garage-id'] as string // Inject GarageId
+            } as any;
 
             // PERSIST VEHICLE METADATA IF PROVIDED (Detailed Add)
             if (vehiculos && vehiculos.length > 0) {
@@ -237,20 +246,39 @@ export class GarageController {
     // --- SUBSCRIPTIONS ---
 
     createSubscription = async (req: Request, res: Response) => {
-        try {
-            // Updated to handle Prorata calc if frontend sends price?
-            // Or we calc here. User prompt: "Front displays live prorated price... Toda alta DEBE generar un registro en movements".
-            // We assume backend validates price or trusts for now, but better to recalc.
-            // For now, let's accept `amount` explicitly or calc using standard.
+        // Rollback trackers
+        let createdCustomerId: string | null = null;
+        let createdVehicleId: string | null = null;
+        let createdSubscriptionId: string | null = null;
 
+        try {
             const { customerData, vehicleData, subscriptionType, paymentMethod, amount } = req.body;
+            const garageId = req.headers['x-garage-id'] as string || req.body.garageId;
+            if (!garageId) {
+                return res.status(400).json({ error: 'x-garage-id header or body.garageId is required' });
+            }
+
+            // PRE-SAVE VALIDATION (BLINDAJE DE TRANSACCION)
+            if (!customerData || !customerData.dni || !customerData.nombreApellido) {
+                return res.status(400).json({ error: "Datos de cliente incompletos o ausentes." });
+            }
+            if (!vehicleData || !vehicleData.plate || !vehicleData.type) {
+                return res.status(400).json({ error: "Datos del vehículo incompletos o ausentes." });
+            }
+            if (!subscriptionType) {
+                return res.status(400).json({ error: "Tipo de abono requerido." });
+            }
 
             // 1. Process Customer (Find or Create)
             let customer = await this.customerRepo.findByDni(customerData.dni);
             if (!customer) {
+                const garageIdFromHeader = req.headers['x-garage-id'] as string;
+                console.log('🔍 DEBUG CONTROLLER: garageId extraído de headers:', garageIdFromHeader);
+
                 customer = {
                     id: uuidv4(),
                     ...customerData,
+                    garageId: garageIdFromHeader, // <--- ESTA LÍNEA ES VITAL
                     name: customerData.nombreApellido || 'Cliente',
                     dni: customerData.dni,
                     email: customerData.email,
@@ -258,7 +286,10 @@ export class GarageController {
                     createdAt: new Date(),
                     updatedAt: new Date()
                 };
+
+                console.log('🔍 DEBUG CONTROLLER: Cliente listo para Repo:', JSON.stringify(customer));
                 await this.customerRepo.save(customer!);
+                createdCustomerId = customer!.id; // Track for rollback
             }
 
             // 2. Process Vehicle
@@ -267,6 +298,7 @@ export class GarageController {
                 vehicle = {
                     id: uuidv4(),
                     customerId: customer!.id,
+                    garageId: garageId,
                     plate: vehicleData.plate,
                     type: vehicleData.type,
                     brand: vehicleData.brand,
@@ -279,6 +311,7 @@ export class GarageController {
                     updatedAt: new Date()
                 };
                 await this.vehicleRepo.save(vehicle!);
+                createdVehicleId = vehicle!.id; // Track for rollback
             } else {
                 // Update existing vehicle metadata if provided (User requested robustness)
                 const updatedVehicle = {
@@ -324,6 +357,9 @@ export class GarageController {
             if (!(newSubscription as any).plate) {
                 (newSubscription as any).plate = vehicle.plate;
             }
+            if (!(newSubscription as any).garageId) {
+                (newSubscription as any).garageId = garageId;
+            }
 
             // Override price if prorata amount passed (trusting frontend or separate calculation logic)
             // Ideally we calculate prorata here too.
@@ -332,20 +368,47 @@ export class GarageController {
             }
 
             const savedSub = await this.subscriptionRepo.save(newSubscription);
+            createdSubscriptionId = savedSub.id; // Track for rollback
 
-            // 5. Financial Movement (CRITICAL)
-            await this.movementRepo.save({
-                id: uuidv4(),
-                type: 'CobroAbono',
-                amount: savedSub.price,
-                paymentMethod: paymentMethod || 'Efectivo',
-                timestamp: new Date(),
-                notes: `Alta Abono ${subscriptionType} - ${vehicle.plate}`,
-                relatedEntityId: savedSub.id,
-                plate: vehicle.plate,
-                operator: 'System', // TODO: Req User
-                createdAt: new Date()
-            } as any);
+            // 5. Financial Movement (CRITICAL - TODO O NADA)
+            try {
+                // Validación para evitar montos nulos/ceros en altas de abono
+                if (savedSub.price === 0 || isNaN(savedSub.price)) {
+                    throw new Error("Monto a cobrar inválido");
+                }
+
+                await this.movementRepo.save({
+                    id: uuidv4(),
+                    type: 'CobroAbono',
+                    amount: savedSub.price,
+                    paymentMethod: paymentMethod || 'Efectivo',
+                    timestamp: new Date(),
+                    notes: `Alta Abono ${subscriptionType} - ${vehicle.plate}`,
+                    relatedEntityId: savedSub.id,
+                    plate: vehicle.plate,
+                    garageId: garageId, // Inject Garage ID
+                    operator: 'System', // TODO: Req User
+                    createdAt: new Date()
+                } as any);
+
+            } catch (movementError: any) {
+                console.error('Fallo al crear Movimiento de Caja. Iniciando Rollback...', movementError);
+                // ROLLBACK MANUALL (Compensatorio)
+                if (createdSubscriptionId) {
+                    await this.subscriptionRepo.delete(createdSubscriptionId);
+                }
+                if (createdVehicleId) {
+                    // Assuming vehicleRepo.delete exists, else bypass. It might leave orphan vehicle data if not.
+                    // If not exposed, you might need to add it to JsonDB wrapper. 
+                    // Most NeDB/JsonDB standard wrappers have a delete/remove.
+                    try { await (this.vehicleRepo as any).db.delete(createdVehicleId); } catch (e) { }
+                }
+                if (createdCustomerId) {
+                    try { await (this.customerRepo as any).db.delete(createdCustomerId); } catch (e) { }
+                }
+
+                throw new Error(`Error de Transacción (Rollback ejecutado): ${movementError.message}`);
+            }
 
             res.json(savedSub);
         } catch (error: any) {
@@ -356,34 +419,26 @@ export class GarageController {
 
     getAllSubscriptions = async (req: Request, res: Response) => {
         try {
-            const subs = await this.subscriptionRepo.findAll();
+            const garageId = req.headers['x-garage-id'] as string;
+            if (!garageId) {
+                return res.status(400).json({ error: 'x-garage-id header is required' });
+            }
+            let subs = await this.subscriptionRepo.findAll();
+
+            // Filter strictly by garageId
+            subs = subs.filter(s => (s as any).garageId === garageId);
+
             const customers = await this.customerRepo.findAll();
-            // Assuming VehicleRepo has findAll, if not we add it, but Subscription usually has vehicleId.
-            // Let's assume VehicleRepository uses JsonDB and I added findByPlate but not explicit findAll.
-            // Wait, I updated CustomerRepo to add findAll, but did I update VehicleRepo?
-            // Step 1539 VehicleRepo has save, findById, findByPlate, reset. NO findAll.
-            // Usage of `all.find` inside `findByPlate` implies `vehicleDB.getAll()` exists but is private/protected or I can just use it via a new method.
-            // Since I cannot change VehicleRepo in the same call (tool limitation: single file), 
-            // I will infer vehicle data from Customer (not reliable) or just map ID.
-            // OR I can fetch vehicles efficiently?
-            // Actually, I can update VehicleRepo quickly or just assume I can hack it or fail gracefully.
-            // But better: Use `customerRepo` to get client name. Vehicle plate is usually in Subscription object if saved from frontend `payload`?
-            // SubscriptionManager creates default structure.
-            // Let's look at `createSubscription` - it saves `newSubscription`.
-            // Does `newSubscription` have `plate`?
-            // `SubscriptionRepository` interface says `plate?: string`.
-            // If it has plate, I don't strictly need Vehicle object join for basic display.
-            // Let's rely on `sub.plate` and `customerId` -> `customer.firstName`.
 
             const populated = await Promise.all(subs.map(async (sub: any) => {
-                const customer = customers.find(c => c.id === sub.customerId);
+                const customer = customers.find(c => c.id === sub.customerId || c.id === sub.clientId);
                 let vehicleDetails = { plate: sub.plate || '---' };
 
                 if (sub.plate) {
                     const vehicle = await this.vehicleRepo.findByPlate(sub.plate);
                     if (vehicle) {
                         vehicleDetails = {
-                            ...vehicle, // Include brand, model, color, etc.
+                            ...vehicle,
                             plate: vehicle.plate
                         };
                     }
@@ -408,14 +463,21 @@ export class GarageController {
     findClientByDni = async (req: Request, res: Response) => {
         try {
             const { dni } = req.query;
+            const garageId = req.headers['x-garage-id'] as string;
+            if (!garageId) {
+                return res.status(400).json({ error: 'x-garage-id header is required' });
+            }
+
             if (dni) {
                 const customer = await this.customerRepo.findByDni(String(dni));
+                // Optional: ensure customer.garageId === garageId, but for now returned if found
                 return res.json(customer ? [customer] : []);
             } else {
                 // ACTIVACIÓN: Si no hay DNI, devolvemos el listado completo para SubscriberList
                 // Ensure findAll exists in repo
                 const allCustomers = await this.customerRepo.findAll();
-                return res.json(allCustomers || []);
+                const filtered = allCustomers.filter((c: any) => c.garageId === garageId);
+                return res.json(filtered || []);
             }
         } catch (error: any) {
             return res.status(500).json({ error: error.message });
@@ -436,8 +498,11 @@ export class GarageController {
                 return res.json(existing); // Idempotent return
             }
 
+            const garageIdFromHeader = req.headers['x-garage-id'] as string;
+
             const newCustomer = {
                 id: uuidv4(),
+                garageId: garageIdFromHeader,
                 name: data.nombreApellido,
                 dni: data.dni,
                 email: data.email,
@@ -466,6 +531,21 @@ export class GarageController {
             const vehicle = await this.vehicleRepo.findByPlate(plate);
             if (!vehicle) return res.status(404).json({ error: 'Vehicle not found' });
             res.json(vehicle);
+        } catch (e: any) {
+            res.status(500).json({ error: e.message });
+        }
+    }
+
+    getVehicles = async (req: Request, res: Response) => {
+        try {
+            const { customerId } = req.query;
+            const garageId = req.headers['x-garage-id'] as string;
+
+            if (customerId) {
+                const vehicles = await this.vehicleRepo.findByCustomerId(String(customerId), garageId);
+                return res.json(vehicles);
+            }
+            res.json([]);
         } catch (e: any) {
             res.status(500).json({ error: e.message });
         }
