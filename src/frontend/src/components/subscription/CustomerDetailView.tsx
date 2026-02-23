@@ -5,11 +5,12 @@ import {
     Calendar,
     User,
     Phone,
-    Edit2,
     Plus,
     AlertTriangle,
     Check,
-    ChevronDown
+    ChevronDown,
+    Trash2,
+    Unlink
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { toast } from 'sonner';
@@ -23,6 +24,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     const [cocheras, setCocheras] = useState<any[]>([]);
     const [subscriptions, setSubscriptions] = useState<any[]>([]); // To enrich vehicle data
     const [realVehicles, setRealVehicles] = useState<any[]>([]); // Real vehicle table datastore
+    const [debts, setDebts] = useState<any[]>([]); // Deudas pendientes
     const [loading, setLoading] = useState(true);
 
     // --- Configuration State ---
@@ -256,6 +258,42 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         }
     };
 
+    // --- ENPOINTS DESVINCULACION ---
+    const handleReleaseCochera = async (cocheraId: string) => {
+        if (!confirm("¿Seguro que deseas liberar esta cochera? Se desvincularán todos los vehículos y se cortará el abono (pero los vehículos seguirán registrados).")) return;
+        try {
+            await api.post('/cocheras/liberar', { cocheraId });
+            toast.success("Cochera liberada con éxito");
+            // Soft refresh
+            const [cocherasRes, vehiclesRes] = await Promise.all([
+                api.get(`/cocheras?clienteId=${clientId}`),
+                api.get(`/vehiculos?customerId=${clientId}`)
+            ]);
+            setCocheras(cocherasRes.data || []);
+            setRealVehicles(vehiclesRes.data || []);
+        } catch (error) {
+            console.error(error);
+            toast.error("Error al liberar cochera");
+        }
+    };
+
+    const handleUnlinkVehicle = async (cocheraId: string, plate: string) => {
+        if (!confirm(`¿Seguro que deseas remover la patente ${plate} de esta cochera?`)) return;
+        try {
+            await api.post('/cocheras/desvincular-vehiculo', { cocheraId, plate });
+            toast.success("Vehículo desvinculado");
+            // Soft refresh
+            const [cocherasRes, vehiclesRes] = await Promise.all([
+                api.get(`/cocheras?clienteId=${clientId}`),
+                api.get(`/vehiculos?customerId=${clientId}`)
+            ]);
+            setCocheras(cocherasRes.data || []);
+            setRealVehicles(vehiclesRes.data || []);
+        } catch (error) {
+            console.error(error);
+            toast.error("Error al desvincular vehículo");
+        }
+    };
 
 
     const handleOpenModal = (cochera: any) => {
@@ -363,6 +401,15 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 setCocheras(cocherasRes.data || []);
                 setSubscriptions(subsRes.data || []);
                 setRealVehicles(vehiclesRes.data || []);
+
+                // Fetch deudas (Safe block para no romper toda la vista si falla)
+                try {
+                    const debtsRes = await api.get(`/deudas/${clientId}`);
+                    setDebts((debtsRes.data || []).filter((d: any) => d.status === 'PENDING'));
+                } catch (debtError) {
+                    console.error('Error fetching debts, bypassing UI crash:', debtError);
+                    setDebts([]);
+                }
             } catch (err) {
                 console.error('Error fetching client assets:', err);
                 toast.error("Error al cargar datos del cliente");
@@ -411,8 +458,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     const labelStyle = "block text-[10px] uppercase text-gray-500 font-bold mb-0.5 tracking-wider";
 
     return (
-        <div className="min-h-screen bg-[#050505] w-full">
-            <div className="max-w-7xl mx-auto w-full p-8 space-y-12 animate-in fade-in duration-500">
+        <div className="flex-1 min-h-full border-none bg-[#050505] w-full flex flex-col">
+            <div className="max-w-7xl mx-auto w-full p-8 space-y-12 animate-in fade-in duration-500 flex-1 pb-32">
                 <div className="flex flex-col md:flex-row items-start md:items-end justify-between gap-6 border-b border-gray-800 pb-8">
                     <div className="flex items-start gap-6">
                         <button
@@ -444,6 +491,27 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                         </div>
                     </div>
                 </div>
+
+                {/* DEUDA BANNER PENDING */}
+                {debts.length > 0 && (
+                    <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-6 backdrop-blur-sm flex items-center justify-between animate-in fade-in duration-500">
+                        <div className="flex items-center gap-4">
+                            <div className="p-3 bg-red-500/20 rounded-full">
+                                <AlertTriangle className="w-6 h-6 text-red-500" />
+                            </div>
+                            <div>
+                                <h4 className="text-red-400 font-bold uppercase tracking-widest text-sm mb-1">Deuda Acumulada</h4>
+                                <p className="text-gray-300 text-sm">Este cliente tiene {debts.length} abonos no pagados identificados. Consulte la sección de caja para abonarlos y recalcular recargos.</p>
+                            </div>
+                        </div>
+                        <div className="text-right">
+                            <span className="block text-2xl font-mono text-red-400 font-bold">
+                                ${debts.reduce((sum, d) => sum + (d.amount || 0) + (d.surchargeApplied || 0), 0).toLocaleString()}
+                            </span>
+                            <span className="text-xs text-red-500/80 font-bold uppercase">Monto Base Sin Recargos Act.</span>
+                        </div>
+                    </div>
+                )}
 
                 <div className="space-y-8">
                     <div className="flex items-center justify-between">
@@ -516,10 +584,11 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                 <Plus className="w-3.5 h-3.5" />
                                             </button>
                                             <button
-                                                className="p-2 bg-gray-800/80 hover:bg-gray-700 text-gray-400 hover:text-white rounded-lg border border-gray-700 backdrop-blur-sm transition-colors"
-                                                title="Editar Cochera"
+                                                onClick={() => handleReleaseCochera(cochera.id)}
+                                                className="p-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg border border-red-500/20 backdrop-blur-sm transition-colors"
+                                                title="Liberar Cochera"
                                             >
-                                                <Edit2 className="w-3.5 h-3.5" />
+                                                <Trash2 className="w-3.5 h-3.5" />
                                             </button>
                                         </div>
 
@@ -565,7 +634,16 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                                         </span>
                                                                     )}
                                                                 </div>
-                                                                <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                                                                <div className="flex items-center gap-2">
+                                                                    <button
+                                                                        onClick={(e) => { e.stopPropagation(); handleUnlinkVehicle(cochera.id, plateText); }}
+                                                                        className="p-1.5 text-red-500/50 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                                                                        title="Desvincular Vehículo"
+                                                                    >
+                                                                        <Unlink className="w-3.5 h-3.5" />
+                                                                    </button>
+                                                                    <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                                                                </div>
                                                             </div>
 
                                                             {/* Expanded Details */}
@@ -733,9 +811,6 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                             <div className="space-y-6">
                                 {/* 1. CONFIG COCHERA */}
                                 <div className="p-4 bg-gray-800/30 rounded-lg border border-gray-700/30 space-y-3">
-                                    <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-500"></div> Configuración
-                                    </h4>
                                     <div className="flex gap-4 items-end">
                                         <div className="flex-1">
                                             <label className={labelStyle}>Tipo</label>
@@ -775,10 +850,17 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
                                 {/* 2. VEHICULO */}
                                 <div className="space-y-3">
-                                    <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div> Vehículo
-                                    </h4>
                                     <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className={labelStyle}>Patente</label>
+                                            <input
+                                                className={`${inputStyle} font-mono uppercase text-center tracking-widest font-bold border-l-[3px] border-l-emerald-500`}
+                                                value={newCocheraData.patente}
+                                                onChange={e => setNewCocheraData({ ...newCocheraData, patente: e.target.value.toUpperCase() })}
+                                                placeholder="AAA123"
+                                                maxLength={7}
+                                            />
+                                        </div>
                                         <div>
                                             <label className={labelStyle}>Tipo Vehículo</label>
                                             <select
@@ -791,16 +873,6 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                     <option key={v.id} value={v.name}>{v.name}</option>
                                                 ))}
                                             </select>
-                                        </div>
-                                        <div>
-                                            <label className={labelStyle}>Patente</label>
-                                            <input
-                                                className={`${inputStyle} font-mono uppercase text-center tracking-widest font-bold border-l-[3px] border-l-emerald-500`}
-                                                value={newCocheraData.patente}
-                                                onChange={e => setNewCocheraData({ ...newCocheraData, patente: e.target.value.toUpperCase() })}
-                                                placeholder="AAA123"
-                                                maxLength={7}
-                                            />
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-3 gap-3">

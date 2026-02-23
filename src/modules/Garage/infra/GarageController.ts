@@ -4,8 +4,11 @@ import { SubscriptionRepository } from './SubscriptionRepository';
 import { CustomerRepository } from './CustomerRepository';
 import { VehicleRepository } from './VehicleRepository';
 import { MovementRepository } from '../../Billing/infra/MovementRepository';
+import { DebtRepository } from './DebtRepository';
 import { v4 as uuidv4 } from 'uuid';
 import { JsonDB } from '../../../infrastructure/database/json-db';
+import { db } from '../../../infrastructure/database/datastore';
+import { PricingEngine } from '../../Billing/domain/PricingEngine';
 
 // --- Cochera Model ---
 interface Cochera {
@@ -15,6 +18,7 @@ interface Cochera {
     vehiculos: string[]; // Vehicle IDs
     clienteId?: string;
     precioBase: number;
+    status?: string;
 }
 
 const cocherasDB = new JsonDB<Cochera>('cocheras');
@@ -42,12 +46,14 @@ export class GarageController {
     private customerRepo: CustomerRepository;
     private vehicleRepo: VehicleRepository;
     private movementRepo: MovementRepository;
+    private debtRepo: DebtRepository;
 
     constructor() {
         this.subscriptionRepo = new SubscriptionRepository();
         this.customerRepo = new CustomerRepository();
         this.vehicleRepo = new VehicleRepository();
         this.movementRepo = new MovementRepository();
+        this.debtRepo = new DebtRepository();
     }
 
     // --- COCHERAS API ---
@@ -75,8 +81,8 @@ export class GarageController {
                 const vehicleDetails = await Promise.all((cochera.vehiculos || []).map(async (plate) => {
                     const vehicle = await this.vehicleRepo.findByPlate(plate);
                     return vehicle ?
-                        { plate: vehicle.plate, type: vehicle.type, brand: vehicle.brand || '', model: vehicle.model || '' }
-                        : { plate, type: 'Generico', brand: '', model: '' };
+                        { plate: vehicle.plate, type: vehicle.type, brand: vehicle.brand || '', model: vehicle.model || '', color: vehicle.color || '', year: vehicle.year || '', insurance: vehicle.insurance || '' }
+                        : { plate, type: 'Generico', brand: '', model: '', color: '', year: '', insurance: '' };
                 }));
                 return { ...cochera, vehicleDetails };
             }));
@@ -151,6 +157,7 @@ export class GarageController {
         try {
             const { id } = req.params;
             const { vehiculos, newVehicleType, precioBase } = req.body; // Expanded destructuring
+            const garageId = req.headers['x-garage-id'] as string;
 
             const cochera = await cocherasDB.getById(String(id));
             if (!cochera) return res.status(404).json({ error: 'Cochera not found' });
@@ -196,6 +203,10 @@ export class GarageController {
                                 model: v.model || existingVehicle.model,
                                 type: v.type || existingVehicle.type,
                                 color: v.color || existingVehicle.color,
+                                year: v.year || existingVehicle.year,
+                                insurance: v.insurance || existingVehicle.insurance,
+                                garageId: garageId || existingVehicle.garageId,
+                                isSubscriber: true, // Force to true when associated with a cochera
                                 updatedAt: new Date()
                             };
                             await this.vehicleRepo.save(updatedVehicle);
@@ -204,12 +215,15 @@ export class GarageController {
                             await this.vehicleRepo.save({
                                 id: uuidv4(),
                                 customerId: cochera.clienteId || 'UNKNOWN', // Link to cochera owner
+                                garageId: garageId,
                                 plate: v.plate,
                                 type: v.type || 'Automovil',
                                 brand: v.brand,
                                 model: v.model,
                                 color: v.color,
-                                isSubscriber: false,
+                                year: v.year,
+                                insurance: v.insurance,
+                                isSubscriber: true, // Force to true when associated with a cochera
                                 createdAt: new Date(),
                                 updatedAt: new Date()
                             });
@@ -238,6 +252,80 @@ export class GarageController {
             const { id } = req.params;
             await cocherasDB.delete(String(id));
             res.json({ message: 'Cochera eliminada' });
+        } catch (error: any) {
+            res.status(500).json({ error: error.message });
+        }
+    }
+
+    // --- ENPOINTS DE DESVINCULACION ---
+
+    unassignVehicle = async (req: Request, res: Response) => {
+        try {
+            const { cocheraId, plate } = req.body;
+
+            const cochera = await cocherasDB.getById(String(cocheraId));
+            if (!cochera) return res.status(404).json({ error: 'Cochera no encontrada' });
+
+            // Remove vehicle from cochera
+            cochera.vehiculos = (cochera.vehiculos || []).filter(v => typeof v === 'string' ? v !== plate : (v as any).plate !== plate);
+            await cocherasDB.updateOne({ id: cocheraId } as any, cochera);
+
+            // Change isSubscriber to false for this specific vehicle and decouple from customer
+            const vehicle = await this.vehicleRepo.findByPlate(plate);
+            if (vehicle) {
+                vehicle.isSubscriber = false;
+                vehicle.customerId = null as any; // Detach client mapping
+                await this.vehicleRepo.save(vehicle);
+            }
+
+            res.json({ message: 'Vehículo desvinculado correctamente', cochera });
+        } catch (error: any) {
+            res.status(500).json({ error: error.message });
+        }
+    }
+
+    releaseCochera = async (req: Request, res: Response) => {
+        try {
+            const { cocheraId } = req.body;
+
+            const cochera = await cocherasDB.getById(String(cocheraId));
+            if (!cochera) return res.status(404).json({ error: 'Cochera no encontrada' });
+
+            const vehiclesToRelease = cochera.vehiculos || [];
+
+            // Empty cochera vehicles and detach client
+            cochera.vehiculos = [];
+            cochera.clienteId = null as any; // REMOVE OWNER (explicitly null for serialization)
+            cochera.status = 'Disponible'; // MAKE AVAILABLE
+
+            await cocherasDB.updateOne({ id: cocheraId } as any, cochera);
+
+            // Set all associated vehicles isSubscriber to false and detach them
+            for (const v of vehiclesToRelease) {
+                const plate = typeof v === 'string' ? v : (v as any).plate;
+                const vehicle = await this.vehicleRepo.findByPlate(plate);
+                if (vehicle) {
+                    vehicle.isSubscriber = false;
+                    vehicle.customerId = null as any; // Detach client mapping
+                    await this.vehicleRepo.save(vehicle);
+                }
+            }
+
+            // Find an active subscription for this cochera/client and deactivate it
+            if (cochera.clienteId) {
+                const subs = await this.subscriptionRepo.findByCustomerId(cochera.clienteId);
+                const activeSubs = subs.filter(s => s.active);
+
+                for (const sub of activeSubs) {
+                    if ((sub as any).spotNumber === cochera.numero || (sub as any).type === cochera.tipo) {
+                        sub.active = false;
+                        sub.endDate = new Date(); // Cut it today
+                        await this.subscriptionRepo.save(sub);
+                    }
+                }
+            }
+
+            res.json({ message: 'Cochera liberada correctamente', cochera });
         } catch (error: any) {
             res.status(500).json({ error: error.message });
         }
@@ -429,6 +517,50 @@ export class GarageController {
             // Filter strictly by garageId
             subs = subs.filter(s => (s as any).garageId === garageId);
 
+            // --- Lazy Debt Evaluation ---
+            const now = new Date();
+            for (const sub of subs) {
+                if (sub.active && sub.endDate) {
+                    let subEndDate = new Date(sub.endDate);
+
+                    let loopCount = 0;
+                    const MAX_LOOPS = 24; // Límite de seguridad de 24 meses (2 años max de retroactivo)
+
+                    // Bucle para atrapar todos los meses adeudados si pasaron varios meses
+                    while (subEndDate < now && loopCount < MAX_LOOPS) {
+                        loopCount++;
+                        try {
+                            const monthStart = new Date(subEndDate.getFullYear(), subEndDate.getMonth(), 1);
+                            const monthEnd = new Date(subEndDate.getFullYear(), subEndDate.getMonth() + 1, 0);
+
+                            const existingDebts = await this.debtRepo.findBySubscriptionIdAndMonth(sub.id, monthStart, monthEnd);
+                            if (!existingDebts || existingDebts.length === 0) {
+                                await this.debtRepo.save({
+                                    id: uuidv4(),
+                                    subscriptionId: sub.id,
+                                    customerId: sub.customerId || (sub as any).clientId,
+                                    amount: sub.price || 0,
+                                    surchargeApplied: 0,
+                                    status: 'PENDING',
+                                    dueDate: subEndDate, // La fecha de fin original
+                                    createdAt: new Date(),
+                                    updatedAt: new Date()
+                                } as any);
+                            }
+
+                            // Avanzar al mes siguiente
+                            subEndDate = new Date(subEndDate.getFullYear(), subEndDate.getMonth() + 2, 0);
+                            sub.endDate = subEndDate;
+                            await this.subscriptionRepo.save(sub);
+
+                        } catch (evalError) {
+                            console.error(`Error en evaluación lazy para sub ${sub.id}:`, evalError);
+                            break; // Romper bucle si hay error para no colgar
+                        }
+                    }
+                }
+            }
+
             const customers = await this.customerRepo.findAll();
 
             const populated = await Promise.all(subs.map(async (sub: any) => {
@@ -482,6 +614,36 @@ export class GarageController {
             }
         } catch (error: any) {
             return res.status(500).json({ error: error.message });
+        }
+    }
+
+    // --- DEBTS ---
+    getDebtsByCustomer = async (req: Request, res: Response) => {
+        try {
+            const { clientId } = req.params;
+            const garageId = req.headers['x-garage-id'] as string;
+
+            const debts = await this.debtRepo.findByCustomerId(String(clientId));
+
+            // Apply Dynamic Surcharge based on real Garage settings from Supabase
+            let garageSettings = {};
+            if (garageId) {
+                const garage: any = await db.garages.findOne({ id: garageId });
+                // Settings usually mapped to 'settings' or 'config', handle both or root
+                garageSettings = garage?.settings || garage?.config || garage || {};
+            }
+
+            const debtsWithDynamicSurcharge = debts.map(debt => {
+                const dynamicSurcharge = PricingEngine.calculateSurcharge(debt.amount, garageSettings);
+                return {
+                    ...debt,
+                    surchargeApplied: dynamicSurcharge
+                };
+            });
+
+            res.json(debtsWithDynamicSurcharge);
+        } catch (error: any) {
+            res.status(500).json({ error: error.message });
         }
     }
 

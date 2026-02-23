@@ -52,10 +52,10 @@ export class SyncService {
                     console.error(`❌ Sync: Failed to sync mutation ${mutation.id}`, err);
 
                     // POISON PILL: Integrity Violations (Foreign Key, Unique, Check) + Missing Table + Extra Columns
-                    // 23503: FK Violation, 23505: Unique Violation, 23514: Check Violation
+                    // 23505: Unique Violation, 23514: Check Violation
                     // PGRST205: Relation not found (Table missing)
                     // PGRST204: Columns not found (Extra columns in payload)
-                    if (['23503', '23505', '23514', 'PGRST205', '42P01', 'PGRST204'].includes(err?.code) || err?.message?.includes('vehicles_type_check')) {
+                    if (['23505', '23514', 'PGRST205', '42P01', 'PGRST204'].includes(err?.code) || err?.message?.includes('vehicles_type_check')) {
                         console.warn(`☣️ Sync: Mutación ${mutation.id} descartada por Error Irrecuperable (Error ${err?.code}).`);
                         await this.queue.markSynced(mutation.id); // Mark as synced effectively "skips" it
                     } else {
@@ -291,19 +291,19 @@ export class SyncService {
 
         // Entity Specifics
         if (type === 'Movement') {
-            if (base.paymentMethod) { base.payment_method = base.paymentMethod; delete base.paymentMethod; }
-            if (base.shiftId) { base.shift_id = base.shiftId; delete base.shiftId; }
-            if (base.relatedEntityId) { base.related_entity_id = base.relatedEntityId; delete base.relatedEntityId; }
-            if (base.invoiceType) { base.invoice_type = base.invoiceType; delete base.invoiceType; }
-            if (base.ticketNumber) { base.ticket_number = base.ticketNumber; delete base.ticketNumber; }
+            if (base.paymentMethod !== undefined) { base.payment_method = base.paymentMethod; delete base.paymentMethod; }
+            if (base.shiftId !== undefined) { base.shift_id = base.shiftId; delete base.shiftId; }
+            if (base.relatedEntityId !== undefined) { base.related_entity_id = base.relatedEntityId; delete base.relatedEntityId; }
+            if (base.invoiceType !== undefined) { base.invoice_type = base.invoiceType; delete base.invoiceType; }
+            if (base.ticketNumber !== undefined) { base.ticket_number = base.ticketNumber; delete base.ticketNumber; }
         }
 
         if (type === 'Customer') {
             console.log('📡 DEBUG SYNC: Objeto Customer recibido de NeDB:', JSON.stringify(item));
 
-            if (base.customerId) { base.customer_id = base.customerId; delete base.customerId; }
-            if (base.garageId) { base.garage_id = base.garageId; delete base.garageId; }
-            if (base.ownerId) { base.owner_id = base.ownerId; delete base.ownerId; }
+            if (base.customerId !== undefined) { base.customer_id = base.customerId; delete base.customerId; }
+            if (base.garageId !== undefined) { base.garage_id = base.garageId; delete base.garageId; }
+            if (base.ownerId !== undefined) { base.owner_id = base.ownerId; delete base.ownerId; }
 
             console.log('📡 DEBUG SYNC: Objeto tras mapeo (antes de whitelist):', JSON.stringify(base));
 
@@ -319,9 +319,9 @@ export class SyncService {
         }
 
         if (type === 'Vehicle') {
-            if (base.customerId) { base.customer_id = base.customerId; delete base.customerId; }
-            if (base.vehicleTypeId) { base.vehicle_type_id = base.vehicleTypeId; delete base.vehicleTypeId; }
-            if (base.garageId) { base.garage_id = base.garageId; delete base.garageId; }
+            if (base.customerId !== undefined) { base.customer_id = base.customerId; delete base.customerId; }
+            if (base.vehicleTypeId !== undefined) { base.vehicle_type_id = base.vehicleTypeId; delete base.vehicleTypeId; }
+            if (base.garageId !== undefined) { base.garage_id = base.garageId; delete base.garageId; }
             // CRITICAL: Type should be freeform, do NOT map 'Camioneta' to 'PickUp' anymore as requested by user
 
             // Ensure Plate
@@ -339,11 +339,11 @@ export class SyncService {
         }
 
         if (type === 'Subscription') {
-            if (base.startDate) { base.start_date = new Date(base.startDate).toISOString(); delete base.startDate; }
-            if (base.endDate) { base.end_date = new Date(base.endDate).toISOString(); delete base.endDate; }
-            if (base.vehicleId) { base.vehicle_id = base.vehicleId; delete base.vehicleId; }
-            if (base.customerId) { base.customer_id = base.customerId; delete base.customerId; }
-            if (base.garageId) { base.garage_id = base.garageId; delete base.garageId; }
+            if (base.startDate !== undefined) { base.start_date = new Date(base.startDate).toISOString(); delete base.startDate; }
+            if (base.endDate !== undefined) { base.end_date = new Date(base.endDate).toISOString(); delete base.endDate; }
+            if (base.vehicleId !== undefined) { base.vehicle_id = base.vehicleId; delete base.vehicleId; }
+            if (base.customerId !== undefined) { base.customer_id = base.customerId; delete base.customerId; }
+            if (base.garageId !== undefined) { base.garage_id = base.garageId; delete base.garageId; }
 
             const allowedSubFields = ['id', 'garage_id', 'owner_id', 'customer_id', 'vehicle_id', 'type', 'price', 'start_date', 'end_date', 'active', 'created_at', 'updated_at'];
             Object.keys(base).forEach(key => {

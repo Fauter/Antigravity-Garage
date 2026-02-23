@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { Camera, Car, Check, User, Phone, CreditCard, AlertTriangle, Wallet } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { WebcamModal } from '../common/WebcamModal';
+import { PrinterService } from '../../services/PrinterService';
 
 const FormularioAbono: React.FC = () => {
     // --- STATE ---
@@ -11,6 +12,7 @@ const FormularioAbono: React.FC = () => {
     const [showCameraModal, setShowCameraModal] = useState(false);
     const [activePhotoField, setActivePhotoField] = useState<string | null>(null);
     const [photos, setPhotos] = useState<{ [key: string]: string }>({});
+    const [showSuccessScreen, setShowSuccessScreen] = useState(false);
     const { operatorName } = useAuth();
 
     // Load Vehicle Types once on mount
@@ -35,7 +37,7 @@ const FormularioAbono: React.FC = () => {
 
     const [formData, setFormData] = useState({
         // Cochera
-        tipoCochera: 'Movil',
+        tipoCochera: '',
         numeroCochera: '',
         exclusivaOverride: false,
 
@@ -132,17 +134,17 @@ const FormularioAbono: React.FC = () => {
         // 4. Update Display
         setBasePriceDisplay(finalPrice);
 
-        // 5. Calculate Prorated (Exact Formula: Amount = (30 * PrecioMensual) * (31 - diaActual))
-        // The user prompt indicated: "Amount=(30PrecioMensual)×(31−diaActual)"
-        // But the previous message said "(PrecioMensual / 30) * (31 - diaActual)" -> Which is standard.
-        // The user wrote: "Amount=(30PrecioMensual)×(31−diaActual)". Interpreting this as typo from user, 
-        // they likely meant (PrecioMensual / 30) * (31 - diaActual).
-        // Let's use (PrecioMensual / 30) * (31 - diaActual) to be accurate per previous instruction, 
-        // wrapped in Math.floor to ensure integer.
+        // 5. Calculate Prorated based on real days in current month
         const now = new Date();
         const currentDay = now.getDate();
-        const calc = Math.floor((finalPrice / 30) * (31 - currentDay));
-        setProratedPrice(calc);
+        const ultimoDiaMes = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+        const diasRestantes = (ultimoDiaMes - currentDay) + 1;
+        // Nuevo código con redondeo a la centena (hacia abajo)
+        const exactCalc = (finalPrice / ultimoDiaMes) * diasRestantes;
+        // Math.floor(valor / 100) * 100 elimina las decenas y unidades
+        const roundedDown = Math.floor(exactCalc / 100) * 100;
+
+        setProratedPrice(roundedDown);
     };
 
     const openCamera = (field: string) => { setActivePhotoField(field); setShowCameraModal(true); };
@@ -159,6 +161,12 @@ const FormularioAbono: React.FC = () => {
         setLoading(true);
 
         // Validation for assigned spots
+        if (!formData.tipoCochera) {
+            toast.error('Seleccione el tipo de cochera (Móvil / Fija)');
+            setLoading(false);
+            return;
+        }
+
         if (formData.tipoCochera === 'Fija' && !formData.numeroCochera) {
             toast.error('Falta número de cochera');
             setLoading(false);
@@ -301,22 +309,59 @@ const FormularioAbono: React.FC = () => {
                 expirationText = ed.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
             }
 
+            // ONLY ON SUCCESS: Print Subscription Ticket
+            PrinterService.printSubscriptionTicket({
+                nombreApellido: formData.nombre,
+                dni: formData.dni,
+                patente: formData.patente,
+                marca: formData.marca,
+                modelo: formData.modelo,
+                tipoVehiculo: formData.tipoVehiculo,
+                tipoCochera: formData.tipoCochera,
+                numeroCochera: formData.numeroCochera,
+                metodoPago: formData.metodoPago,
+                basePriceDisplay: basePriceDisplay,
+                proratedPrice: proratedPrice
+            });
+
             // only show success on 200 OK (implied by awaiting promise not throwing)
             toast.success(`ALTA DE ABONO EXITOSA. Vencimiento: ${expirationText}`);
 
             // Allow state reset only on success
-            setFormData(prev => ({
-                ...prev,
-                patente: '',
-                nombre: '',
-                dni: '',
-                email: '',
-                numeroCochera: '',
-                marca: '',
-                modelo: '',
-                telParticular: ''
-            }));
-            setPhotos({});
+            setShowSuccessScreen(true);
+
+            setTimeout(() => {
+                setShowSuccessScreen(false);
+                setFormData({
+                    tipoCochera: '',
+                    numeroCochera: '',
+                    exclusivaOverride: false,
+
+                    nombre: '',
+                    dni: '',
+                    email: '',
+                    domicilio: '',
+                    localidad: '',
+                    domicilioTrabajo: '',
+                    telParticular: '',
+                    telEmergencia: '',
+                    telTrabajo: '',
+
+                    patente: '',
+                    marca: '',
+                    modelo: '',
+                    color: '',
+                    anio: '',
+                    companiaSeguro: '',
+                    tipoVehiculo: '',
+
+                    metodoPago: '',
+                    tipoFactura: '',
+                });
+                setPhotos({});
+                setBasePriceDisplay(0);
+                setProratedPrice(0);
+            }, 2500);
 
         } catch (error: any) {
             console.error("Subscription Error:", error);
@@ -332,7 +377,7 @@ const FormularioAbono: React.FC = () => {
     const labelStyle = "block text-[10px] uppercase text-gray-500 font-bold mb-0.5 tracking-wider";
 
     return (
-        <div className="h-full bg-[#0a0a0a] flex flex-col p-2 overflow-hidden text-white">
+        <div className="h-full bg-[#0a0a0a] flex flex-col p-2 overflow-hidden text-white relative">
             <h1 className="text-base font-bold mb-2 flex items-center gap-2 pl-2 text-gray-300">
                 <User className="text-emerald-500 w-4 h-4" /> Nueva Suscripción
             </h1>
@@ -361,10 +406,10 @@ const FormularioAbono: React.FC = () => {
                                     </button>
                                 ))}
                             </div>
-                            <div className={`flex items-center gap-2 ${formData.tipoCochera === 'Movil' ? 'opacity-30 pointer-events-none' : ''}`}>
-                                <input placeholder="N°" className={`${inputStyle} w-14 text-center h-7`} value={formData.numeroCochera} onChange={e => setFormData({ ...formData, numeroCochera: e.target.value })} />
-                                <label className={`flex items-center gap-1.5 cursor-pointer ${formData.tipoCochera === 'Movil' ? 'pointer-events-none opacity-50' : ''}`}>
-                                    <input type="checkbox" className="accent-purple-500 w-3.5 h-3.5" checked={formData.exclusivaOverride} onChange={e => setFormData({ ...formData, exclusivaOverride: e.target.checked })} disabled={formData.tipoCochera === 'Movil'} />
+                            <div className={`flex items-center gap-2 ${formData.tipoCochera !== 'Fija' ? 'opacity-30 pointer-events-none' : ''}`}>
+                                <input placeholder="N°" className={`${inputStyle} w-14 text-center h-7`} value={formData.numeroCochera} onChange={e => setFormData({ ...formData, numeroCochera: e.target.value })} disabled={formData.tipoCochera !== 'Fija'} />
+                                <label className={`flex items-center gap-1.5 cursor-pointer`}>
+                                    <input type="checkbox" className="accent-purple-500 w-3.5 h-3.5" checked={formData.exclusivaOverride} onChange={e => setFormData({ ...formData, exclusivaOverride: e.target.checked })} disabled={formData.tipoCochera !== 'Fija'} />
                                     <span className="text-[10px] font-bold text-purple-400">EXCL</span>
                                 </label>
                             </div>
@@ -484,7 +529,13 @@ const FormularioAbono: React.FC = () => {
                                 </div>
                                 <div className="flex justify-between pt-1">
                                     <span className="text-[10px] text-gray-500 uppercase font-bold">Restante</span>
-                                    <span className="text-xs text-emerald-400 font-bold">{Math.max(0, 31 - new Date().getDate())}d</span>
+                                    <span className="text-xs text-emerald-400 font-bold">
+                                        {(() => {
+                                            const now = new Date();
+                                            const ultimoDiaMes = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+                                            return Math.max(0, (ultimoDiaMes - now.getDate()) + 1);
+                                        })()}d
+                                    </span>
                                 </div>
                             </div>
 
@@ -507,6 +558,15 @@ const FormularioAbono: React.FC = () => {
                 </div>
             </div>
 
+            {showSuccessScreen && (
+                <div className="absolute inset-0 z-50 bg-[#0a0a0a]/90 backdrop-blur-sm flex flex-col items-center justify-center animate-in fade-in duration-300">
+                    <div className="w-20 h-20 bg-emerald-500/20 rounded-full flex items-center justify-center mb-4">
+                        <Check className="w-10 h-10 text-emerald-500 animate-[pulse_1s_ease-in-out_infinite]" />
+                    </div>
+                    <h2 className="text-2xl font-black text-white tracking-widest uppercase mb-2">Operación Exitosa</h2>
+                    <p className="text-emerald-500/80 font-bold uppercase tracking-wider text-sm">El abono ha sido registrado correctamente</p>
+                </div>
+            )}
             <WebcamModal isOpen={showCameraModal} onClose={() => setShowCameraModal(false)} onCapture={handleCapture} label={activePhotoField || 'Doc'} />
         </div>
     );

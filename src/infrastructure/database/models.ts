@@ -1,6 +1,6 @@
 import mongoose, { Schema } from 'mongoose';
 import {
-    Vehicle, Customer, Subscription, Movement, Shift, Employee
+    Vehicle, Customer, Subscription, Movement, Shift, Employee, Debt
 } from '../../shared/schemas';
 
 // --- Vehicle ---
@@ -57,6 +57,21 @@ const SubscriptionSchema = new Schema<Subscription>({
 });
 
 export const SubscriptionModel = mongoose.model<Subscription>('Subscription', SubscriptionSchema);
+
+// --- Debt ---
+const DebtSchema = new Schema<Debt>({
+    id: { type: String, required: true, unique: true },
+    subscriptionId: { type: String, required: true },
+    customerId: { type: String, required: true },
+    amount: { type: Number, required: true, min: 0 },
+    surchargeApplied: { type: Number, default: 0 },
+    status: { type: String, enum: ['PENDING', 'PAID', 'CANCELLED'], default: 'PENDING' },
+    dueDate: { type: Date, required: true },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now }
+});
+
+export const DebtModel = mongoose.model<Debt>('Debt', DebtSchema);
 
 // --- Stay ---
 const StaySchema = new Schema<import('../../shared/schemas').Stay>({

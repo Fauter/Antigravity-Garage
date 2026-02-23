@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Ticket, Wallet, LogOut, User as UserIcon, Eye, Settings } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { LayoutDashboard, Ticket, Wallet, LogOut, User as UserIcon, Eye, Settings, Database, Loader2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -8,14 +8,56 @@ interface MainLayoutProps {
     children: React.ReactNode;
 }
 
+const SyncOverlay: React.FC<{ isVisible: boolean }> = ({ isVisible }) => {
+    if (!isVisible) return null;
+
+    return (
+        <div className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-sm flex flex-col items-center justify-center overflow-hidden">
+            <div className="relative flex flex-col items-center p-12 border border-emerald-500/30 rounded-2xl bg-gray-950/90 shadow-[0_0_80px_-15px_rgba(4,120,87,0.4)]">
+
+                {/* Rotating Elements */}
+                <div className="absolute w-40 h-40 border-t-2 border-l-2 border-emerald-500/40 rounded-full animate-spin" style={{ animationDuration: '3s' }}></div>
+                <div className="absolute w-32 h-32 border-b-2 border-r-2 border-emerald-400/40 rounded-full animate-spin" style={{ animationDuration: '2s', animationDirection: 'reverse' }}></div>
+
+                <div className="relative bg-black rounded-full p-5 mb-8 border border-emerald-500/20 shadow-inner">
+                    <Database className="w-12 h-12 text-emerald-400 animate-pulse" />
+                </div>
+
+                <h2 className="text-2xl font-mono font-bold text-emerald-400 tracking-[0.2em] mb-2 animate-pulse text-center">
+                    SINCRONIZANDO
+                </h2>
+                <h3 className="text-xs font-mono text-emerald-500/60 tracking-widest text-center">
+                    Pulleando datos...
+                </h3>
+
+                <div className="mt-10 flex items-center justify-center gap-3 bg-black/50 px-4 py-2 rounded-full border border-emerald-900/50">
+                    <Loader2 className="w-4 h-4 text-emerald-500 animate-spin" />
+                    <span className="text-emerald-500/80 font-mono text-[10px] uppercase tracking-wider font-bold">Por favor espere</span>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     // Added 'config' back to activeTab
     const [activeTab, setActiveTab] = useState<'operador' | 'abonos' | 'caja' | 'audit' | 'config'>('operador');
     const [garageConfig, setGarageConfig] = useState<{ name: string; address: string } | null>(null);
+    const [refreshKey, setRefreshKey] = useState(0);
 
     const location = useLocation();
     const { user, logout, isGlobalSyncing } = useAuth();
     const navigate = useNavigate();
+
+    // Auto-refresh logic when sync completes
+    const prevSyncingRef = useRef(isGlobalSyncing);
+
+    useEffect(() => {
+        if (prevSyncingRef.current && !isGlobalSyncing) {
+            setRefreshKey(prev => prev + 1);
+        }
+        prevSyncingRef.current = isGlobalSyncing;
+    }, [isGlobalSyncing]);
 
     // Load Terminal Config for Branding
     useEffect(() => {
@@ -66,6 +108,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
 
     return (
         <div className="h-screen overflow-hidden bg-black text-gray-200 font-sans selection:bg-emerald-500/30 flex flex-col">
+            <SyncOverlay isVisible={isGlobalSyncing} />
 
             {/* --- HEADER --- */}
             <header className="h-14 border-b border-gray-800 bg-gray-950 flex items-center justify-between px-4 shrink-0 z-50">
@@ -109,12 +152,6 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                         icon={<Ticket className="w-4 h-4" />}
                         label="Abonos"
                     />
-                    <NavButton
-                        active={activeTab === 'caja'}
-                        onClick={() => handleTabChange('caja')}
-                        icon={<Wallet className="w-4 h-4" />}
-                        label="Caja"
-                    />
                     {/* RESTORED Config Button */}
                     <NavButton
                         active={activeTab === 'config'}
@@ -144,7 +181,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
             </header>
 
             {/* --- CONTENT AREA --- */}
-            <main className="flex-1 overflow-auto relative">
+            <main key={refreshKey} className="flex-1 overflow-auto relative">
                 {children}
             </main>
         </div>

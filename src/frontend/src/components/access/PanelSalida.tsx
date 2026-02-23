@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, DollarSign, Wallet, CreditCard, QrCode, Camera, Printer, LogOut, Car } from 'lucide-react';
+import { Search, DollarSign, Wallet, CreditCard, QrCode, Camera, Printer, LogOut, Car, CheckCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../../services/api';
 
@@ -61,24 +61,29 @@ const useExitLogic = () => {
         setLoading(true);
         try {
             // Include operator in the request
-            await api.post('/estadias/salida', {
+            const res = await api.post('/estadias/salida', {
                 plate,
                 paymentMethod,
                 invoiceType,
                 operator: operatorName
             });
-            setStay(null);
-            setPrice(0);
-            return true;
+            return res.data;
         } catch (err: any) {
             setError(err.message);
-            return false;
+            return null;
         } finally {
             setLoading(false);
         }
     };
 
-    return { searchStay, stay, price, setPrice, basePrice, loading, error, isSubscriber, processExit };
+    const resetLogic = () => {
+        setStay(null);
+        setPrice(0);
+        setBasePrice(0);
+        setError(null);
+    };
+
+    return { searchStay, stay, price, setPrice, basePrice, loading, error, isSubscriber, processExit, resetLogic };
 };
 
 const PanelSalida: React.FC = () => {
@@ -86,8 +91,9 @@ const PanelSalida: React.FC = () => {
     const [paymentMethod, setPaymentMethod] = useState<string | null>(null);
     const [invoiceType, setInvoiceType] = useState('Final');
     const [promo, setPromo] = useState('NINGUNA');
+    const [showSuccess, setShowSuccess] = useState(false);
 
-    const { searchStay, stay, price, setPrice, loading, error, isSubscriber, processExit } = useExitLogic();
+    const { searchStay, stay, price, setPrice, loading, error, isSubscriber, processExit, resetLogic } = useExitLogic();
     const { isGlobalSyncing, operatorName } = useAuth();
 
     const handleSearch = (e: React.FormEvent) => {
@@ -152,33 +158,41 @@ const PanelSalida: React.FC = () => {
         const method = isSubscriber ? 'Efectivo' : (paymentMethod || 'Efectivo');
         const invoice = isSubscriber ? 'Final' : (invoiceType || 'Final');
 
-        const success = await processExit(stay.plate, method, invoice);
-        if (success) {
+        const result = await processExit(stay.plate, method, invoice);
+        if (result) {
+            // TICKET (x2)
+            // Even if subscriber, let's print the exit ticket (which has ABONADO title) as per the printer service support
+            const exitStay = result.stay || { ...stay, exitTime: new Date() };
+            const exitMovement = result.movement || {
+                amount: price,
+                paymentMethod: method,
+                operator: operatorName,
+                notes: isSubscriber ? 'Abonado' : 'Salida Registrada'
+            };
+            PrinterService.printExitTicket(exitStay, exitMovement);
+
             toast.success(`Salida ok: ${stay.plate}`, {
                 description: isSubscriber ? 'Abonado (Sin Cargo)' : `Cobro: ${paymentMethod || 'Aut.'}`
             });
 
-            if (!isSubscriber) {
-                // TICKET (x2)
-                const dummyMovement = {
-                    amount: price,
-                    paymentMethod: paymentMethod || 'Efectivo',
-                    operator: operatorName,
-                    notes: 'Salida Registrada'
-                };
-                PrinterService.printExitTicket({ ...stay, exitTime: new Date() }, dummyMovement);
-            }
+            setShowSuccess(true);
 
-            setPlate('');
-            setPaymentMethod(null);
-            setPromo('NINGUNA');
+            setTimeout(() => {
+                setShowSuccess(false);
+                setPlate('');
+                setPaymentMethod(null);
+                setPromo('NINGUNA');
+                setInvoiceType('Final');
+                resetLogic();
+            }, 2500);
+
         } else {
             toast.error('Error al registrar salida');
         }
     };
 
     return (
-        <div className="flex flex-col h-full bg-gray-950 text-gray-100 overflow-hidden font-sans">
+        <div className="flex flex-col h-full bg-gray-950 text-gray-100 overflow-hidden font-sans relative">
 
             {/* COMPACT HEADER */}
             <div className="px-3 py-2 bg-gray-950 border-b border-gray-800 shrink-0">
@@ -274,13 +288,13 @@ const PanelSalida: React.FC = () => {
                     <div className="px-4 py-3 bg-gray-900/50 border-t border-gray-800 shrink-0">
                         <button
                             onClick={handleExit}
-                            disabled={isGlobalSyncing}
-                            className={`w-full h-14 rounded-xl font-bold text-2xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${isGlobalSyncing
+                            disabled={isGlobalSyncing || showSuccess}
+                            className={`w-full h-14 rounded-xl font-bold text-2xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(isGlobalSyncing || showSuccess)
                                 ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
                                 : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/30'
                                 }`}
                         >
-                            {isGlobalSyncing ? 'Sincronizando...' : 'Liberar Salida'}
+                            {isGlobalSyncing ? 'Sincronizando...' : showSuccess ? 'Confirmando...' : 'Liberar Salida'}
                         </button>
                     </div>
                 </>
@@ -362,18 +376,37 @@ const PanelSalida: React.FC = () => {
 
                         <button
                             onClick={handleExit}
-                            disabled={!paymentMethod || isGlobalSyncing}
-                            className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(!paymentMethod || isGlobalSyncing)
+                            disabled={!paymentMethod || isGlobalSyncing || showSuccess}
+                            className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(!paymentMethod || isGlobalSyncing || showSuccess)
                                 ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
                                 : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/30 ring-1 ring-white/10'
                                 }`}
                         >
-                            {isGlobalSyncing ? 'Sincronizando...' : 'Registrar Salida'}
+                            {isGlobalSyncing ? 'Sincronizando...' : showSuccess ? 'Confirmando...' : 'Registrar Salida'}
                         </button>
                     </div>
                 </>
             ) : null}
 
+            {/* SUCCESS OVERLAY */}
+            {showSuccess && stay && (
+                <div className="absolute inset-0 z-50 bg-gray-950/95 backdrop-blur-md flex flex-col items-center justify-center animate-in fade-in duration-300">
+                    <div className={`w-28 h-28 mb-6 rounded-full flex items-center justify-center shadow-2xl ${isSubscriber ? 'bg-emerald-500/20 shadow-emerald-500/20' : 'bg-blue-500/20 shadow-blue-500/20'}`}>
+                        <CheckCircle className={`w-16 h-16 animate-[pulse_1s_ease-in-out_infinite] ${isSubscriber ? 'text-emerald-500' : 'text-blue-500'}`} />
+                    </div>
+                    <div className="text-center font-bold">
+                        <h2 className={`text-4xl font-black tracking-widest uppercase mb-3 ${isSubscriber ? 'text-emerald-400' : 'text-blue-400'}`}>
+                            SALIDA REGISTRADA
+                        </h2>
+                        <div className="text-white font-mono text-5xl tracking-widest bg-black/60 px-6 py-3 rounded-lg border border-gray-800 inline-block mb-4 mt-2">
+                            {stay.plate}
+                        </div>
+                        <p className="text-gray-400 uppercase tracking-widest text-sm font-bold">
+                            {isSubscriber ? 'Vehículo Abonado' : `Cobro Efectuado - ${paymentMethod || 'Efectivo'}`}
+                        </p>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

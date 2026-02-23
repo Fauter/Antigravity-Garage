@@ -58,6 +58,8 @@ export const startServer = async () => {
     app.get('/api/cocheras', garageController.getAllCocheras.bind(garageController));
     app.post('/api/cocheras', garageController.createCochera.bind(garageController));
     app.patch('/api/cocheras/:id', garageController.updateCochera.bind(garageController));
+    app.post('/api/cocheras/desvincular-vehiculo', garageController.unassignVehicle ? garageController.unassignVehicle.bind(garageController) : (r, s) => s.status(404).send());
+    app.post('/api/cocheras/liberar', garageController.releaseCochera ? garageController.releaseCochera.bind(garageController) : (r, s) => s.status(404).send());
 
     // Subscriptions logic
     app.get('/api/abonos', garageController.getSubscriptions ? garageController.getSubscriptions.bind(garageController) : (r, s) => s.status(404).send('Method not found'));
@@ -67,7 +69,9 @@ export const startServer = async () => {
     app.get('/api/clientes', garageController.findClientByDni ? garageController.findClientByDni.bind(garageController) : (r, s) => s.status(404).send());
     app.post('/api/clientes', garageController.createClient ? garageController.createClient.bind(garageController) : (r, s) => s.status(404).send());
     app.get('/api/clientes/:id', garageController.getCustomerById ? garageController.getCustomerById.bind(garageController) : (r, s) => s.status(404).send());
+    app.get('/api/deudas/:clientId', garageController.getDebtsByCustomer ? garageController.getDebtsByCustomer.bind(garageController) : (r, s) => s.status(404).send());
     app.get('/api/vehiculos', garageController.getVehicles ? garageController.getVehicles.bind(garageController) : (r, s) => s.status(404).send());
+
     app.get('/api/vehiculos/:plate', garageController.getVehicleByPlate ? garageController.getVehicleByPlate.bind(garageController) : (r, s) => s.status(404).send());
     app.patch('/api/clientes/:id', garageController.updateCustomer ? garageController.updateCustomer.bind(garageController) : (r, s) => s.status(404).send());
 

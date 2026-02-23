@@ -133,7 +133,8 @@
     "tipo": "Exclusiva",
     "numero": "37",
     "vehiculos": [
-      "ALR344"
+      "ALR344",
+      "ZXE213"
     ],
     "clienteId": "9ebc9d83-9cc7-48b5-8734-64c234d8ebf8",
     "precioBase": 420000,
@@ -144,7 +145,8 @@
     "tipo": "Fija",
     "numero": "13",
     "vehiculos": [
-      "SMX445"
+      "SMX445",
+      "SNC309"
     ],
     "clienteId": "76ee4dab-492c-484f-aeca-e344f2db54e0",
     "precioBase": 710000,
@@ -155,10 +157,141 @@
     "tipo": "Fija",
     "numero": "12",
     "vehiculos": [
-      "AQT455CC"
+      "AQT455CC",
+      "AQL309"
     ],
     "clienteId": "91ce074d-bbcf-4199-a4bd-ebf8e630cee0",
     "precioBase": 710000,
     "garageId": "bf23b678-d87d-43a5-8635-670fc383342a"
+  },
+  {
+    "id": "6b643572-5cad-4485-a09d-db90c624b7d2",
+    "tipo": "Movil",
+    "vehiculos": [
+      "ASLKDSO209"
+    ],
+    "clienteId": "b0d7cd02-ffef-4215-a425-ba551f5a5e17",
+    "precioBase": 770000,
+    "garageId": "bf23b678-d87d-43a5-8635-670fc383342a"
+  },
+  {
+    "id": "c8caf0a1-12e3-4366-9fe8-3aa3a5c790de",
+    "tipo": "Fija",
+    "numero": "A10",
+    "vehiculos": [
+      "MWC299",
+      "XNU341"
+    ],
+    "clienteId": "2aae4e18-020a-4147-870b-2a872d286cfc",
+    "precioBase": 610000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "078073d6-eef2-443b-a834-aaae5e9d8c2e",
+    "tipo": "Fija",
+    "numero": "54",
+    "vehiculos": [
+      "RCS233"
+    ],
+    "clienteId": "9ebc9d83-9cc7-48b5-8734-64c234d8ebf8",
+    "precioBase": 410000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "9bce6dcc-3e48-45fb-ba3f-5e822e471480",
+    "tipo": "Fija",
+    "numero": "756",
+    "vehiculos": [
+      "ZMXI2093",
+      "DC341CG"
+    ],
+    "clienteId": "014baa4d-c453-4dc6-8a97-418c785cdca4",
+    "precioBase": 710000,
+    "garageId": "bf23b678-d87d-43a5-8635-670fc383342a"
+  },
+  {
+    "id": "01d704e4-cf01-42ae-8fee-3a2dd795b76a",
+    "tipo": "Fija",
+    "numero": "117",
+    "vehiculos": [
+      "AWE2039",
+      "FDS739"
+    ],
+    "clienteId": "db94ea81-43f7-4d62-ac70-8999fe963e11",
+    "precioBase": 710000,
+    "garageId": "bf23b678-d87d-43a5-8635-670fc383342a"
+  },
+  {
+    "id": "61ba7a35-d4cf-4bb8-bc10-bd8e2817ea4e",
+    "tipo": "Fija",
+    "numero": "36",
+    "vehiculos": [
+      "CM931FF",
+      "WS209CC"
+    ],
+    "clienteId": "f430a50d-dc54-4c33-8407-f0b07d550608",
+    "precioBase": 610000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "89f02552-1ba7-45e1-9e42-7125b4108b9c",
+    "tipo": "Fija",
+    "numero": "77",
+    "vehiculos": [
+      "DMS202"
+    ],
+    "clienteId": "9d99a59f-23b4-40a9-a831-7506e2eeb91c",
+    "precioBase": 451000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "001c86c4-066e-49a9-86d1-b39b9f74ec96",
+    "tipo": "Exclusiva",
+    "numero": "314",
+    "vehiculos": [
+      "ZQ0294DCC"
+    ],
+    "clienteId": "d61c2429-3a0d-4b28-80fa-59c1e7426596",
+    "precioBase": 620000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "5b448748-d602-4430-88fe-4c79aad0c14b",
+    "tipo": "Fija",
+    "numero": "22",
+    "vehiculos": [],
+    "clienteId": "47789efd-257c-4184-9946-17c0ee51abef",
+    "precioBase": 451000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "551c2da4-1ae1-4374-83a4-a860deff25fc",
+    "tipo": "Fija",
+    "numero": "55",
+    "vehiculos": [],
+    "clienteId": null,
+    "precioBase": 671000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02",
+    "status": "Disponible"
+  },
+  {
+    "id": "6274fbdb-9d1c-4095-80b2-098d715f7268",
+    "tipo": "Fija",
+    "numero": "58",
+    "vehiculos": [],
+    "clienteId": null,
+    "precioBase": 410000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02",
+    "status": "Disponible"
+  },
+  {
+    "id": "7898727d-a81c-43e7-8bf2-08928964a679",
+    "tipo": "Fija",
+    "numero": "777",
+    "vehiculos": [],
+    "clienteId": null,
+    "precioBase": 451000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02",
+    "status": "Disponible"
   }
 ]

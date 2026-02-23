@@ -82,6 +82,27 @@ export const SubscriptionSchema = z.object({
 export type Subscription = z.infer<typeof SubscriptionSchema>;
 
 /**
+ * Debt / Deuda
+ * Almacena las deudas generadas por falta de pago de abonos.
+ */
+export const DebtStatusEnum = z.enum(['PENDING', 'PAID', 'CANCELLED']);
+export type DebtStatus = z.infer<typeof DebtStatusEnum>;
+
+export const DebtSchema = z.object({
+  id: UuidSchema,
+  subscriptionId: UuidSchema,
+  customerId: UuidSchema,
+  amount: z.number().min(0),
+  surchargeApplied: z.number().min(0).default(0),
+  status: DebtStatusEnum.default('PENDING'),
+  dueDate: TimestampSchema,
+  createdAt: TimestampSchema.default(() => new Date()),
+  updatedAt: TimestampSchema.default(() => new Date()),
+});
+export type Debt = z.infer<typeof DebtSchema>;
+
+
+/**
  * Stay / Estancia
  * Registro de la presencia física de un vehículo. (Entrada/Salida física)
  */

@@ -254,4 +254,27 @@ export class PricingEngine {
         const prorated = (monthlyPrice / daysInMonth) * remainingDays;
         return Math.floor(prorated);
     }
+
+    // --- Surcharge / Debt Logic (Mora Flexible) ---
+    static calculateSurcharge(baseAmount: number, config: any = {}): number {
+        try {
+            const today = new Date().getDate();
+            const rate11 = config?.apartirdia11 != null ? Number(config.apartirdia11) : 0;
+            const rate22 = config?.apartirdia22 != null ? Number(config.apartirdia22) : 0;
+
+            let surchargePercentage = 0;
+
+            if (today >= 22) {
+                surchargePercentage = rate22;
+            } else if (today >= 11) {
+                surchargePercentage = rate11;
+            }
+
+            if (surchargePercentage === 0) return 0;
+            return Math.floor(baseAmount * (surchargePercentage / 100));
+        } catch (error) {
+            console.error("[PricingEngine] Fallo calculando recargo, devolviendo 0 (Fallback robusto):", error);
+            return 0;
+        }
+    }
 }

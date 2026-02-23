@@ -20,7 +20,7 @@ const GestorAbonos: React.FC = () => {
     };
 
     return (
-        <div className="h-full flex flex-col bg-gray-950/50 backdrop-blur-sm">
+        <div className="min-h-full flex flex-col bg-gray-950/50 backdrop-blur-sm">
             {view === 'list' && (
                 <ListaAbonados
                     onNewClick={() => setView('new')}
