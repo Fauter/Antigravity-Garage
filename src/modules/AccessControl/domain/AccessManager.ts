@@ -51,7 +51,7 @@ export class AccessManager {
         garageId?: string,
         ownerId?: string,
         ticketNumber?: number
-    ): Promise<{ closedStay: Stay; exitMovement: Movement; price: number }> {
+    ): Promise<{ closedStay: Stay; exitMovement: Movement | null; price: number }> {
         if (!stay.active) {
             throw new Error('La estancia ya está cerrada.');
         }
@@ -97,34 +97,43 @@ export class AccessManager {
 
         const engine = new PricingEngine(tariffRepo as any, paramRepo as any, priceRepo);
 
-        // 1. Calculate Price
+        // 1. Calculate Price & Handle Subscriber Scenario
         let price = 0;
         let notes = '';
 
-        if (stay.isSubscriber) {
+        const closedStay: Stay = {
+            ...stay,
+            active: false,
+            exitTime: exitDate
+        };
+
+        if ((stay as any).is_subscriber || stay.isSubscriber) {
             price = 0;
             notes = `Salida Abonado - (ID: ${stay.subscriptionId?.slice(0, 8) || 'N/A'})`;
-            console.log(`💎 Exit: Subscriber Departure for ${stay.plate}. Price set to $0.`);
-        } else {
-            price = await engine.calculateParkingFee(
-                stay,
-                exitDate,
-                paymentMethod
-            );
+            console.log(`💎 Exit: Subscriber Departure for ${stay.plate}. Movement Skipped.`);
+
+            return {
+                closedStay: StaySchema.parse(closedStay),
+                exitMovement: null, // Abonados no generan movimiento contable (está prepagado en /abonos)
+                price: 0
+            };
         }
 
-        // Calculate Duration for Notes (Append if subscriber)
+        // NON-SUBSCRIBER LOGIC:
+        price = await engine.calculateParkingFee(
+            stay,
+            exitDate,
+            paymentMethod
+        );
+
+        // Calculate Duration for Notes
         const durationMs = exitDate.getTime() - new Date(stay.entryTime).getTime();
         const durationMin = Math.ceil(durationMs / 60000);
         const hours = Math.floor(durationMin / 60);
         const mins = durationMin % 60;
         const timeString = `${hours}:${mins.toString().padStart(2, '0')}hs`;
 
-        if (!stay.isSubscriber) {
-            notes = `Por ${timeString}`;
-        } else {
-            notes += ` - Tiempo: ${timeString}`;
-        }
+        notes = `Por ${timeString}`;
 
         const exitMovement: Movement = {
             id: uuidv4(),
@@ -139,16 +148,8 @@ export class AccessManager {
             operator: operator || 'Sistema',
             invoiceType: invoiceType || 'Final',
             plate: stay.plate,
-
             notes: notes,
-
             createdAt: new Date(),
-        };
-
-        const closedStay: Stay = {
-            ...stay,
-            active: false,
-            exitTime: exitDate
         };
 
         return {

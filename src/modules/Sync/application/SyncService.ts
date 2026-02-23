@@ -5,6 +5,7 @@ import { QueueService } from '../../Sync/application/QueueService.js';
 export class SyncService {
     private queue = new QueueService();
     private isSyncing = false;
+    public isGlobalSyncing: boolean = false;
     private syncInterval: NodeJS.Timeout | null = null;
     private garageId: string | null = null;
 
@@ -108,6 +109,7 @@ export class SyncService {
     async pullAllData(garageId: string) {
         console.log(`📥 Sync: Pulling all data for Garage ${garageId}...`);
         this.garageId = garageId;
+        this.isGlobalSyncing = true;
 
         try {
             // 0. Clean Local State (Avoid Ghost Records)
@@ -140,8 +142,10 @@ export class SyncService {
             await this.fetchTable('subscriptions', garageId, 'Subscription');
 
             console.log('✅ Sync: Bootstrap Complete.');
+            this.isGlobalSyncing = false;
         } catch (error) {
             console.error('❌ Sync: Bootstrap Failed', error);
+            this.isGlobalSyncing = false;
             throw error;
         }
     }
@@ -373,5 +377,6 @@ const instance = new SyncService();
 export const syncService = {
     pullAllData: instance.pullAllData.bind(instance),
     initRealtime: instance.initRealtime.bind(instance),
-    processQueue: instance.processQueue.bind(instance)
+    processQueue: instance.processQueue.bind(instance),
+    get isGlobalSyncing() { return instance.isGlobalSyncing; }
 };

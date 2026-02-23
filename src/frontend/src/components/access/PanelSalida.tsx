@@ -23,25 +23,27 @@ const useExitLogic = () => {
     const [price, setPrice] = useState<number>(0);
     const [basePrice, setBasePrice] = useState<number>(0);
     const [error, setError] = useState<string | null>(null);
-    const [isSubscriber, setIsSubscriber] = useState(false);
     const { user } = useAuth();
+
+    const isSubscriber = Boolean(stay?.is_subscriber);
 
     const searchStay = async (plate: string) => {
         setLoading(true);
         setError(null);
-        setIsSubscriber(false);
         setStay(null);
         setPrice(0);
         setBasePrice(0);
 
         try {
             const res = await api.get(`/estadias/activa/${plate}`);
+            console.log('📡 [API Response] Data recibida:', res.data);
+            console.log('🔍 [Subscriber Check] Valor de is_subscriber:', res.data.is_subscriber);
+            console.log('🏗️ [UI State] Seteando isSubscriber derivado como:', Boolean(res.data.is_subscriber));
+
             setStay(res.data);
 
-            if (plate.startsWith('ABO')) {
-                setIsSubscriber(true);
-            } else {
-                if (res.data) {
+            if (res.data) {
+                if (!res.data.is_subscriber) {
                     setBasePrice(0);
                     setPrice(0); // Default to 0, wait for payment method
                 }
@@ -86,6 +88,7 @@ const PanelSalida: React.FC = () => {
     const [promo, setPromo] = useState('NINGUNA');
 
     const { searchStay, stay, price, setPrice, loading, error, isSubscriber, processExit } = useExitLogic();
+    const { isGlobalSyncing } = useAuth();
 
     const handleSearch = (e: React.FormEvent) => {
         e.preventDefault();
@@ -95,6 +98,8 @@ const PanelSalida: React.FC = () => {
 
     // Calculation Logic
     useEffect(() => {
+        if (isSubscriber) return;
+
         const calculate = async () => {
             if (!stay || isSubscriber || !paymentMethod) return;
 
@@ -134,7 +139,7 @@ const PanelSalida: React.FC = () => {
                 setPrice(0);
             }
         }
-    }, [paymentMethod, stay, promo]);
+    }, [paymentMethod, stay, promo, isSubscriber]);
 
 
 
@@ -143,29 +148,26 @@ const PanelSalida: React.FC = () => {
     // ... inside handleExit
     const handleExit = async () => {
         if (!stay) return;
-        const success = await processExit(stay.plate, paymentMethod || 'Efectivo', invoiceType || 'Final');
+
+        const method = isSubscriber ? 'Efectivo' : (paymentMethod || 'Efectivo');
+        const invoice = isSubscriber ? 'Final' : (invoiceType || 'Final');
+
+        const success = await processExit(stay.plate, method, invoice);
         if (success) {
             toast.success(`Salida ok: ${stay.plate}`, {
-                description: `Cobro: ${paymentMethod || 'Aut.'}`
+                description: isSubscriber ? 'Abonado (Sin Cargo)' : `Cobro: ${paymentMethod || 'Aut.'}`
             });
 
-            // TICKET (x2)
-            // We need the movement data for the ticket. 
-            // processExit returns true/false, but we might want the response data.
-            // For now, let's look at how processExit is implemented in useExitLogic or we assume success implies we can print.
-            // Actually, processExit in useExitLogic doesn't return the movement. 
-            // We should update useExitLogic or just print with available data + price.
-            // Wait, we can't fully print without the backend response (notes, final amount might vary if backend recalculated).
-            // Let's print a "Client Estimate" or update useExitLogic to return data.
-            // For "Rescue", let's reconstruct the print data from local state.
-
-            const dummyMovement = {
-                amount: price,
-                paymentMethod: paymentMethod || 'Efectivo',
-                operator: 'Operador',
-                notes: 'Salida Registrada' // We don't have the exact notes from backend here easily without refactoring useExitLogic return.
-            };
-            PrinterService.printExitTicket({ ...stay, exitTime: new Date() }, dummyMovement);
+            if (!isSubscriber) {
+                // TICKET (x2)
+                const dummyMovement = {
+                    amount: price,
+                    paymentMethod: paymentMethod || 'Efectivo',
+                    operator: 'Operador',
+                    notes: 'Salida Registrada'
+                };
+                PrinterService.printExitTicket({ ...stay, exitTime: new Date() }, dummyMovement);
+            }
 
             setPlate('');
             setPaymentMethod(null);
@@ -258,10 +260,33 @@ const PanelSalida: React.FC = () => {
                 </div>
             </div>
 
-            {/* --- MIDDLE SECTION (CONTROLS) --- */}
-            <div className="flex-1 p-3 bg-gray-950 flex flex-col justify-center gap-3 overflow-y-auto">
-                {stay && !isSubscriber && (
-                    <>
+            {/* --- MIDDLE SECTION & FOOTER (STRICT BIFURCATION) --- */}
+            {stay && isSubscriber ? (
+                <>
+                    <div className="flex-1 p-3 bg-gray-950 flex flex-col justify-center gap-3 overflow-y-auto">
+                        <div className="flex-1 flex items-center justify-center bg-emerald-900/20 rounded-xl border border-dashed border-emerald-800/50 p-4">
+                            <div className="text-center">
+                                <h4 className="text-emerald-500 font-black text-3xl mb-2 tracking-widest">VEHÍCULO ABONADO</h4>
+                                <p className="text-emerald-400/80 text-base">Salida confirmada sin cargo.</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div className="px-4 py-3 bg-gray-900/50 border-t border-gray-800 shrink-0">
+                        <button
+                            onClick={handleExit}
+                            disabled={isGlobalSyncing}
+                            className={`w-full h-14 rounded-xl font-bold text-2xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${isGlobalSyncing
+                                ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
+                                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/30'
+                                }`}
+                        >
+                            {isGlobalSyncing ? 'Sincronizando...' : 'Liberar Salida'}
+                        </button>
+                    </div>
+                </>
+            ) : stay ? (
+                <>
+                    <div className="flex-1 p-3 bg-gray-950 flex flex-col justify-center gap-3 overflow-y-auto">
                         {/* Payment Row */}
                         <div>
                             <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-1 block">Medio de Pago</label>
@@ -308,62 +333,46 @@ const PanelSalida: React.FC = () => {
                                 ))}
                             </div>
                         </div>
-                    </>
-                )}
-
-                {stay && isSubscriber && (
-                    <div className="flex-1 flex items-center justify-center bg-gray-900/30 rounded-xl border border-dashed border-gray-800 p-4">
-                        <div className="text-center">
-                            <h4 className="text-emerald-500 font-bold text-lg mb-0.5">Abonado Verificado</h4>
-                            <p className="text-gray-500 text-xs">Salida permitida sin cargo.</p>
-                        </div>
                     </div>
-                )}
-            </div>
 
-            {/* --- COMPACT FOOTER (ACTION + PRICE) --- */}
-            <div className="px-4 py-3 bg-gray-900/50 border-t border-gray-800 shrink-0">
+                    <div className="px-4 py-3 bg-gray-900/50 border-t border-gray-800 shrink-0">
+                        <div className="bg-gray-950 border border-gray-800 rounded-xl p-3 flex justify-center items-center gap-8 mb-3 shadow-inner">
+                            <div className="text-center">
+                                <span className="text-gray-600 text-[10px] font-bold uppercase tracking-widest block mb-1">Total a Pagar</span>
+                                <span className={`text-5xl font-black tracking-tighter block ${price > 0 ? 'text-white drop-shadow-md' : 'text-gray-700'}`}>
+                                    ${price.toLocaleString()}
+                                </span>
+                            </div>
 
-                {/* Price & Promo (Centered & Imposing) */}
-                {stay && !isSubscriber && (
-                    <div className="bg-gray-950 border border-gray-800 rounded-xl p-3 flex justify-center items-center gap-8 mb-3 shadow-inner">
-                        <div className="text-center">
-                            <span className="text-gray-600 text-[10px] font-bold uppercase tracking-widest block mb-1">Total a Pagar</span>
-                            <span className={`text-5xl font-black tracking-tighter block ${price > 0 ? 'text-white drop-shadow-md' : 'text-gray-700'}`}>
-                                ${price.toLocaleString()}
-                            </span>
+                            <div className="h-12 w-[1px] bg-gray-800"></div> {/* Divider */}
+
+                            <div className="w-48">
+                                <span className="text-gray-600 text-[10px] font-bold uppercase tracking-widest block mb-1">Descuento / Promo</span>
+                                <select
+                                    value={promo}
+                                    onChange={(e) => setPromo(e.target.value)}
+                                    className="w-full h-12 bg-gray-900 border border-gray-700 text-white text-base rounded-lg px-3 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none cursor-pointer hover:border-gray-600 transition-colors"
+                                >
+                                    <option value="NINGUNA">Ninguna</option>
+                                    <option value="VISITA">Visita (100%)</option>
+                                    <option value="LOCAL">Local (-$1000)</option>
+                                </select>
+                            </div>
                         </div>
 
-                        <div className="h-12 w-[1px] bg-gray-800"></div> {/* Divider */}
-
-                        <div className="w-48">
-                            <span className="text-gray-600 text-[10px] font-bold uppercase tracking-widest block mb-1">Descuento / Promo</span>
-                            <select
-                                value={promo}
-                                onChange={(e) => setPromo(e.target.value)}
-                                className="w-full h-12 bg-gray-900 border border-gray-700 text-white text-base rounded-lg px-3 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none cursor-pointer hover:border-gray-600 transition-colors"
-                            >
-                                <option value="NINGUNA">Ninguna</option>
-                                <option value="VISITA">Visita (100%)</option>
-                                <option value="LOCAL">Local (-$1000)</option>
-                            </select>
-                        </div>
+                        <button
+                            onClick={handleExit}
+                            disabled={!paymentMethod || isGlobalSyncing}
+                            className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(!paymentMethod || isGlobalSyncing)
+                                ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
+                                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/30 ring-1 ring-white/10'
+                                }`}
+                        >
+                            {isGlobalSyncing ? 'Sincronizando...' : 'Registrar Salida'}
+                        </button>
                     </div>
-                )}
-
-                <button
-                    onClick={handleExit}
-                    disabled={!stay || (!isSubscriber && !paymentMethod)}
-                    className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${!stay || (!isSubscriber && !paymentMethod)
-                        ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
-                        : isSubscriber
-                            ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/30'
-                            : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/30 ring-1 ring-white/10'
-                        }`}
-                >
-                    {isSubscriber ? 'Liberar Salida' : 'Registrar Salida'}
-                </button>
-            </div>
+                </>
+            ) : null}
 
         </div>
     );

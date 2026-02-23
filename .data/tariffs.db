@@ -1,18 +1,78 @@
-{"id":"89c68d2e-db76-4e19-bc9d-7b1283af83c0","name":"Media Estadía","type":"hora","days":0,"hours":12,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":14,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"3iGqN3s5pDJAxkz7","createdAt":{"$$date":1771806842621},"updatedAt":{"$$date":1771806842621}}
-{"id":"d5108cb1-4390-4a1d-a6f4-5d84a4922b31","name":"Estadía","type":"hora","days":0,"hours":24,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":15,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"BWckTCRrJ8Zo1jOA","createdAt":{"$$date":1771806842623},"updatedAt":{"$$date":1771806842623}}
-{"id":"68afd99a-d46e-42ea-941d-4adb2103097a","name":"Hora","type":"hora","days":0,"hours":1,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":13,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"PpqlCueeuGAQOXG9","createdAt":{"$$date":1771806842618},"updatedAt":{"$$date":1771806842618}}
-{"id":"0067526e-f817-48d6-930f-fc8af0ca71c7","name":"Movil","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":900,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"jSH348ZTuyndpZmX","createdAt":{"$$date":1771806842610},"updatedAt":{"$$date":1771806842610}}
-{"id":"98ac8e89-c127-4fa5-92a3-13e4d10e9915","name":"Fija","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":901,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"lTcGTN0yyoR6x7OP","createdAt":{"$$date":1771806842613},"updatedAt":{"$$date":1771806842613}}
-{"id":"44710784-cd25-413f-9857-7cf62f328483","name":"Exclusiva","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":902,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"uF6vUu20VSKTBR85","createdAt":{"$$date":1771806842617},"updatedAt":{"$$date":1771806842617}}
-{"$$deleted":true,"_id":"3iGqN3s5pDJAxkz7"}
-{"$$deleted":true,"_id":"BWckTCRrJ8Zo1jOA"}
-{"$$deleted":true,"_id":"PpqlCueeuGAQOXG9"}
-{"$$deleted":true,"_id":"jSH348ZTuyndpZmX"}
-{"$$deleted":true,"_id":"lTcGTN0yyoR6x7OP"}
-{"$$deleted":true,"_id":"uF6vUu20VSKTBR85"}
-{"id":"0067526e-f817-48d6-930f-fc8af0ca71c7","name":"Movil","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":900,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"KbpM6f708Wr2QrlO","createdAt":{"$$date":1771807795048},"updatedAt":{"$$date":1771807795048}}
-{"id":"98ac8e89-c127-4fa5-92a3-13e4d10e9915","name":"Fija","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":901,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"QNYgRkEU2DXjt73X","createdAt":{"$$date":1771807795048},"updatedAt":{"$$date":1771807795048}}
-{"id":"44710784-cd25-413f-9857-7cf62f328483","name":"Exclusiva","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":902,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"LF8Ua7fEkqICVWJs","createdAt":{"$$date":1771807795048},"updatedAt":{"$$date":1771807795048}}
-{"id":"68afd99a-d46e-42ea-941d-4adb2103097a","name":"Hora","type":"hora","days":0,"hours":1,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":13,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"zEGKZfeKimQCKY6t","createdAt":{"$$date":1771807795048},"updatedAt":{"$$date":1771807795048}}
-{"id":"89c68d2e-db76-4e19-bc9d-7b1283af83c0","name":"Media Estadía","type":"hora","days":0,"hours":12,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":14,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"yukuGlpIBzfTLKZ5","createdAt":{"$$date":1771807795049},"updatedAt":{"$$date":1771807795049}}
-{"id":"d5108cb1-4390-4a1d-a6f4-5d84a4922b31","name":"Estadía","type":"hora","days":0,"hours":24,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":15,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"PTFJYtEVf3lpxWJh","createdAt":{"$$date":1771807795049},"updatedAt":{"$$date":1771807795049}}
+{"id":"89c68d2e-db76-4e19-bc9d-7b1283af83c0","name":"Media Estadía","type":"hora","days":0,"hours":12,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":14,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"Ag3TZoudN9CchD3H","createdAt":{"$$date":1771822828078},"updatedAt":{"$$date":1771822828078}}
+{"id":"44710784-cd25-413f-9857-7cf62f328483","name":"Exclusiva","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":902,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"CtEBEUzYAvqJadMr","createdAt":{"$$date":1771822828078},"updatedAt":{"$$date":1771822828078}}
+{"id":"d5108cb1-4390-4a1d-a6f4-5d84a4922b31","name":"Estadía","type":"hora","days":0,"hours":24,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":15,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"kOp8kcVXxDA8Yg6p","createdAt":{"$$date":1771822828078},"updatedAt":{"$$date":1771822828078}}
+{"id":"68afd99a-d46e-42ea-941d-4adb2103097a","name":"Hora","type":"hora","days":0,"hours":1,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":13,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"oArntFfvt3cLw0Zc","createdAt":{"$$date":1771822828078},"updatedAt":{"$$date":1771822828078}}
+{"id":"0067526e-f817-48d6-930f-fc8af0ca71c7","name":"Movil","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":900,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"q33TxuIinpp6kPL1","createdAt":{"$$date":1771822828078},"updatedAt":{"$$date":1771822828078}}
+{"id":"98ac8e89-c127-4fa5-92a3-13e4d10e9915","name":"Fija","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":901,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"uOXU5Fgs7B14FVDI","createdAt":{"$$date":1771822828078},"updatedAt":{"$$date":1771822828078}}
+{"$$deleted":true,"_id":"Ag3TZoudN9CchD3H"}
+{"$$deleted":true,"_id":"CtEBEUzYAvqJadMr"}
+{"$$deleted":true,"_id":"kOp8kcVXxDA8Yg6p"}
+{"$$deleted":true,"_id":"oArntFfvt3cLw0Zc"}
+{"$$deleted":true,"_id":"q33TxuIinpp6kPL1"}
+{"$$deleted":true,"_id":"uOXU5Fgs7B14FVDI"}
+{"id":"0067526e-f817-48d6-930f-fc8af0ca71c7","name":"Movil","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":900,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"VKehBfSbnUVBmBvO","createdAt":{"$$date":1771823103860},"updatedAt":{"$$date":1771823103860}}
+{"id":"98ac8e89-c127-4fa5-92a3-13e4d10e9915","name":"Fija","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":901,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"WDszlpoanhqh9rhh","createdAt":{"$$date":1771823103860},"updatedAt":{"$$date":1771823103860}}
+{"id":"44710784-cd25-413f-9857-7cf62f328483","name":"Exclusiva","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":902,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"Ly6Nea44X7q6OY6P","createdAt":{"$$date":1771823103860},"updatedAt":{"$$date":1771823103860}}
+{"id":"68afd99a-d46e-42ea-941d-4adb2103097a","name":"Hora","type":"hora","days":0,"hours":1,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":13,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"YwAzaoqtwHCTWEdB","createdAt":{"$$date":1771823103860},"updatedAt":{"$$date":1771823103860}}
+{"id":"89c68d2e-db76-4e19-bc9d-7b1283af83c0","name":"Media Estadía","type":"hora","days":0,"hours":12,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":14,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"JHzH4N4w2aCN4Rdz","createdAt":{"$$date":1771823103860},"updatedAt":{"$$date":1771823103860}}
+{"id":"d5108cb1-4390-4a1d-a6f4-5d84a4922b31","name":"Estadía","type":"hora","days":0,"hours":24,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":15,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"wf20fhsIPOGer3GV","createdAt":{"$$date":1771823103860},"updatedAt":{"$$date":1771823103860}}
+{"$$deleted":true,"_id":"JHzH4N4w2aCN4Rdz"}
+{"$$deleted":true,"_id":"Ly6Nea44X7q6OY6P"}
+{"$$deleted":true,"_id":"VKehBfSbnUVBmBvO"}
+{"$$deleted":true,"_id":"WDszlpoanhqh9rhh"}
+{"$$deleted":true,"_id":"YwAzaoqtwHCTWEdB"}
+{"$$deleted":true,"_id":"wf20fhsIPOGer3GV"}
+{"id":"0067526e-f817-48d6-930f-fc8af0ca71c7","name":"Movil","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":900,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"ZVruqwDi36mhK6rm","createdAt":{"$$date":1771823129368},"updatedAt":{"$$date":1771823129368}}
+{"id":"98ac8e89-c127-4fa5-92a3-13e4d10e9915","name":"Fija","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":901,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"IWAImDjk2SyqDvcN","createdAt":{"$$date":1771823129368},"updatedAt":{"$$date":1771823129368}}
+{"id":"44710784-cd25-413f-9857-7cf62f328483","name":"Exclusiva","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":902,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"G255vmXMaDffccNl","createdAt":{"$$date":1771823129368},"updatedAt":{"$$date":1771823129368}}
+{"id":"68afd99a-d46e-42ea-941d-4adb2103097a","name":"Hora","type":"hora","days":0,"hours":1,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":13,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"K6RnWyN4m96RCbZH","createdAt":{"$$date":1771823129368},"updatedAt":{"$$date":1771823129368}}
+{"id":"89c68d2e-db76-4e19-bc9d-7b1283af83c0","name":"Media Estadía","type":"hora","days":0,"hours":12,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":14,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"jlybcwfijKqTIKaQ","createdAt":{"$$date":1771823129368},"updatedAt":{"$$date":1771823129368}}
+{"id":"d5108cb1-4390-4a1d-a6f4-5d84a4922b31","name":"Estadía","type":"hora","days":0,"hours":24,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":15,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"iEaJ7vVDsDhzHNWk","createdAt":{"$$date":1771823129368},"updatedAt":{"$$date":1771823129368}}
+{"$$deleted":true,"_id":"G255vmXMaDffccNl"}
+{"$$deleted":true,"_id":"IWAImDjk2SyqDvcN"}
+{"$$deleted":true,"_id":"K6RnWyN4m96RCbZH"}
+{"$$deleted":true,"_id":"ZVruqwDi36mhK6rm"}
+{"$$deleted":true,"_id":"iEaJ7vVDsDhzHNWk"}
+{"$$deleted":true,"_id":"jlybcwfijKqTIKaQ"}
+{"id":"10f7287d-260b-4776-b4ca-4321e430f20f","name":"Movil","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":900,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"2RZeGBaeu6jsMAsc","createdAt":{"$$date":1771823511945},"updatedAt":{"$$date":1771823511945}}
+{"id":"56c5b147-3d43-41a5-a441-f367625376f1","name":"Fija","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":901,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"5ukB0LDgQj0ifiUX","createdAt":{"$$date":1771823511945},"updatedAt":{"$$date":1771823511945}}
+{"id":"a0aa8a64-b4e2-4eea-9e37-c953ecb66e47","name":"Exclusiva","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":902,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"cPQRvNn8SQxNCOzt","createdAt":{"$$date":1771823511945},"updatedAt":{"$$date":1771823511945}}
+{"id":"765dc670-6af5-4934-8392-b34732a5e03b","name":"Hora","type":"hora","days":0,"hours":1,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":13,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"AL4XCrvs7dhiT2XV","createdAt":{"$$date":1771823511945},"updatedAt":{"$$date":1771823511945}}
+{"id":"1efd393b-dc14-4189-865d-9199e1c39d33","name":"Media Estadía","type":"hora","days":0,"hours":12,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":14,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"pFbSU7BGdA8RZd79","createdAt":{"$$date":1771823511945},"updatedAt":{"$$date":1771823511945}}
+{"id":"20b09f4e-6e78-4f74-99f3-3597f0dd3c3a","name":"Estadía","type":"hora","days":0,"hours":24,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":15,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"IhkRfr8LrCImyTv3","createdAt":{"$$date":1771823511945},"updatedAt":{"$$date":1771823511945}}
+{"$$deleted":true,"_id":"2RZeGBaeu6jsMAsc"}
+{"$$deleted":true,"_id":"5ukB0LDgQj0ifiUX"}
+{"$$deleted":true,"_id":"AL4XCrvs7dhiT2XV"}
+{"$$deleted":true,"_id":"IhkRfr8LrCImyTv3"}
+{"$$deleted":true,"_id":"cPQRvNn8SQxNCOzt"}
+{"$$deleted":true,"_id":"pFbSU7BGdA8RZd79"}
+{"id":"0067526e-f817-48d6-930f-fc8af0ca71c7","name":"Movil","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":900,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"hF1rEy6gS3wu8YRc","createdAt":{"$$date":1771825809308},"updatedAt":{"$$date":1771825809308}}
+{"id":"98ac8e89-c127-4fa5-92a3-13e4d10e9915","name":"Fija","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":901,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"u9sEFn8lIuhasbQk","createdAt":{"$$date":1771825809308},"updatedAt":{"$$date":1771825809308}}
+{"id":"44710784-cd25-413f-9857-7cf62f328483","name":"Exclusiva","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":902,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"wi7QWQRt6k6TuvHJ","createdAt":{"$$date":1771825809308},"updatedAt":{"$$date":1771825809308}}
+{"id":"68afd99a-d46e-42ea-941d-4adb2103097a","name":"Hora","type":"hora","days":0,"hours":1,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":13,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"xpoxqkDiuwglww8X","createdAt":{"$$date":1771825809308},"updatedAt":{"$$date":1771825809308}}
+{"id":"89c68d2e-db76-4e19-bc9d-7b1283af83c0","name":"Media Estadía","type":"hora","days":0,"hours":12,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":14,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"W7vBeLeNfhi1K7to","createdAt":{"$$date":1771825809308},"updatedAt":{"$$date":1771825809308}}
+{"id":"d5108cb1-4390-4a1d-a6f4-5d84a4922b31","name":"Estadía","type":"hora","days":0,"hours":24,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":15,"garageId":"1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02","_id":"iQtgO2jnb3MGZ4ce","createdAt":{"$$date":1771825809308},"updatedAt":{"$$date":1771825809308}}
+{"$$deleted":true,"_id":"W7vBeLeNfhi1K7to"}
+{"$$deleted":true,"_id":"hF1rEy6gS3wu8YRc"}
+{"$$deleted":true,"_id":"iQtgO2jnb3MGZ4ce"}
+{"$$deleted":true,"_id":"u9sEFn8lIuhasbQk"}
+{"$$deleted":true,"_id":"wi7QWQRt6k6TuvHJ"}
+{"$$deleted":true,"_id":"xpoxqkDiuwglww8X"}
+{"id":"10f7287d-260b-4776-b4ca-4321e430f20f","name":"Movil","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":900,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"PjEADggJbp8OLvH2","createdAt":{"$$date":1771826591535},"updatedAt":{"$$date":1771826591535}}
+{"id":"56c5b147-3d43-41a5-a441-f367625376f1","name":"Fija","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":901,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"YDcbVj5TMeEm22Is","createdAt":{"$$date":1771826591535},"updatedAt":{"$$date":1771826591535}}
+{"id":"a0aa8a64-b4e2-4eea-9e37-c953ecb66e47","name":"Exclusiva","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":902,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"q6obZCMccgLSSWRL","createdAt":{"$$date":1771826591535},"updatedAt":{"$$date":1771826591535}}
+{"id":"765dc670-6af5-4934-8392-b34732a5e03b","name":"Hora","type":"hora","days":0,"hours":1,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":13,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"7lv2gnJOoELiotOa","createdAt":{"$$date":1771826591535},"updatedAt":{"$$date":1771826591535}}
+{"id":"1efd393b-dc14-4189-865d-9199e1c39d33","name":"Media Estadía","type":"hora","days":0,"hours":12,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":14,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"riwvd0AEtJvbs5FK","createdAt":{"$$date":1771826591535},"updatedAt":{"$$date":1771826591535}}
+{"id":"20b09f4e-6e78-4f74-99f3-3597f0dd3c3a","name":"Estadía","type":"hora","days":0,"hours":24,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":15,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"eka6m0aPSz0Ynl6z","createdAt":{"$$date":1771826591535},"updatedAt":{"$$date":1771826591535}}
+{"$$deleted":true,"_id":"7lv2gnJOoELiotOa"}
+{"$$deleted":true,"_id":"PjEADggJbp8OLvH2"}
+{"$$deleted":true,"_id":"YDcbVj5TMeEm22Is"}
+{"$$deleted":true,"_id":"eka6m0aPSz0Ynl6z"}
+{"$$deleted":true,"_id":"q6obZCMccgLSSWRL"}
+{"$$deleted":true,"_id":"riwvd0AEtJvbs5FK"}
+{"id":"10f7287d-260b-4776-b4ca-4321e430f20f","name":"Movil","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":900,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"K1jurNpo1JZyOC7Z","createdAt":{"$$date":1771826605267},"updatedAt":{"$$date":1771826605267}}
+{"id":"56c5b147-3d43-41a5-a441-f367625376f1","name":"Fija","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":901,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"TG5yasEoe2yM8DeU","createdAt":{"$$date":1771826605267},"updatedAt":{"$$date":1771826605267}}
+{"id":"a0aa8a64-b4e2-4eea-9e37-c953ecb66e47","name":"Exclusiva","type":"abono","days":30,"hours":0,"minutes":0,"tolerance":0,"is_protected":true,"sort_order":902,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"SkyJqXrvVaPVrmHb","createdAt":{"$$date":1771826605267},"updatedAt":{"$$date":1771826605267}}
+{"id":"765dc670-6af5-4934-8392-b34732a5e03b","name":"Hora","type":"hora","days":0,"hours":1,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":13,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"16rGRVEYYtgYWLnQ","createdAt":{"$$date":1771826605267},"updatedAt":{"$$date":1771826605267}}
+{"id":"1efd393b-dc14-4189-865d-9199e1c39d33","name":"Media Estadía","type":"hora","days":0,"hours":12,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":14,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"if5HTk5njs7VEhBU","createdAt":{"$$date":1771826605267},"updatedAt":{"$$date":1771826605267}}
+{"id":"20b09f4e-6e78-4f74-99f3-3597f0dd3c3a","name":"Estadía","type":"hora","days":0,"hours":24,"minutes":0,"tolerance":0,"is_protected":false,"sort_order":15,"garageId":"bf23b678-d87d-43a5-8635-670fc383342a","_id":"aS1eCOxGOfobdrlo","createdAt":{"$$date":1771826605267},"updatedAt":{"$$date":1771826605267}}

@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import type { ReactNode } from 'react';
 import { api } from '../services/api';
 
 // Updated interface to match Supabase/Backend response
@@ -20,6 +21,7 @@ interface AuthContextType {
     logout: () => void;
     isAuthenticated: boolean;
     isLoading: boolean;
+    isGlobalSyncing: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -27,6 +29,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const [user, setUser] = useState<User | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [isGlobalSyncing, setIsGlobalSyncing] = useState(false);
 
     useEffect(() => {
         // Check local storage for persisted session
@@ -54,6 +57,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
             setUser(userData);
             localStorage.setItem('ag_user', JSON.stringify(userData));
+            setIsGlobalSyncing(true); // Assuming sync started on backend
             return true;
         } catch (error) {
             console.error('Login failed', error);
@@ -63,11 +67,37 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     const logout = () => {
         setUser(null);
+        setIsGlobalSyncing(false);
         localStorage.removeItem('ag_user');
     };
 
+    // Global Sync Indicator Polling
+    useEffect(() => {
+        let interval: number;
+
+        const checkSync = async () => {
+            if (!user) return;
+            try {
+                const res = await api.get('/sync/check');
+                if (res.data.syncing === false) {
+                    setIsGlobalSyncing(false);
+                }
+            } catch (err) {
+                console.error('Failed to check sync', err);
+            }
+        };
+
+        if (user && isGlobalSyncing) {
+            interval = window.setInterval(checkSync, 2000); // Check every 2 seconds
+        }
+
+        return () => {
+            if (interval) window.clearInterval(interval);
+        };
+    }, [user, isGlobalSyncing]);
+
     return (
-        <AuthContext.Provider value={{ user, login, logout, isAuthenticated: !!user, isLoading }}>
+        <AuthContext.Provider value={{ user, login, logout, isAuthenticated: !!user, isLoading, isGlobalSyncing }}>
             {children}
         </AuthContext.Provider>
     );

@@ -14,7 +14,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     const [garageConfig, setGarageConfig] = useState<{ name: string; address: string } | null>(null);
 
     const location = useLocation();
-    const { user, logout } = useAuth();
+    const { user, logout, isGlobalSyncing } = useAuth();
     const navigate = useNavigate();
 
     // Load Terminal Config for Branding
@@ -70,14 +70,23 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
             {/* --- HEADER --- */}
             <header className="h-14 border-b border-gray-800 bg-gray-950 flex items-center justify-between px-4 shrink-0 z-50">
 
-                {/* Brand - Dynamic per Terminal Config */}
-                <div className="flex flex-col justify-center h-full max-w-[250px]">
-                    <h1 className="text-white font-bold text-base leading-tight tracking-tight truncate pb-0.5">
-                        {garageConfig?.name || 'ANTIGRAVITY'}
-                    </h1>
-                    <span className="text-[10px] text-gray-500 uppercase tracking-tighter truncate">
-                        {garageConfig?.address || 'TERMINAL PROTOTYPE'}
-                    </span>
+                {/* Brand - Dynamic per Terminal Config and Sync Status */}
+                <div className="flex items-center gap-3 w-1/3">
+                    <div className="flex flex-col justify-center h-full max-w-[250px]">
+                        <h1 className="text-white font-bold text-base leading-tight tracking-tight truncate pb-0.5">
+                            {garageConfig?.name || 'ANTIGRAVITY'}
+                        </h1>
+                        <span className="text-[10px] text-gray-500 uppercase tracking-tighter truncate">
+                            {garageConfig?.address || 'TERMINAL PROTOTYPE'}
+                        </span>
+                    </div>
+
+                    {isGlobalSyncing && (
+                        <div className="flex items-center gap-1.5 px-2 py-0.5 bg-emerald-900/20 border border-emerald-500/30 rounded text-emerald-500 font-mono shadow-sm shadow-emerald-900/20 animate-pulse">
+                            <span className="animate-spin text-[10px]">🔄</span>
+                            <span className="text-[9px] font-bold uppercase tracking-widest pt-0.5">Sincronizando datos...</span>
+                        </div>
+                    )}
                 </div>
 
                 {/* Navigation Tabs */}

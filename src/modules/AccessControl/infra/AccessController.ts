@@ -102,9 +102,10 @@ export class AccessController {
             if (existingVehicle) {
                 // REUSE & UPDATE
                 vehicleId = existingVehicle.id!;
-                // Update isSubscriber status if changed
-                if (existingVehicle.isSubscriber !== isSubscriber) {
-                    existingVehicle.isSubscriber = isSubscriber;
+                // Update is_subscriber status if changed
+                if ((existingVehicle as any).is_subscriber !== isSubscriber || existingVehicle.isSubscriber !== isSubscriber) {
+                    (existingVehicle as any).is_subscriber = isSubscriber;
+                    existingVehicle.isSubscriber = isSubscriber; // Keep obj sync
                     await this.vehicleRepository.save(existingVehicle);
                     console.log(`🚗 Entry: Updated Vehicle ${vehicleId} subscriber status to ${isSubscriber}`);
                 }
@@ -117,7 +118,7 @@ export class AccessController {
                         plate,
                         type: resolvedType,
                         garageId,
-                        isSubscriber, // Persist status
+                        is_subscriber: isSubscriber, // Persist status
                         createdAt: new Date(),
                         updatedAt: new Date(),
                     } as any);
@@ -159,18 +160,22 @@ export class AccessController {
                 return res.status(404).json({ error: 'No active stay found for plate' });
             }
 
-            // 🔍 Phase 2: Re-validate Subscription Link on Exit
-            const activeSubscription = await this.subscriptionRepository.findActiveByPlate(plate);
-            const isSubscriber = !!activeSubscription;
+            // 🔍 Phase 2: Re-validate Subscription Link on Exit directly against Vehicle Table
+            const vehicle = await this.vehicleRepository.findByPlate(plate, garageId);
+            let isSubscriber = false;
+            if (vehicle) {
+                isSubscriber = vehicle.isSubscriber || (vehicle as any).is_subscriber;
+                stay.isSubscriber = isSubscriber;
+                (stay as any).is_subscriber = isSubscriber;
+            }
 
-            // Override stay status based on CURRENT validity
-            stay.isSubscriber = isSubscriber;
+            const activeSubscription = await this.subscriptionRepository.findActiveByPlate(plate);
             stay.subscriptionId = activeSubscription ? activeSubscription.id : null;
 
             if (isSubscriber) {
-                console.log(`💎 Exit: Verified Active Subscription for ${plate} (ID: ${stay.subscriptionId})`);
-            } else if (stay.isSubscriber && !isSubscriber) {
-                console.warn(`⚠️ Exit: Subscription Expired or Invalid for ${plate}. Charging normal price.`);
+                console.log(`💎 Exit: Verified Active Subscription for ${plate} via Vehicle`);
+            } else {
+                console.log(`ℹ️ Exit: Vehicle ${plate} is not a subscriber`);
             }
 
             // Matrix is now handled internally by PricingEngine -> Repositories
@@ -203,13 +208,14 @@ export class AccessController {
             );
 
             await this.stayRepository.save(closedStay as any);
-            await this.movementRepository.save(exitMovement);
+            if (exitMovement) {
+                await this.movementRepository.save(exitMovement);
+            }
 
             // 🚀 SYNC: Enqueue Changes for Cloud
             try {
                 // Fix: Strip internal _id to prevent conflicts during Sync/Upsert
                 const { _id: sId, ...stayPayload } = closedStay as any;
-                const { _id: mId, ...movementPayload } = exitMovement as any;
 
                 await db.mutations.insert({
                     id: uuidv4(),
@@ -221,16 +227,21 @@ export class AccessController {
                     synced: false
                 });
 
-                await db.mutations.insert({
-                    id: uuidv4(),
-                    entityType: 'Movement',
-                    operation: 'CREATE',
-                    entityId: exitMovement.id,
-                    payload: movementPayload,
-                    timestamp: new Date(),
-                    synced: false
-                });
-                console.log(`📡 Exit: Queued mutations for Stay ${closedStay.id} and Movement ${exitMovement.id}`);
+                if (exitMovement) {
+                    const { _id: mId, ...movementPayload } = exitMovement as any;
+                    await db.mutations.insert({
+                        id: uuidv4(),
+                        entityType: 'Movement',
+                        operation: 'CREATE',
+                        entityId: exitMovement.id,
+                        payload: movementPayload,
+                        timestamp: new Date(),
+                        synced: false
+                    });
+                    console.log(`📡 Exit: Queued mutations for Stay ${closedStay.id} and Movement ${exitMovement.id}`);
+                } else {
+                    console.log(`📡 Exit: Queued mutation for Stay ${closedStay.id} (Subscriber, no movement generated)`);
+                }
             } catch (syncErr) {
                 console.error('⚠️ Exit: Failed to queue mutations via AccessController', syncErr);
                 // Non-blocking: We proceed to respond success to frontend
@@ -243,11 +254,20 @@ export class AccessController {
         }
     };
 
-    getActiveStay = async (req: Request, res: Response) => { /* ... */
+    getActiveStay = async (req: Request, res: Response) => {
         try {
             const { plate } = req.params;
             const stay = await this.stayRepository.findActiveByPlate(String(plate));
             if (!stay) return res.status(404).json({ error: 'Stay not found' });
+
+            // CRÍTICO: Garantía de datos directos de la tabla Vehicle
+            const vehicle = await this.vehicleRepository.findByPlate(String(plate));
+            if (vehicle) {
+                const subStatus = vehicle.isSubscriber || (vehicle as any).is_subscriber;
+                stay.isSubscriber = subStatus;
+                (stay as any).is_subscriber = subStatus;
+            }
+
             res.json(stay);
         } catch (error: any) {
             res.status(500).json({ error: error.message });

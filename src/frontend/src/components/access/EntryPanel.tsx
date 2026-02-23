@@ -1,5 +1,6 @@
 import React from 'react';
 import { useEntryLogic } from '../../hooks/useEntryLogic';
+import { useAuth } from '../../context/AuthContext';
 import { Car, CheckCircle } from 'lucide-react';
 
 const EntryPanel: React.FC = () => {
@@ -14,6 +15,8 @@ const EntryPanel: React.FC = () => {
         isSuccess,
         error
     } = useEntryLogic();
+
+    const { isGlobalSyncing } = useAuth();
 
     return (
         <div className="flex flex-col h-full bg-gray-900 border-r border-gray-800 font-sans overflow-hidden">
@@ -77,14 +80,14 @@ const EntryPanel: React.FC = () => {
                         <div className="pt-2">
                             <button
                                 type="submit"
-                                disabled={!plate || !vehicleType || isLoading}
-                                className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-wide flex items-center justify-center gap-3 transition-all ${!plate || !vehicleType
+                                disabled={!plate || !vehicleType || isLoading || isGlobalSyncing}
+                                className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-wide flex items-center justify-center gap-3 transition-all ${(!plate || !vehicleType || isGlobalSyncing)
                                     ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
                                     : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-900/30'
                                     }`}
                             >
-                                {isLoading ? '...' : 'Dar Entrada'}
-                                {!isLoading && <CheckCircle className="w-5 h-5" />}
+                                {isLoading ? '...' : isGlobalSyncing ? 'Sincronizando...' : 'Dar Entrada'}
+                                {!isLoading && !isGlobalSyncing && <CheckCircle className="w-5 h-5" />}
                             </button>
                         </div>
 

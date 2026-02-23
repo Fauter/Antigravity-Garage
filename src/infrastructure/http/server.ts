@@ -96,6 +96,11 @@ export const startServer = async () => {
         res.json({ message: 'Sync started' });
     });
 
+    // Check Sync Status Endpoint
+    app.get('/api/sync/check', (req, res) => {
+        res.json({ syncing: syncService.isGlobalSyncing });
+    });
+
     // --- Start Server ---
     const PORT = process.env.PORT || 3000;
 
