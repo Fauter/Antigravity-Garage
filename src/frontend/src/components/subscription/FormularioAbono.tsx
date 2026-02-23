@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../../services/api';
 import { toast } from 'sonner';
 import { Camera, Car, Check, User, Phone, CreditCard, AlertTriangle, Wallet } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 import { WebcamModal } from '../common/WebcamModal';
 
 const FormularioAbono: React.FC = () => {
@@ -10,6 +11,7 @@ const FormularioAbono: React.FC = () => {
     const [showCameraModal, setShowCameraModal] = useState(false);
     const [activePhotoField, setActivePhotoField] = useState<string | null>(null);
     const [photos, setPhotos] = useState<{ [key: string]: string }>({});
+    const { operatorName } = useAuth();
 
     // Load Vehicle Types once on mount
     useEffect(() => {
@@ -285,6 +287,7 @@ const FormularioAbono: React.FC = () => {
                 amount: proratedPrice, // The calculated prorated amount
                 totalInicial: proratedPrice, // Explicit naming for clarity
                 billingType: formData.tipoFactura,
+                operator: operatorName,
                 photos: photos,
                 startDate: new Date().toISOString()
             };

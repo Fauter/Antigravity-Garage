@@ -252,7 +252,7 @@ export class GarageController {
         let createdSubscriptionId: string | null = null;
 
         try {
-            const { customerData, vehicleData, subscriptionType, paymentMethod, amount } = req.body;
+            const { customerData, vehicleData, subscriptionType, paymentMethod, amount, operator, billingType } = req.body;
             const garageId = req.headers['x-garage-id'] as string || req.body.garageId;
             if (!garageId) {
                 return res.status(400).json({ error: 'x-garage-id header or body.garageId is required' });
@@ -387,7 +387,8 @@ export class GarageController {
                     relatedEntityId: savedSub.id,
                     plate: vehicle.plate,
                     garageId: garageId, // Inject Garage ID
-                    operator: 'System', // TODO: Req User
+                    operator: operator || 'Sistema', // Received from Frontend
+                    invoice_type: billingType,
                     createdAt: new Date()
                 } as any);
 

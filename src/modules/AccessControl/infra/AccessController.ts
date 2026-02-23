@@ -182,7 +182,8 @@ export class AccessController {
             // const matrix = await getPricingMatrix();
 
             // Metadata Injection
-            const userOperator = (operator && operator !== 'undefined undefined') ? operator : 'Sistema';
+            const cleanOperator = typeof operator === 'string' ? operator.trim() : '';
+            const userOperator = (cleanOperator && cleanOperator !== 'undefined undefined' && cleanOperator !== 'null null') ? cleanOperator : 'Sistema';
 
             // Fetch Owner ID from Garage Config (if available)
             let ownerId: string | undefined;

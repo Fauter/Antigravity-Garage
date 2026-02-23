@@ -135,6 +135,9 @@ export class AccessManager {
 
         notes = `Por ${timeString}`;
 
+        const cleanOperator = typeof operator === 'string' ? operator.trim() : '';
+        const userOperator = (cleanOperator && cleanOperator !== 'undefined undefined' && cleanOperator !== 'null null') ? cleanOperator : 'Sistema';
+
         const exitMovement: Movement = {
             id: uuidv4(),
             garageId: finalGarageId,
@@ -145,7 +148,7 @@ export class AccessManager {
             timestamp: exitDate,
             amount: Number(price), // Safety Cast
             paymentMethod,
-            operator: operator || 'Sistema',
+            operator: userOperator,
             invoiceType: invoiceType || 'Final',
             plate: stay.plate,
             notes: notes,

@@ -22,6 +22,7 @@ interface AuthContextType {
     isAuthenticated: boolean;
     isLoading: boolean;
     isGlobalSyncing: boolean;
+    operatorName: string;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -96,8 +97,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         };
     }, [user, isGlobalSyncing]);
 
+    // Compute Operator Name
+    const operatorName = React.useMemo(() => {
+        if (!user) return 'Sistema';
+        if (user.role === 'OWNER') return user.full_name || 'Owner';
+        if (user.first_name && user.last_name) return `${user.first_name} ${user.last_name}`;
+        return user.username || 'Operador';
+    }, [user]);
+
     return (
-        <AuthContext.Provider value={{ user, login, logout, isAuthenticated: !!user, isLoading, isGlobalSyncing }}>
+        <AuthContext.Provider value={{ user, login, logout, isAuthenticated: !!user, isLoading, isGlobalSyncing, operatorName }}>
             {children}
         </AuthContext.Provider>
     );

@@ -138,5 +138,27 @@
     "clienteId": "9ebc9d83-9cc7-48b5-8734-64c234d8ebf8",
     "precioBase": 420000,
     "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "ebad98b5-7504-4607-86bb-e547e41f065c",
+    "tipo": "Fija",
+    "numero": "13",
+    "vehiculos": [
+      "SMX445"
+    ],
+    "clienteId": "76ee4dab-492c-484f-aeca-e344f2db54e0",
+    "precioBase": 710000,
+    "garageId": "bf23b678-d87d-43a5-8635-670fc383342a"
+  },
+  {
+    "id": "24e7b7b9-3c8b-475b-b2b7-62db1d55134a",
+    "tipo": "Fija",
+    "numero": "12",
+    "vehiculos": [
+      "AQT455CC"
+    ],
+    "clienteId": "91ce074d-bbcf-4199-a4bd-ebf8e630cee0",
+    "precioBase": 710000,
+    "garageId": "bf23b678-d87d-43a5-8635-670fc383342a"
   }
 ]

@@ -23,7 +23,7 @@ const useExitLogic = () => {
     const [price, setPrice] = useState<number>(0);
     const [basePrice, setBasePrice] = useState<number>(0);
     const [error, setError] = useState<string | null>(null);
-    const { user } = useAuth();
+    const { operatorName } = useAuth();
 
     const isSubscriber = Boolean(stay?.is_subscriber);
 
@@ -65,7 +65,7 @@ const useExitLogic = () => {
                 plate,
                 paymentMethod,
                 invoiceType,
-                operator: user ? `${user.nombre} ${user.apellido}` : 'Unknown'
+                operator: operatorName
             });
             setStay(null);
             setPrice(0);
@@ -88,7 +88,7 @@ const PanelSalida: React.FC = () => {
     const [promo, setPromo] = useState('NINGUNA');
 
     const { searchStay, stay, price, setPrice, loading, error, isSubscriber, processExit } = useExitLogic();
-    const { isGlobalSyncing } = useAuth();
+    const { isGlobalSyncing, operatorName } = useAuth();
 
     const handleSearch = (e: React.FormEvent) => {
         e.preventDefault();
@@ -163,7 +163,7 @@ const PanelSalida: React.FC = () => {
                 const dummyMovement = {
                     amount: price,
                     paymentMethod: paymentMethod || 'Efectivo',
-                    operator: 'Operador',
+                    operator: operatorName,
                     notes: 'Salida Registrada'
                 };
                 PrinterService.printExitTicket({ ...stay, exitTime: new Date() }, dummyMovement);
