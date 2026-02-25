@@ -54,10 +54,35 @@ export class SyncService {
                     // POISON PILL: Integrity Violations (Foreign Key, Unique, Check) + Missing Table + Extra Columns
                     // 23505: Unique Violation, 23514: Check Violation
                     // PGRST205: Relation not found (Table missing)
-                    // PGRST204: Columns not found (Extra columns in payload)
-                    if (['23505', '23514', 'PGRST205', '42P01', 'PGRST204'].includes(err?.code) || err?.message?.includes('vehicles_type_check')) {
+                    if (['23505', '23514', 'PGRST205', '42P01'].includes(err?.code) || err?.message?.includes('vehicles_type_check')) {
                         console.warn(`☣️ Sync: Mutación ${mutation.id} descartada por Error Irrecuperable (Error ${err?.code}).`);
                         await this.queue.markSynced(mutation.id); // Mark as synced effectively "skips" it
+                    } else if (err?.code === 'PGRST204') {
+                        console.warn(`⚠️ Sync: Error PGRST204 en mutación ${mutation.id}. Intentando limpiar columnas desconocidas del payload...`);
+                        try {
+                            const match = err?.message?.match(/Could not find the '([^']+)' column/);
+                            if (match && match[1] && mutation.payload) {
+                                const badCol = match[1];
+                                console.log(`🛠️ Sync: Removiendo columna conflictiva '${badCol}' del payload de ${mutation.entityType}`);
+                                delete mutation.payload[badCol];
+                                // Eliminar también versión camelCase por si acaso
+                                const camelCase = badCol.replace(/_([a-z])/g, (g: string) => g[1].toUpperCase());
+                                if (mutation.payload[camelCase] !== undefined) delete mutation.payload[camelCase];
+
+                                await db.mutations.update({ id: mutation.id }, { $set: { payload: mutation.payload } }, {});
+                            } else {
+                                // Fallback extremo: dejar solo lo esencial
+                                console.log(`🛠️ Sync: No se pudo parsear la columna. Aplicando limpieza extrema al payload.`);
+                                const safeKeys = ['id', 'garage_id', 'garageId', 'owner_id', 'ownerId', 'status', 'active', 'vehiculos', 'cliente_id', 'clienteId'];
+                                const cleanPayload: any = {};
+                                safeKeys.forEach(k => { if (mutation.payload && mutation.payload[k] !== undefined) cleanPayload[k] = mutation.payload[k]; });
+                                await db.mutations.update({ id: mutation.id }, { $set: { payload: cleanPayload } }, {});
+                            }
+                            await this.queue.incrementRetry(mutation.id);
+                        } catch (e) {
+                            console.error(`❌ Sync: Fallo al intentar salvar mutación ${mutation.id}`, e);
+                            await this.queue.markSynced(mutation.id);
+                        }
                     } else {
                         await this.queue.incrementRetry(mutation.id);
                     }
@@ -83,7 +108,9 @@ export class SyncService {
             'Vehicle': 'vehicles',
             'VehicleType': 'vehicle_types',
             'Tariff': 'tariffs',
-            'Subscription': 'subscriptions'
+            'Subscription': 'subscriptions',
+            'Cochera': 'cocheras',
+            'Debt': 'debts'
         };
 
         const tableName = tableMap[entityType];
@@ -122,10 +149,29 @@ export class SyncService {
             await db.customers.remove({}, { multi: true }); // Required Purge for Ghost syncs
             await db.vehicles.remove({}, { multi: true }); // Required Purge for Ghost syncs
             await db.subscriptions.remove({}, { multi: true }); // Required Purge for Ghost syncs
+            await db.cocheras.remove({}, { multi: true }); // Purge cocheras
+            await db.debts.remove({}, { multi: true }); // Purge debts
 
-            // DELAY TO ALLOW OS/ANTIVIRUS TO RELEASE FILE LOCKS ON THE .db~ FILES
-            console.log('⏳ Sync: Pausing for 1000ms to allow OS to release DB locks...');
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            // ROBUST PURGE: Compaction to physically remove phantom records from filesystem
+            console.log('🧹 Sync: Forcing NeDB Compaction across all collections...');
+            const forceCompact = (store: any) => {
+                if (store && typeof store.compactDatafile === 'function') {
+                    store.compactDatafile();
+                } else if (store && store.nedb && typeof store.nedb.compactDatafile === 'function') {
+                    store.nedb.compactDatafile();
+                }
+            };
+
+            const storesToCompact = [
+                db.stays, db.movements, db.tariffs, db.vehicleTypes, db.prices,
+                db.customers, db.vehicles, db.subscriptions, db.cocheras, db.debts
+            ];
+
+            storesToCompact.forEach(forceCompact);
+
+            // DELAY TO ALLOW OS/ANTIVIRUS TO RELEASE FILE LOCKS AND COMPACTION TO FINISH
+            console.log('⏳ Sync: Pausing for 1500ms to allow OS to release DB locks and compact...');
+            await new Promise(resolve => setTimeout(resolve, 1500));
 
             // 1. Config (CRITICAL: Fetch first to populate UI dropdowns)
             await this.fetchTable('vehicle_types', garageId, 'VehicleType');
@@ -135,11 +181,13 @@ export class SyncService {
             // 2. Core Operational Entities
             await this.fetchTable('customers', garageId, 'Customer');
             await this.fetchTable('vehicles', garageId, 'Vehicle');
+            await this.fetchTable('cocheras', garageId, 'Cochera');
 
             // 3. Transactional
             await this.fetchTable('stays', garageId, 'Stay');
             await this.fetchTable('movements', garageId, 'Movement');
             await this.fetchTable('subscriptions', garageId, 'Subscription');
+            await this.fetchTable('debts', garageId, 'Debt');
 
             console.log('✅ Sync: Bootstrap Complete.');
             this.isGlobalSyncing = false;
@@ -182,6 +230,8 @@ export class SyncService {
                     case 'Movement': collection = db.movements; break;
                     case 'Subscription': collection = db.subscriptions; break;
                     case 'Garage': collection = db.garages; break;
+                    case 'Cochera': collection = db.cocheras; break;
+                    case 'Debt': collection = db.debts; break;
                 }
 
                 if (collection) {
@@ -227,6 +277,24 @@ export class SyncService {
             if (local.end_date) { local.endDate = local.end_date; delete local.end_date; }
             if (local.vehicle_id) { local.vehicleId = local.vehicle_id; delete local.vehicle_id; }
             if (local.customer_id) { local.customerId = local.customer_id; delete local.customer_id; }
+        }
+
+        if (type === 'Cochera') {
+            if (local.cliente_id) { local.clienteId = local.cliente_id; delete local.cliente_id; }
+            if (local.precio_base) { local.precioBase = Number(local.precio_base); delete local.precio_base; }
+        }
+
+        if (type === 'Debt') {
+            if (local.subscription_id) { local.subscriptionId = local.subscription_id; delete local.subscription_id; }
+            if (local.customer_id) { local.customerId = local.customer_id; delete local.customer_id; }
+
+            // STRICT NUMBER SANITIZATION for Financial Safety
+            local.surchargeApplied = local.surcharge_applied !== undefined ? Number(local.surcharge_applied) || 0 : 0;
+            local.amount = local.amount !== undefined ? Number(local.amount) || 0 : 0;
+
+            delete local.surcharge_applied;
+
+            if (local.due_date) { local.dueDate = local.due_date; delete local.due_date; }
         }
 
         if (type === 'Tariff') {
@@ -353,8 +421,38 @@ export class SyncService {
             });
         }
 
+        if (type === 'Cochera') {
+            if (base.clienteId !== undefined) { base.cliente_id = base.clienteId; delete base.clienteId; }
+            if (base.precioBase !== undefined) { base.precio_base = base.precioBase; delete base.precioBase; }
+            if (base.garageId !== undefined) { base.garage_id = base.garageId; delete base.garageId; }
+            if (base.ownerId !== undefined) { base.owner_id = base.ownerId; delete base.ownerId; }
+
+            const allowedCocheraFields = ['id', 'garage_id', 'owner_id', 'tipo', 'numero', 'vehiculos', 'cliente_id', 'precio_base', 'status', 'created_at', 'updated_at'];
+            Object.keys(base).forEach(key => {
+                if (!allowedCocheraFields.includes(key)) {
+                    delete base[key];
+                }
+            });
+        }
+
+        if (type === 'Debt') {
+            if (base.subscriptionId !== undefined) { base.subscription_id = base.subscriptionId; delete base.subscriptionId; }
+            if (base.customerId !== undefined) { base.customer_id = base.customerId; delete base.customerId; }
+            if (base.surchargeApplied !== undefined) { base.surcharge_applied = Number(base.surchargeApplied); delete base.surchargeApplied; }
+            if (base.dueDate !== undefined) { base.due_date = new Date(base.dueDate).toISOString(); delete base.dueDate; }
+            if (base.amount !== undefined) { base.amount = Number(base.amount); }
+            if (base.garageId !== undefined) { base.garage_id = base.garageId; delete base.garageId; }
+
+            const allowedDebtFields = ['id', 'subscription_id', 'customer_id', 'amount', 'surcharge_applied', 'status', 'due_date', 'garage_id', 'created_at', 'updated_at'];
+            Object.keys(base).forEach(key => {
+                if (!allowedDebtFields.includes(key)) {
+                    delete base[key];
+                }
+            });
+        }
+
         // SANITIZE FKs
-        const fks = ['garage_id', 'owner_id', 'customer_id', 'vehicle_id', 'vehicle_type_id', 'tariff_id', 'related_entity_id', 'shift_id'];
+        const fks = ['garage_id', 'owner_id', 'customer_id', 'vehicle_id', 'vehicle_type_id', 'tariff_id', 'related_entity_id', 'shift_id', 'cliente_id', 'subscription_id'];
         fks.forEach(fk => {
             if (Object.prototype.hasOwnProperty.call(base, fk)) {
                 if (base[fk] === '' || base[fk] === null || base[fk] === 'null') {

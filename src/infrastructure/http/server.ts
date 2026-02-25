@@ -31,39 +31,49 @@ export const startServer = async () => {
 
     // --- API Routes & Controllers ---
 
-    // Dynamic import
-    const { AccessController } = await import('../../modules/AccessControl/infra/AccessController.js');
-    const { GarageController } = await import('../../modules/Garage/infra/GarageController.js');
-    const { AuthController } = await import('../../modules/Identity/infra/AuthController.js');
-    const { syncService } = await import('../../modules/Sync/application/SyncService.js');
+    // Dynamic import (Robust extraction to handle tsx / node ESM differences)
+    const accessMod = await import('../../modules/AccessControl/infra/AccessController.js');
+    const AccessControllerClass = accessMod.AccessController || (accessMod.default && accessMod.default.AccessController);
+
+    const { GarageController: GarageControllerClass } = await import('../../modules/Garage/infra/GarageController.js');
+
+    const authMod = await import('../../modules/Identity/infra/AuthController.js');
+    const AuthControllerClass = authMod.AuthController || (authMod.default && authMod.default.AuthController);
+
+    const syncMod = await import('../../modules/Sync/application/SyncService.js');
+    const syncService = syncMod.syncService || (syncMod.default && syncMod.default.syncService);
 
     // Configuration Module Routes
-    const { default: configRoutes } = await import('../../modules/Configuration/http/routes.js');
+    const configModule = await import('../../modules/Configuration/http/routes.js');
+    const configRoutes = configModule.default || configModule.router;
 
-    const accessController = new AccessController();
-    const garageController = new GarageController();
-    const authController = new AuthController();
+    const accessController = new AccessControllerClass();
+    const garageController = new GarageControllerClass();
+    const authController = new AuthControllerClass();
     // syncService is already instantiated
 
     // Mount Configuration Routes
     app.use('/api', configRoutes);
 
     // Access Control
-    app.post('/api/estadias/entrada', accessController.registerEntry.bind(accessController));
-    app.post('/api/estadias/salida', accessController.registerExit.bind(accessController));
-    app.get('/api/estadias/activa/:plate', accessController.getActiveStay.bind(accessController));
-    app.get('/api/estadias', accessController.getAllActiveStays.bind(accessController));
+    app.post('/api/estadias/entrada', accessController.registerEntry ? accessController.registerEntry.bind(accessController) : (r, s) => s.status(404).send('Method not found'));
+    app.post('/api/estadias/salida', accessController.registerExit ? accessController.registerExit.bind(accessController) : (r, s) => s.status(404).send('Method not found'));
+    app.get('/api/estadias/activa/:plate', accessController.getActiveStay ? accessController.getActiveStay.bind(accessController) : (r, s) => s.status(404).send('Method not found'));
+    app.get('/api/estadias', accessController.getAllActiveStays ? accessController.getAllActiveStays.bind(accessController) : (r, s) => s.status(404).send('Method not found'));
 
     // Garage Management
-    app.get('/api/cocheras', garageController.getAllCocheras.bind(garageController));
-    app.post('/api/cocheras', garageController.createCochera.bind(garageController));
-    app.patch('/api/cocheras/:id', garageController.updateCochera.bind(garageController));
+    app.get('/api/cocheras', garageController.getAllCocheras ? garageController.getAllCocheras.bind(garageController) : (r, s) => s.status(404).send('Method not found'));
+    app.post('/api/cocheras', garageController.createCochera ? garageController.createCochera.bind(garageController) : (r, s) => s.status(404).send('Method not found'));
+    app.patch('/api/cocheras/:id', garageController.updateCochera ? garageController.updateCochera.bind(garageController) : (r, s) => s.status(404).send('Method not found'));
     app.post('/api/cocheras/desvincular-vehiculo', garageController.unassignVehicle ? garageController.unassignVehicle.bind(garageController) : (r, s) => s.status(404).send());
     app.post('/api/cocheras/liberar', garageController.releaseCochera ? garageController.releaseCochera.bind(garageController) : (r, s) => s.status(404).send());
 
     // Subscriptions logic
     app.get('/api/abonos', garageController.getSubscriptions ? garageController.getSubscriptions.bind(garageController) : (r, s) => s.status(404).send('Method not found'));
     app.post('/api/abonos', garageController.createSubscription ? garageController.createSubscription.bind(garageController) : (r, s) => s.status(404).send('Method not found'));
+    app.post('/api/abonos/alta-completa', garageController.createFullSubscription ? garageController.createFullSubscription.bind(garageController) : (r, s) => s.status(404).send('Method not found'));
+    app.post('/api/abonos/renovar', garageController.renewSubscription ? garageController.renewSubscription.bind(garageController) : (r, s) => s.status(404).send('Method not found'));
+    app.post('/api/abonos/evaluar-deudas', garageController.triggerDebtSweep ? garageController.triggerDebtSweep.bind(garageController) : (r, s) => s.status(404).send('Method not found'));
 
     // Customers & Vehicles
     app.get('/api/clientes', garageController.findClientByDni ? garageController.findClientByDni.bind(garageController) : (r, s) => s.status(404).send());
@@ -85,7 +95,7 @@ export const startServer = async () => {
     app.get('/api/caja/turno-actual', garageController.getCurrentShift ? garageController.getCurrentShift.bind(garageController) : (r, s) => s.status(404).send());
 
     // Auth Routes
-    app.post('/api/auth/login', authController.login.bind(authController));
+    app.post('/api/auth/login', authController.login ? authController.login.bind(authController) : (r, s) => s.status(404).send('Method not found'));
 
     // Sync Bootstrap Endpoint
     app.post('/api/sync/bootstrap', async (req, res) => {

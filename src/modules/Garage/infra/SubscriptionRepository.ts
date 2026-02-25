@@ -45,6 +45,10 @@ export class SubscriptionRepository {
         return await db.subscriptions.find({ customerId });
     }
 
+    async findById(id: string): Promise<any | null> {
+        return await db.subscriptions.findOne({ id });
+    }
+
     async findActiveByPlate(plate: string): Promise<any | null> {
         // NeDB doesn't strictly support computed fields in find easily without operator,
         // but 'active' or 'status' should be stored.

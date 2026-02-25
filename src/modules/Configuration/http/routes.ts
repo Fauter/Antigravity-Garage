@@ -75,9 +75,7 @@ router.get('/precios', async (req, res) => {
         const vTypeMap = new Map(vehicleTypes.map((v: any) => [v.id.trim(), v.name]));
         const tariffMap = new Map(tariffs.map((t: any) => [t.id.trim(), t.name]));
 
-        if (prices.length > 0) {
-            console.log("Muestra de Precio Local (1er objeto):", JSON.stringify(prices[0], null, 2));
-        } else {
+        if (prices.length === 0) {
             console.warn("⚠️ No local prices found for garage:", garageId);
         }
 
@@ -103,8 +101,6 @@ router.get('/precios', async (req, res) => {
                 // console.warn(`⚠️ ConfigMatrix Mapping Fail: Price ${p.id} -> VType: ${vIdRaw} [${vName || 'NOT_FOUND'}], Tariff: ${tIdRaw} [${tName || 'NOT_FOUND'}]`);
             }
         });
-
-        console.log("Matriz Generada:", JSON.stringify(matrix, null, 2)); // DEBUG: Verify Matrix Structure on Server
 
         res.json(matrix);
     } catch (e) {

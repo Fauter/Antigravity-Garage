@@ -17,6 +17,9 @@ export type PaymentMethod = z.infer<typeof PaymentMethodEnum>;
 export const MovementTypeEnum = z.enum(['CobroEstadia', 'CobroAbono', 'CobroRenovacion', 'IngresoVarios', 'EgresoVarios']);
 export type MovementType = z.infer<typeof MovementTypeEnum>;
 
+export const CocheraTypeEnum = z.enum(['Fija', 'Exclusiva', 'Movil']);
+export type CocheraType = z.infer<typeof CocheraTypeEnum>;
+
 // --- Entities ---
 
 /**
@@ -60,6 +63,25 @@ export const VehicleSchema = z.object({
   updatedAt: TimestampSchema.default(() => new Date()),
 });
 export type Vehicle = z.infer<typeof VehicleSchema>;
+
+/**
+ * Cochera / Parking Spot
+ * Representa un espacio físico asignado a un cliente.
+ */
+export const CocheraSchema = z.object({
+  id: UuidSchema,
+  garageId: UuidSchema.optional(), // Supabase: garage_id
+  ownerId: UuidSchema.optional(),  // Supabase: owner_id
+  tipo: CocheraTypeEnum,
+  numero: z.string().optional(),
+  vehiculos: z.array(z.string()).default([]), // Lista de patentes
+  clienteId: UuidSchema.optional().nullable(), // Supabase: cliente_id
+  precioBase: z.number().default(0), // Supabase: precio_base
+  status: z.enum(['Disponible', 'Ocupada']).default('Disponible'),
+  createdAt: TimestampSchema.default(() => new Date()),
+  updatedAt: TimestampSchema.default(() => new Date()),
+});
+export type Cochera = z.infer<typeof CocheraSchema>;
 
 /**
  * Subscription / Abono
@@ -202,7 +224,7 @@ export type Employee = z.infer<typeof EmployeeSchema>;
  */
 export const MutationSchema = z.object({
   id: UuidSchema,
-  entityType: z.enum(['Customer', 'Vehicle', 'Subscription', 'Movement', 'Shift', 'Employee']),
+  entityType: z.enum(['Customer', 'Vehicle', 'Subscription', 'Movement', 'Shift', 'Employee', 'Cochera']),
   entityId: UuidSchema,
   operation: z.enum(['CREATE', 'UPDATE', 'DELETE']),
   payload: z.any(),

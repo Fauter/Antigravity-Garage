@@ -1,5 +1,4 @@
-import { JsonDB } from '../../../infrastructure/database/json-db';
-
+import { db } from '../../../infrastructure/database/datastore.js';
 
 export interface User {
     id: string;
@@ -11,18 +10,14 @@ export interface User {
 }
 
 export class UserRepository {
-    private db: JsonDB<User>;
-
     constructor() {
-        this.db = new JsonDB<User>('users');
     }
 
     async findByUsername(username: string): Promise<User | null> {
-        const users = await this.db.getAll();
-        return users.find(u => u.username === username) || null;
+        return await db.employees.findOne({ username }) as User | null;
     }
 
     async findById(id: string): Promise<User | null> {
-        return this.db.getById(id);
+        return await db.employees.findOne({ id }) as User | null;
     }
 }

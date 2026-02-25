@@ -1,7 +1,24 @@
 import mongoose, { Schema } from 'mongoose';
 import {
-    Vehicle, Customer, Subscription, Movement, Shift, Employee, Debt
+    Vehicle, Customer, Subscription, Movement, Shift, Employee, Debt, Cochera
 } from '../../shared/schemas';
+
+// --- Cochera ---
+const CocheraSchema = new Schema<Cochera>({
+    id: { type: String, required: true, unique: true },
+    garageId: { type: String },
+    ownerId: { type: String },
+    tipo: { type: String, required: true, enum: ['Fija', 'Exclusiva', 'Movil'] },
+    numero: { type: String },
+    vehiculos: [{ type: String }],
+    clienteId: { type: String },
+    precioBase: { type: Number, default: 0 },
+    status: { type: String, enum: ['Disponible', 'Ocupada'], default: 'Disponible' },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now }
+});
+
+export const CocheraModel = mongoose.model<Cochera>('Cochera', CocheraSchema);
 
 // --- Vehicle ---
 const VehicleSchema = new Schema<Vehicle>({

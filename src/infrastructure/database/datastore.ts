@@ -25,6 +25,8 @@ export const db = {
     stays: createStore('stays'),
     employees: createStore('employees'),
     garages: createStore('garages'), // Added for Metadata
+    cocheras: createStore('cocheras'),
+    debts: createStore('debts'),
 
     // Config Stores
     vehicleTypes: createStore('vehicle_types'),

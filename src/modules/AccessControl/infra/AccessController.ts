@@ -10,12 +10,6 @@ import { JsonDB } from '../../../infrastructure/database/json-db';
 import { db } from '../../../infrastructure/database/datastore';
 import { v4 as uuidv4 } from 'uuid';
 
-interface MatrixData {
-    id?: string;
-    _id?: string;
-    values: any; // The matrix
-}
-
 interface VehicleTypeData {
     id?: string;
     _id?: string;
@@ -24,16 +18,6 @@ interface VehicleTypeData {
     mensual: boolean;
 }
 
-const pricingDB = new JsonDB<MatrixData>('prices');
-// const vehicleDB = new JsonDB<VehicleTypeData>('vehicleTypes'); // REMOVED: Replaced by NeDB
-
-// Helper to get Matrix
-const getPricingMatrix = async () => {
-    const all = await pricingDB.getAll();
-    if (all.length > 0) return all[0].values;
-    // Fallback if empty (should be seeded)
-    return {};
-};
 
 export class AccessController {
     private stayRepository: StayRepository;
@@ -331,75 +315,5 @@ export class AccessController {
         await this.movementRepository.reset();
     }
 
-    // --- Configuration Endpoints ---
 
-    // Prices (Matrix)
-    getPrices = async (req: Request, res: Response) => {
-        try {
-            const matrix = await getPricingMatrix();
-            res.json(matrix);
-        } catch (error: any) {
-            res.status(500).json({ error: error.message });
-        }
-    }
-
-    savePrices = async (req: Request, res: Response) => {
-        try {
-            const newMatrix = req.body; // Expects { "Auto": { ... } }
-
-            // Update the single record
-            const all = await pricingDB.getAll();
-            if (all.length > 0) {
-                const id = all[0].id || all[0]._id;
-                await pricingDB.updateOne({ id } as any, { values: newMatrix });
-            } else {
-                await pricingDB.create({ values: newMatrix });
-            }
-            res.json({ message: 'Precios guardados' });
-        } catch (error: any) {
-            res.status(500).json({ error: error.message });
-        }
-    }
-
-    // Vehicle Types
-    getVehicleTypes = async (req: Request, res: Response) => {
-        try {
-            const garageId = (req.headers['x-garage-id'] as string);
-            // Fetch from NeDB directly
-            const types = await db.vehicleTypes.find({ garageId });
-            res.json(types);
-        } catch (error: any) {
-            console.error('Error getting vehicle types from NeDB:', error);
-            res.status(500).json({ error: error.message });
-        }
-    }
-
-    saveVehicleType = async (req: Request, res: Response) => {
-        try {
-            const garageId = (req.headers['x-garage-id'] as string);
-            // Add new type
-            const data = req.body; // { name, hora, mensual }
-            if (!data.name) return res.status(400).json({ error: 'Name is required' });
-
-            // Ensure garageId is saved
-            const typeToSave = { ...data, garageId };
-
-            // Use NeDB
-            await db.vehicleTypes.insert(typeToSave);
-            res.json({ message: 'Tipo creado' });
-        } catch (error: any) {
-            res.status(500).json({ error: error.message });
-        }
-    }
-
-    deleteVehicleType = async (req: Request, res: Response) => {
-        try {
-            const { id } = req.params;
-            // Use NeDB
-            await db.vehicleTypes.remove({ id: id }, {});
-            res.json({ message: 'Tipo eliminado (si existía)' });
-        } catch (error: any) {
-            res.status(500).json({ error: error.message });
-        }
-    }
 }

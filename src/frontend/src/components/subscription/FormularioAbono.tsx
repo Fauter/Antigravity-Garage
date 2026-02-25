@@ -13,6 +13,7 @@ const FormularioAbono: React.FC = () => {
     const [activePhotoField, setActivePhotoField] = useState<string | null>(null);
     const [photos, setPhotos] = useState<{ [key: string]: string }>({});
     const [showSuccessScreen, setShowSuccessScreen] = useState(false);
+    const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const { operatorName } = useAuth();
 
     // Load Vehicle Types once on mount
@@ -33,6 +34,7 @@ const FormularioAbono: React.FC = () => {
     const [basePriceDisplay, setBasePriceDisplay] = useState(0);
     const [proratedPrice, setProratedPrice] = useState(0);
     const [pricesMatrix, setPricesMatrix] = useState<any>({});
+    const [standardPricesMatrix, setStandardPricesMatrix] = useState<any>({});
     const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
 
     const [formData, setFormData] = useState({
@@ -67,7 +69,8 @@ const FormularioAbono: React.FC = () => {
     });
 
     useEffect(() => { loadConfig(); }, [formData.metodoPago]);
-    useEffect(() => { calculatePrice(); }, [formData.tipoCochera, formData.exclusivaOverride, formData.tipoVehiculo, pricesMatrix]);
+    useEffect(() => { calculatePrice(); }, [formData.tipoCochera, formData.exclusivaOverride, formData.tipoVehiculo, pricesMatrix, standardPricesMatrix]);
+    useEffect(() => { setErrorMessage(null); }, [formData.numeroCochera, formData.tipoCochera, formData.tipoVehiculo, formData.patente]);
 
     const loadConfig = async () => {
         // Fetch prices based on current payment method
@@ -75,13 +78,17 @@ const FormularioAbono: React.FC = () => {
 
         // Parallel independent fetches
         const fetchPrices = api.get(`/precios?metodo=${queryMethod}`).catch(e => { console.error("Price load error:", e); return null; });
+        const fetchStandardPrices = api.get('/precios?metodo=efectivo').catch(e => { console.error("Standard price load error:", e); return null; });
         const fetchTypes = api.get('/tipos-vehiculo').catch(e => { console.error("Type load error:", e); return null; });
 
-        const [priceRes, typeRes] = await Promise.all([fetchPrices, fetchTypes]);
+        const [priceRes, standardPriceRes, typeRes] = await Promise.all([fetchPrices, fetchStandardPrices, fetchTypes]);
 
         if (priceRes && priceRes.data) {
             // endpoint /precios?metodo=... returns the object directly
             setPricesMatrix(priceRes.data.efectivo || priceRes.data);
+        }
+        if (standardPriceRes && standardPriceRes.data) {
+            setStandardPricesMatrix(standardPriceRes.data.efectivo || standardPriceRes.data);
         }
 
         if (typeRes && typeRes.data && Array.isArray(typeRes.data)) {
@@ -109,38 +116,43 @@ const FormularioAbono: React.FC = () => {
         let cocheraKey = formData.tipoCochera; // 'Movil' or 'Fija'
         if (formData.exclusivaOverride) cocheraKey = 'Exclusiva';
 
-        // 2. Find vehicle entry in matrix (Fuzzy Match)
-        let vehiclePrices: any = null;
-        if (pricesMatrix[typeKey]) {
-            vehiclePrices = pricesMatrix[typeKey];
-        } else {
-            const normalizedType = normalize(typeKey);
-            const foundKey = Object.keys(pricesMatrix).find(k => normalize(k) === normalizedType);
-            if (foundKey) vehiclePrices = pricesMatrix[foundKey];
-        }
-
-        // 3. Find Price Value (Fuzzy Match for Tariff Key)
-        let finalPrice = 0;
-        if (vehiclePrices) {
-            if (vehiclePrices[cocheraKey] !== undefined) {
-                finalPrice = Number(vehiclePrices[cocheraKey]);
+        // Helper to find price in a given matrix
+        const findPrice = (matrix: any) => {
+            let vehiclePrices: any = null;
+            if (matrix[typeKey]) {
+                vehiclePrices = matrix[typeKey];
             } else {
-                const normalizedCochera = normalize(cocheraKey);
-                const foundCocheraKey = Object.keys(vehiclePrices).find(k => normalize(k) === normalizedCochera);
-                if (foundCocheraKey) finalPrice = Number(vehiclePrices[foundCocheraKey]);
+                const normalizedType = normalize(typeKey);
+                const foundKey = Object.keys(matrix).find(k => normalize(k) === normalizedType);
+                if (foundKey) vehiclePrices = matrix[foundKey];
             }
-        }
 
-        // 4. Update Display
-        setBasePriceDisplay(finalPrice);
+            let finalPrice = 0;
+            if (vehiclePrices) {
+                if (vehiclePrices[cocheraKey] !== undefined) {
+                    finalPrice = Number(vehiclePrices[cocheraKey]);
+                } else {
+                    const normalizedCochera = normalize(cocheraKey);
+                    const foundCocheraKey = Object.keys(vehiclePrices).find(k => normalize(k) === normalizedCochera);
+                    if (foundCocheraKey) finalPrice = Number(vehiclePrices[foundCocheraKey]);
+                }
+            }
+            return finalPrice;
+        };
 
-        // 5. Calculate Prorated based on real days in current month
+        const standardPrice = findPrice(standardPricesMatrix);
+        const currentPrice = findPrice(pricesMatrix);
+
+        // 4. Update Display (Base Price is Standard)
+        setBasePriceDisplay(standardPrice);
+
+        // 5. Calculate Prorated based on current price matrix
         const now = new Date();
         const currentDay = now.getDate();
         const ultimoDiaMes = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
         const diasRestantes = (ultimoDiaMes - currentDay) + 1;
         // Nuevo código con redondeo a la centena (hacia abajo)
-        const exactCalc = (finalPrice / ultimoDiaMes) * diasRestantes;
+        const exactCalc = (currentPrice / ultimoDiaMes) * diasRestantes;
         // Math.floor(valor / 100) * 100 elimina las decenas y unidades
         const roundedDown = Math.floor(exactCalc / 100) * 100;
 
@@ -159,6 +171,7 @@ const FormularioAbono: React.FC = () => {
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
+        setErrorMessage(null);
 
         // Validation for assigned spots
         if (!formData.tipoCochera) {
@@ -181,69 +194,6 @@ const FormularioAbono: React.FC = () => {
         }
 
         try {
-            // 1. CLIENT MANAGEMENT (Find or Create)
-            let clientId = null;
-            try {
-                // Attempt to find existing client by DNI
-                const searchRes = await api.get(`/clientes?dni=${formData.dni}`);
-                if (searchRes.data && searchRes.data.length > 0) {
-                    clientId = searchRes.data[0].id;
-                    // Optional: Update client data if needed, but for now we assume existence is enough or we proceed.
-                    // Ideally we'd PUT /clientes/:id to update latest info.
-                    console.log(`Client found: ${clientId}`);
-                } else {
-                    // Create new client
-                    const clientRes = await api.post('/clientes', {
-                        nombreApellido: formData.nombre,
-                        dni: formData.dni,
-                        email: formData.email,
-                        address: formData.domicilio,
-                        localidad: formData.localidad,
-                        workAddress: formData.domicilioTrabajo,
-                        phones: {
-                            particular: formData.telParticular,
-                            emergency: formData.telEmergencia,
-                            work: formData.telTrabajo
-                        }
-                    });
-                    clientId = clientRes.data.id;
-                    console.log(`Client created: ${clientId}`);
-                }
-            } catch (err: any) {
-                // Circuit Breaker: If checking/creating client fails, STOP everything.
-                // Diagnosis: if HTML returned (404 on API), don't proceed.
-                console.error("Client check/create failed. URL:", err.config?.url);
-                if (err.response && typeof err.response.data === 'string' && err.response.data.includes('<!DOCTYPE html>')) {
-                    toast.error('Error Crítico: El sistema no contacta al backend (/api/clientes devuelve HTML). Revise la conexión.');
-                    throw new Error("API Route Error: Received HTML instead of JSON");
-                }
-
-                // Try creation as fallback only if it wasn't a structural 404 on the API root
-                console.warn("Attempting fallback creation...", err);
-                try {
-                    const clientRes = await api.post('/clientes', {
-                        nombreApellido: formData.nombre,
-                        dni: formData.dni,
-                        email: formData.email,
-                        address: formData.domicilio,
-                        localidad: formData.localidad,
-                        workAddress: formData.domicilioTrabajo,
-                        phones: {
-                            particular: formData.telParticular,
-                            emergency: formData.telEmergencia,
-                            work: formData.telTrabajo
-                        }
-                    });
-                    clientId = clientRes.data.id;
-                } catch (creationErr: any) {
-                    console.error("Fallback creation also failed. URL:", creationErr.config?.url);
-                    throw creationErr; // Stop execution
-                }
-            }
-
-            if (!clientId) throw new Error("No se pudo obtener ID de cliente. Abortando.");
-
-            // 2. SPOT MANAGEMENT (Mark as Occupied/Assigned)
             const finalType = formData.exclusivaOverride ? 'Exclusiva' : formData.tipoCochera;
 
             // Ensuring we verify valid spot number for Fixed/Exclusive
@@ -251,23 +201,9 @@ const FormularioAbono: React.FC = () => {
                 throw new Error("Cochera number required for Fixed/Exclusive");
             }
 
-            // Always create a spot record to maintain the Client -> Cochera -> Vehicle relationship
-            const spotNumberToSave = finalType === 'Movil' ? '' : formData.numeroCochera;
-
-            await api.post('/cocheras', {
-                tipo: finalType,
-                numero: spotNumberToSave,
-                vehiculos: [formData.patente], // Mark as occupied by this vehicle
-                precioBase: basePriceDisplay,
-                status: 'Ocupada',
-                clienteId: clientId
-            });
-
-            // 3. SUBSCRIPTION CREATION (Full Payload)
-            // Ensure totalInicial (proratedPrice) is sent
+            // SUBSCRIPTION CREATION (Full Payload)
             const payload = {
-                clientId: clientId, // Link to the real client ID
-                customerData: { // Redundant but requested to be "Full Object"
+                customerData: {
                     nombreApellido: formData.nombre,
                     dni: formData.dni,
                     email: formData.email,
@@ -290,18 +226,19 @@ const FormularioAbono: React.FC = () => {
                     type: formData.tipoVehiculo
                 },
                 subscriptionType: finalType,
-                spotNumber: formData.numeroCochera, // Explicitly sending spot info
+                spotNumber: finalType === 'Movil' ? '' : formData.numeroCochera,
                 paymentMethod: formData.metodoPago,
-                amount: proratedPrice, // The calculated prorated amount
-                totalInicial: proratedPrice, // Explicit naming for clarity
+                basePrice: basePriceDisplay,
+                amount: proratedPrice,
+                totalInicial: proratedPrice,
                 billingType: formData.tipoFactura,
                 operator: operatorName,
                 photos: photos,
                 startDate: new Date().toISOString()
             };
 
-            const response = await api.post('/abonos', payload);
-            console.log("[Abonos] Iniciando guardado...", payload);
+            console.log("[Abonos] Iniciando guardado unificado...", payload);
+            const response = await api.post('/abonos/alta-completa', payload);
 
             let expirationText = "Fin de mes";
             if (response.data && response.data.endDate) {
@@ -365,7 +302,9 @@ const FormularioAbono: React.FC = () => {
 
         } catch (error: any) {
             console.error("Subscription Error:", error);
-            toast.error('Error: ' + (error.response?.data?.error || error.message || "Fallo al procesar abono"));
+            const errorMsg = error.response?.data?.error || error.message || "Fallo al procesar abono";
+            setErrorMessage(errorMsg);
+            toast.error('Error: ' + errorMsg);
             // IMPORTANT: Do NOT clear form data here to allow user to fix the issue
         } finally {
             setLoading(false);
@@ -543,6 +482,13 @@ const FormularioAbono: React.FC = () => {
                                 <span className="block text-[9px] text-emerald-500/70 uppercase font-bold tracking-widest mb-0.5">Total Inicial</span>
                                 <span className="block text-2xl font-black text-white tracking-tighter">${proratedPrice.toLocaleString()}</span>
                             </div>
+
+                            {errorMessage && (
+                                <div className="mt-3 bg-red-500/10 border border-red-500/50 p-3 rounded flex items-start gap-2 animate-in fade-in slide-in-from-top-2">
+                                    <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                                    <span className="text-xs text-red-400 font-medium leading-relaxed">{errorMessage}</span>
+                                </div>
+                            )}
 
                             <button form="abono-form" type="submit" disabled={loading}
                                 className="w-full py-3 bg-white hover:bg-gray-200 text-black text-xs font-black uppercase tracking-widest rounded shadow-lg flex items-center justify-center gap-2 mt-3 transition-all active:scale-95">

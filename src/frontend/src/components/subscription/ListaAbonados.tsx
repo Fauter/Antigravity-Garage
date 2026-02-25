@@ -13,6 +13,11 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
     const [cocheras, setCocheras] = useState<any[]>([]);
 
     useEffect(() => {
+        // Silent background sweep for debts when entering the list
+        api.post('/abonos/evaluar-deudas', {})
+            .then(res => console.log("Silent debt sweep completed:", res.data))
+            .catch(err => console.error("Error running debt sweep:", err));
+
         // Fetch all cocheras to map plates correctly
         api.get('/cocheras')
             .then(res => setCocheras(res.data || []))
@@ -94,15 +99,15 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                             const isActive = sub.aggregatedValues.isActive;
 
                             // --- COMIENZO DEL BLOQUE CORREGIDO ---
-                            // Lookup Vehicles from Cocheras
-                            const clientCocheras = cocheras.filter(c => c.clienteId === customerId);
+                            // Lookup Vehicles ONLY from Cocheras and ONLY if they are 'Ocupada'
+                            const clientCocheras = cocheras.filter(c => c.clienteId === customerId && c.status === 'Ocupada');
 
-                            // Extract unique plates
+                            // Extract unique plates EXCLUSIVELY from Physical Cocheras
                             const uniquePlates = new Set<string>();
                             clientCocheras.forEach(c => {
                                 if (c.vehiculos && Array.isArray(c.vehiculos)) {
                                     c.vehiculos.forEach((v: any) => {
-                                        // Filtro estricto: No agregamos si es "---", vacío o nulo
+                                        // Strict filter: No "---", empty or null
                                         if (typeof v === 'string' && v.trim() !== '' && v !== '---') {
                                             uniquePlates.add(v);
                                         }
@@ -113,16 +118,7 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                                 }
                             });
 
-                            // También extraemos de las suscripciones (backup) con el mismo filtro
-                            const currentSubscribers = subscribers || [];
-                            const clientSubs = currentSubscribers.filter((s: any) => (s.clientId || s.customerData?.id || s.id) === customerId);
-                            clientSubs.forEach((s: any) => {
-                                const plate = s.vehicleData?.plate || s.plate;
-                                // Filtro estricto de seguridad
-                                if (plate && plate !== '---' && plate.trim() !== '') {
-                                    uniquePlates.add(plate);
-                                }
-                            });
+                            // FALLBACKS FROM SUBSCRIPTIONS COMPLETELY REMOVED PER REQUIREMENT
 
                             const displayPlates = Array.from(uniquePlates);
                             // --- FIN DEL BLOQUE CORREGIDO ---

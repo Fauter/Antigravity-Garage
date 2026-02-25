@@ -22,6 +22,7 @@
     "socket.io-client": "^4.8.3",
     "typescript": "^5.9.3",
     "uuid": "^13.0.0",
+    "uuidv5": "^1.0.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

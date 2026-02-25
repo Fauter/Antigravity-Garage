@@ -5,10 +5,10 @@ import { CustomerRepository } from './CustomerRepository';
 import { VehicleRepository } from './VehicleRepository';
 import { MovementRepository } from '../../Billing/infra/MovementRepository';
 import { DebtRepository } from './DebtRepository';
-import { v4 as uuidv4 } from 'uuid';
-import { JsonDB } from '../../../infrastructure/database/json-db';
-import { db } from '../../../infrastructure/database/datastore';
-import { PricingEngine } from '../../Billing/domain/PricingEngine';
+import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
+import { db } from '../../../infrastructure/database/datastore.js';
+import { PricingEngine } from '../../Billing/domain/PricingEngine.js';
+import { QueueService } from '../../Sync/application/QueueService.js';
 
 // --- Cochera Model ---
 interface Cochera {
@@ -21,7 +21,37 @@ interface Cochera {
     status?: string;
 }
 
-const cocherasDB = new JsonDB<Cochera>('cocheras');
+const queueService = new QueueService();
+
+const cocherasDB = {
+    getAll: async (): Promise<any[]> => await db.cocheras.find({}),
+    getById: async (id: string): Promise<any> => await db.cocheras.findOne({ id } as any),
+    create: async (cochera: any): Promise<any> => {
+        await db.cocheras.insert(cochera);
+        await queueService.enqueue('Cochera', 'CREATE', cochera);
+        return cochera;
+    },
+    updateOne: async (query: any, update: any) => {
+        const setUpdate = { ...update };
+        delete setUpdate._id; // prevent NeDB error
+        await db.cocheras.update(query, { $set: setUpdate }, { multi: false });
+
+        // Fetch to send complete payload to sync queue
+        const updated = await db.cocheras.findOne(query);
+        if (updated) {
+            await queueService.enqueue('Cochera', 'UPDATE', updated);
+        }
+        return updated;
+    },
+    delete: async (id: string) => {
+        await db.cocheras.remove({ id }, { multi: false });
+        await queueService.enqueue('Cochera', 'DELETE', { id });
+        return true;
+    },
+    reset: async () => {
+        await db.cocheras.remove({}, { multi: true });
+    }
+};
 
 // TODO: Move to shared config / PricingEngine
 const PRICING_CONFIG = {
@@ -78,7 +108,7 @@ export class GarageController {
 
             // Populate vehicle details for rich frontend diaplay
             const populated = await Promise.all(filtered.map(async (cochera) => {
-                const vehicleDetails = await Promise.all((cochera.vehiculos || []).map(async (plate) => {
+                const vehicleDetails = await Promise.all((cochera.vehiculos || []).map(async (plate: any) => {
                     const vehicle = await this.vehicleRepo.findByPlate(plate);
                     return vehicle ?
                         { plate: vehicle.plate, type: vehicle.type, brand: vehicle.brand || '', model: vehicle.model || '', color: vehicle.color || '', year: vehicle.year || '', insurance: vehicle.insurance || '' }
@@ -267,7 +297,7 @@ export class GarageController {
             if (!cochera) return res.status(404).json({ error: 'Cochera no encontrada' });
 
             // Remove vehicle from cochera
-            cochera.vehiculos = (cochera.vehiculos || []).filter(v => typeof v === 'string' ? v !== plate : (v as any).plate !== plate);
+            cochera.vehiculos = (cochera.vehiculos || []).filter((v: any) => typeof v === 'string' ? v !== plate : (v as any).plate !== plate);
             await cocherasDB.updateOne({ id: cocheraId } as any, cochera);
 
             // Change isSubscriber to false for this specific vehicle and decouple from customer
@@ -420,14 +450,39 @@ export class GarageController {
             const customerSubs = await this.subscriptionRepo.findByCustomerId(customer!.id);
             const activeSubs = customerSubs.filter(s => s.active);
 
-            // TODO: If subscriptionType is Fija/Exclusiva, we should Link to a Cochera?
-            // The prompt separates "Abonos" from "Cocheras" architecture but implies linkage.
-            // "Cocheras Fijas/Exclusivas: Un mismo número no pode duplicarse".
-            // Assuming the Frontend creates the Cochera first or we assume Cochera exists?
-            // "Lógica de Cochera (Top Flow)... Si marca Exclusiva...".
-            // Let's create the Abono. The linkage might be implicit or explicit. 
-            // For now, standard Abono creation.
+            // 3. Process Cochera (Find or Create)
+            const spotNumberStr = req.body.spotNumber || '';
+            const allCocheras = await cocherasDB.getAll();
+            let cochera = null;
 
+            if (subscriptionType !== 'Movil' && spotNumberStr) {
+                cochera = allCocheras.find((c: any) => c.numero === String(spotNumberStr) && (c as any).garageId === garageId);
+            }
+
+            if (cochera) {
+                // Update existing cochera
+                cochera.clienteId = customer!.id;
+                cochera.vehiculos = [vehicle.plate]; // Replace with new assigned plate
+                cochera.status = 'Ocupada';
+                cochera.precioBase = Number(req.body.basePrice) || cochera.precioBase || 0;
+                cochera.tipo = subscriptionType;
+                (cochera as any).garageId = garageId;
+
+                await cocherasDB.updateOne({ id: cochera.id } as any, cochera);
+            } else {
+                // Create new cochera
+                const newCochera: Cochera = {
+                    id: uuidv4(),
+                    tipo: subscriptionType,
+                    numero: subscriptionType === 'Movil' ? undefined : String(spotNumberStr),
+                    clienteId: customer!.id,
+                    status: 'Ocupada',
+                    precioBase: Number(req.body.basePrice) || 0,
+                    vehiculos: [vehicle.plate],
+                    garageId: garageId
+                } as any;
+                await cocherasDB.create(newCochera);
+            }
             const newSubscription = SubscriptionManager.createSubscription(
                 customer!.id,
                 subscriptionType,
@@ -517,50 +572,6 @@ export class GarageController {
             // Filter strictly by garageId
             subs = subs.filter(s => (s as any).garageId === garageId);
 
-            // --- Lazy Debt Evaluation ---
-            const now = new Date();
-            for (const sub of subs) {
-                if (sub.active && sub.endDate) {
-                    let subEndDate = new Date(sub.endDate);
-
-                    let loopCount = 0;
-                    const MAX_LOOPS = 24; // Límite de seguridad de 24 meses (2 años max de retroactivo)
-
-                    // Bucle para atrapar todos los meses adeudados si pasaron varios meses
-                    while (subEndDate < now && loopCount < MAX_LOOPS) {
-                        loopCount++;
-                        try {
-                            const monthStart = new Date(subEndDate.getFullYear(), subEndDate.getMonth(), 1);
-                            const monthEnd = new Date(subEndDate.getFullYear(), subEndDate.getMonth() + 1, 0);
-
-                            const existingDebts = await this.debtRepo.findBySubscriptionIdAndMonth(sub.id, monthStart, monthEnd);
-                            if (!existingDebts || existingDebts.length === 0) {
-                                await this.debtRepo.save({
-                                    id: uuidv4(),
-                                    subscriptionId: sub.id,
-                                    customerId: sub.customerId || (sub as any).clientId,
-                                    amount: sub.price || 0,
-                                    surchargeApplied: 0,
-                                    status: 'PENDING',
-                                    dueDate: subEndDate, // La fecha de fin original
-                                    createdAt: new Date(),
-                                    updatedAt: new Date()
-                                } as any);
-                            }
-
-                            // Avanzar al mes siguiente
-                            subEndDate = new Date(subEndDate.getFullYear(), subEndDate.getMonth() + 2, 0);
-                            sub.endDate = subEndDate;
-                            await this.subscriptionRepo.save(sub);
-
-                        } catch (evalError) {
-                            console.error(`Error en evaluación lazy para sub ${sub.id}:`, evalError);
-                            break; // Romper bucle si hay error para no colgar
-                        }
-                    }
-                }
-            }
-
             const customers = await this.customerRepo.findAll();
 
             const populated = await Promise.all(subs.map(async (sub: any) => {
@@ -587,6 +598,131 @@ export class GarageController {
 
             res.json(populated);
         } catch (error: any) {
+            res.status(500).json({ error: error.message });
+        }
+    };
+
+    // --- TRIGGER DEBT SWEEP (SILENT EVALUATION) ---
+    triggerDebtSweep = async (req: Request, res: Response) => {
+        try {
+            const garageId = req.headers['x-garage-id'] as string;
+            if (!garageId) {
+                return res.status(400).json({ error: 'x-garage-id header is required' });
+            }
+
+            let subs = await this.subscriptionRepo.findAll();
+            subs = subs.filter(s => (s as any).garageId === garageId && s.active && s.endDate);
+
+            const allCocheras = await cocherasDB.getAll();
+
+            const [prices, vehicleTypes, tariffs] = await Promise.all([
+                db.prices.find({ garageId, priceList: 'standard' }),
+                db.vehicleTypes.find({ garageId }),
+                db.tariffs.find({ garageId })
+            ]);
+
+            const vTypeMap = new Map(vehicleTypes.map((v: any) => [v.id.trim(), v.name]));
+            const tariffMap = new Map(tariffs.map((t: any) => [t.id.trim(), t.name]));
+
+            const standardMatrix: Record<string, Record<string, number>> = {};
+            prices.forEach((p: any) => {
+                const vIdRaw = (p.vehicleTypeId || p.vehicle_type_id || '').trim();
+                const tIdRaw = (p.tariffId || p.tariff_id || '').trim();
+                const vName = vTypeMap.get(vIdRaw);
+                const tName = tariffMap.get(tIdRaw);
+                if (vName && tName) {
+                    const vKey = String(vName).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+                    const tKey = String(tName).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+                    if (!standardMatrix[vKey]) standardMatrix[vKey] = {};
+                    standardMatrix[vKey][tKey] = Number(p.amount || 0);
+                }
+            });
+
+            const now = new Date();
+            let processed = 0;
+
+            for (const sub of subs) {
+                let subEndDate = new Date(sub.endDate!);
+                let loopCount = 0;
+                const MAX_LOOPS = 24;
+
+                const subClientId = sub.customerId || (sub as any).clientId;
+                const relatedCochera = allCocheras.find((c: any) => c.clienteId === subClientId);
+                const cocheraBasePrice = relatedCochera ? Number(relatedCochera.precioBase || 0) : 0;
+
+                const subPlate = sub.plate || sub.vehicleData?.plate || (sub as any).vehicle_plate;
+                let vKey = '';
+                if (subPlate) {
+                    const vehicle = await this.vehicleRepo.findByPlate(subPlate);
+                    if (vehicle && vehicle.type) {
+                        vKey = String(vehicle.type).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+                    }
+                }
+                const subTypeRaw = sub.type || (sub as any).subscriptionType || 'Movil';
+                let tKey = String(subTypeRaw).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+                if (subTypeRaw === 'Exclusiva') tKey = 'abono exclusivo';
+                else tKey = `abono ${tKey}`;
+
+                let resolvedPrice = 0;
+                if (vKey && standardMatrix[vKey]) {
+                    if (standardMatrix[vKey][tKey]) {
+                        resolvedPrice = standardMatrix[vKey][tKey];
+                    } else if (standardMatrix[vKey][String(subTypeRaw).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim()]) {
+                        resolvedPrice = standardMatrix[vKey][String(subTypeRaw).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim()];
+                    }
+                }
+
+                // ESTRUCTURAL POINT 2: Strict Fallback & Prohibition of sub.price
+                const finalPrice = resolvedPrice > 0 ? resolvedPrice : cocheraBasePrice;
+
+                if (finalPrice <= 0) continue; // Safety abort
+
+                while (subEndDate < now && loopCount < MAX_LOOPS) {
+                    loopCount++;
+                    try {
+                        const monthStart = new Date(subEndDate.getFullYear(), subEndDate.getMonth(), 1);
+                        const NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+                        const seedString = `DEBT_${sub.id}_${monthStart.getFullYear()}_${monthStart.getMonth() + 1}`;
+                        const debtId = uuidv5(seedString, NAMESPACE);
+
+                        let existingDebt = null;
+                        if ((this.debtRepo as any).findById) {
+                            existingDebt = await (this.debtRepo as any).findById(debtId);
+                        } else {
+                            // Temporary fallback until Repository is updated next Step
+                            const all = await (this.debtRepo as any).db?.getAll() || [];
+                            existingDebt = all.find((d: any) => d.id === debtId);
+                        }
+
+                        // Idempotency explicit break
+                        if (existingDebt && existingDebt.amount === finalPrice && existingDebt.status === 'PENDING') {
+                            // Silent pass
+                        } else {
+                            await this.debtRepo.save({
+                                id: debtId,
+                                subscriptionId: sub.id,
+                                customerId: sub.customerId || (sub as any).clientId,
+                                garageId: garageId,
+                                amount: finalPrice,
+                                surchargeApplied: 0,
+                                status: existingDebt ? existingDebt.status : 'PENDING',
+                                dueDate: new Date(subEndDate.getTime()),
+                                createdAt: existingDebt ? existingDebt.createdAt : new Date(),
+                                updatedAt: new Date()
+                            } as any);
+                            processed++;
+                        }
+
+                        subEndDate = new Date(subEndDate.getFullYear(), subEndDate.getMonth() + 2, 0);
+                    } catch (evalError) {
+                        console.error(`Error en evaluación de deuda para sub ${sub.id}:`, evalError);
+                        break;
+                    }
+                }
+            }
+            res.json({ message: 'Sweep completed successfully', processed });
+        } catch (error: any) {
+            console.error('Error en triggerDebtSweep:', error);
             res.status(500).json({ error: error.message });
         }
     };
@@ -633,13 +769,15 @@ export class GarageController {
                 garageSettings = garage?.settings || garage?.config || garage || {};
             }
 
-            const debtsWithDynamicSurcharge = debts.map(debt => {
-                const dynamicSurcharge = PricingEngine.calculateSurcharge(debt.amount, garageSettings);
-                return {
-                    ...debt,
-                    surchargeApplied: dynamicSurcharge
-                };
-            });
+            const debtsWithDynamicSurcharge = debts
+                .filter(debt => typeof debt.id === 'string' && debt.id.length === 36 && debt.id.includes('-')) // UI SANEAMIENTO: Strict UUID Filtrattion
+                .map(debt => {
+                    const dynamicSurcharge = PricingEngine.calculateSurcharge(debt.amount, garageSettings);
+                    return {
+                        ...debt,
+                        surchargeApplied: dynamicSurcharge
+                    };
+                });
 
             res.json(debtsWithDynamicSurcharge);
         } catch (error: any) {
@@ -687,6 +825,7 @@ export class GarageController {
 
     // Wrapper for server.ts compatibility
     getSubscriptions = this.getAllSubscriptions;
+    createFullSubscription = this.createSubscription;
 
     getVehicleByPlate = async (req: Request, res: Response) => {
         try {

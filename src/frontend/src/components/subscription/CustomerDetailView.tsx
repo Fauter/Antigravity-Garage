@@ -14,6 +14,8 @@ import {
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { toast } from 'sonner';
+import { useAuth } from '../../context/AuthContext';
+import { PrinterService } from '../../services/PrinterService';
 
 interface CustomerDetailViewProps {
     subscriber: any;
@@ -21,6 +23,7 @@ interface CustomerDetailViewProps {
 }
 
 const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onBack }) => {
+    const { operatorName } = useAuth();
     const [cocheras, setCocheras] = useState<any[]>([]);
     const [subscriptions, setSubscriptions] = useState<any[]>([]); // To enrich vehicle data
     const [realVehicles, setRealVehicles] = useState<any[]>([]); // Real vehicle table datastore
@@ -30,6 +33,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     // --- Configuration State ---
     const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
     const [pricesMatrix, setPricesMatrix] = useState<any>({});
+    const [standardPricesMatrix, setStandardPricesMatrix] = useState<any>({});
+    const [electronicPricesMatrix, setElectronicPricesMatrix] = useState<any>({});
 
     // --- Modal State ---
     const [isModalOpen, setIsModalOpen] = useState(false);
@@ -76,6 +81,18 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         basePrice: 0,
         proratedPrice: 0
     });
+    const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+    // --- RENEWAL MODAL STATE ---
+    const [isRenewalModalOpen, setIsRenewalModalOpen] = useState(false);
+    const [selectedDebtSubId, setSelectedDebtSubId] = useState<string | null>(null);
+    const [renewalData, setRenewalData] = useState({
+        amountToPay: 0,
+        metodoPago: 'Efectivo',
+        tipoFactura: 'Final',
+        cocheraDetails: null as any,
+        hasPendingDebt: false
+    });
 
     // --- Expanded Vehicles State (Accordion) ---
     const [expandedVehicles, setExpandedVehicles] = useState<Set<string>>(new Set());
@@ -92,13 +109,22 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     useEffect(() => {
         const loadConfig = async () => {
             try {
-                const [typesRes, pricesRes] = await Promise.all([
-                    api.get('/tipos-vehiculo'),
-                    api.get('/precios?metodo=efectivo')
-                ]);
-                setVehicleTypes(typesRes.data || []);
-                // Data structure handling for prices
-                setPricesMatrix(pricesRes.data.efectivo || pricesRes.data || {});
+                const fetchStandardPrices = api.get('/precios?metodo=efectivo').catch(e => { console.error("Standard price load error:", e); return null; });
+                const fetchElectronicPrices = api.get('/precios?metodo=otros').catch(e => { console.error("Electronic price load error:", e); return null; });
+                const fetchTypes = api.get('/tipos-vehiculo').catch(e => { console.error("Type load error:", e); return null; });
+
+                const [standardPricesRes, electronicPricesRes, typesRes] = await Promise.all([fetchStandardPrices, fetchElectronicPrices, fetchTypes]);
+
+                if (typesRes && typesRes.data && vehicleTypes.length === 0) {
+                    setVehicleTypes(typesRes.data);
+                }
+                if (standardPricesRes && standardPricesRes.data) {
+                    setStandardPricesMatrix(standardPricesRes.data.efectivo || standardPricesRes.data);
+                    setPricesMatrix(standardPricesRes.data.efectivo || standardPricesRes.data); // Fallback until refactored completely
+                }
+                if (electronicPricesRes && electronicPricesRes.data) {
+                    setElectronicPricesMatrix(electronicPricesRes.data.otros || electronicPricesRes.data.efectivo || electronicPricesRes.data);
+                }
             } catch (error) {
                 console.error("Error loading configuration:", error);
                 toast.error("Error cargando configuración de precios");
@@ -157,7 +183,6 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
     }, [newVehicleData.tipoVehiculo, selectedCochera, pricesMatrix]);
 
-    // --- Business Logic: New Cochera Pricing (Replicated from FormularioAbono) ---
     useEffect(() => {
         if (!isNewCocheraOpen || !newCocheraData.tipoVehiculo) {
             setNewCocheraFinancials({ basePrice: 0, proratedPrice: 0 });
@@ -170,53 +195,62 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         let cocheraKey = newCocheraData.tipo;
         if (newCocheraData.exclusiva) cocheraKey = 'Exclusiva';
 
-        // 2. Find Price
-        const typeKey = Object.keys(pricesMatrix).find(k => normalize(k) === normalize(newCocheraData.tipoVehiculo));
-        let finalPrice = 0;
-
-        if (typeKey && pricesMatrix[typeKey]) {
-            const priceKey = Object.keys(pricesMatrix[typeKey]).find(k => normalize(k) === normalize(cocheraKey));
-            if (priceKey) {
-                finalPrice = Number(pricesMatrix[typeKey][priceKey]);
+        // 2. Find Price Helper
+        const findPrice = (matrix: any) => {
+            const typeKey = Object.keys(matrix).find(k => normalize(k) === normalize(newCocheraData.tipoVehiculo));
+            let finalPrice = 0;
+            if (typeKey && matrix[typeKey]) {
+                const priceKey = Object.keys(matrix[typeKey]).find(k => normalize(k) === normalize(cocheraKey));
+                if (priceKey) {
+                    finalPrice = Number(matrix[typeKey][priceKey]);
+                }
             }
-        }
+            return finalPrice;
+        };
 
-        // 3. Prorata
+        const standardPrice = findPrice(standardPricesMatrix);
+        const currentPrice = findPrice(pricesMatrix);
+
+        // 3. Prorata (Exact current month exact rounding)
         const now = new Date();
-        const daysInMonth = 30; // Standardize 30 days logic as per requirement
         const currentDay = now.getDate();
-        const remainingDays = Math.max(0, daysInMonth - currentDay + 1);
-        const prorated = Math.floor((finalPrice / 30) * remainingDays);
+        const ultimoDiaMes = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+        const diasRestantes = (ultimoDiaMes - currentDay) + 1;
+        const exactCalc = (currentPrice / ultimoDiaMes) * diasRestantes;
+        const roundedDown = Math.floor(exactCalc / 100) * 100;
 
         setNewCocheraFinancials({
-            basePrice: finalPrice,
-            proratedPrice: prorated
+            basePrice: standardPrice,
+            proratedPrice: roundedDown
         });
 
-    }, [newCocheraData.tipo, newCocheraData.exclusiva, newCocheraData.tipoVehiculo, pricesMatrix, isNewCocheraOpen]);
+    }, [newCocheraData.tipo, newCocheraData.exclusiva, newCocheraData.tipoVehiculo, pricesMatrix, standardPricesMatrix, isNewCocheraOpen]);
+
+    useEffect(() => {
+        setErrorMessage(null);
+    }, [newCocheraData.numero, newCocheraData.tipo, newCocheraData.patente, isNewCocheraOpen]);
 
     const handleCreateCochera = async () => {
         if (!clientId) { toast.error("Error: Cliente no identificado"); return; }
         if (!newCocheraData.patente || !newCocheraData.tipoVehiculo) { toast.error("Patente y Tipo de Vehículo obligatorios"); return; }
         if ((newCocheraData.tipo === 'Fija' || newCocheraData.exclusiva) && !newCocheraData.numero) { toast.error("Número de cochera obligatorio"); return; }
 
+        setErrorMessage(null);
+
         try {
             const finalType = newCocheraData.exclusiva ? 'Exclusiva' : newCocheraData.tipo;
 
-            // 1. Create Cochera
-            await api.post('/cocheras', {
-                tipo: finalType,
-                numero: newCocheraData.numero,
-                vehiculos: [newCocheraData.patente.toUpperCase()],
-                precioBase: newCocheraFinancials.basePrice,
-                status: 'Ocupada',
-                clienteId: clientId
-            });
+            const rawEmail = subscriber.customerData?.email || subscriber.email || '';
+            const rawAddress = subscriber.customerData?.address || subscriber.domicilio || subscriber.localidad || '';
 
-            // 2. Create Subscription & Vehicle Metadata
-            await api.post('/abonos', {
-                clientId: clientId,
-                customerData: { id: clientId, ...subscriber.customerData }, // Pass basic info
+            const payload = {
+                customerData: {
+                    nombreApellido: clientName,
+                    dni: String(rawDni),
+                    email: rawEmail,
+                    address: rawAddress,
+                    telefono: String(rawPhone)
+                },
                 vehicleData: {
                     plate: newCocheraData.patente.toUpperCase(),
                     brand: newCocheraData.marca,
@@ -229,24 +263,34 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 subscriptionType: finalType,
                 spotNumber: newCocheraData.numero,
                 paymentMethod: newCocheraData.metodoPago,
+                basePrice: newCocheraFinancials.basePrice,
                 amount: newCocheraFinancials.proratedPrice,
-                totalInicial: newCocheraFinancials.proratedPrice,
                 billingType: newCocheraData.tipoFactura,
+                operator: operatorName,
                 startDate: new Date().toISOString()
+            };
+
+            await api.post('/abonos/alta-completa', payload);
+
+            PrinterService.printSubscriptionTicket({
+                nombreApellido: clientName,
+                dni: rawDni,
+                patente: newCocheraData.patente.toUpperCase(),
+                marca: newCocheraData.marca,
+                modelo: newCocheraData.modelo,
+                tipoVehiculo: newCocheraData.tipoVehiculo,
+                tipoCochera: finalType,
+                numeroCochera: newCocheraData.numero,
+                metodoPago: newCocheraData.metodoPago,
+                basePriceDisplay: newCocheraFinancials.basePrice,
+                proratedPrice: newCocheraFinancials.proratedPrice
             });
 
             toast.success("Cochera y Abono creados exitosamente");
             setIsNewCocheraOpen(false);
 
             // Refresh logic
-            setLoading(true);
-            const [cocherasRes, vehiclesRes] = await Promise.all([
-                api.get(`/cocheras?clienteId=${clientId}`),
-                api.get(`/vehiculos?customerId=${clientId}`)
-            ]);
-            setCocheras(cocherasRes.data || []);
-            setRealVehicles(vehiclesRes.data || []);
-            setLoading(false);
+            await refreshCustomerAssets();
 
             // Reset Form (Optional but good UX)
             setNewCocheraData(prev => ({ ...prev, patente: '', marca: '', modelo: '', numero: '' }));
@@ -254,6 +298,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         } catch (error: any) {
             console.error("Error creating cochera:", error);
             const msg = error.response?.data?.error || error.message;
+            setErrorMessage(msg);
             toast.error("Error al crear cochera: " + msg);
         }
     };
@@ -264,13 +309,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         try {
             await api.post('/cocheras/liberar', { cocheraId });
             toast.success("Cochera liberada con éxito");
-            // Soft refresh
-            const [cocherasRes, vehiclesRes] = await Promise.all([
-                api.get(`/cocheras?clienteId=${clientId}`),
-                api.get(`/vehiculos?customerId=${clientId}`)
-            ]);
-            setCocheras(cocherasRes.data || []);
-            setRealVehicles(vehiclesRes.data || []);
+            // FULL GLOBAL REFRESH TO PREVENT VISUAL ARTIFACTS
+            refreshCustomerAssets();
         } catch (error) {
             console.error(error);
             toast.error("Error al liberar cochera");
@@ -282,13 +322,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         try {
             await api.post('/cocheras/desvincular-vehiculo', { cocheraId, plate });
             toast.success("Vehículo desvinculado");
-            // Soft refresh
-            const [cocherasRes, vehiclesRes] = await Promise.all([
-                api.get(`/cocheras?clienteId=${clientId}`),
-                api.get(`/vehiculos?customerId=${clientId}`)
-            ]);
-            setCocheras(cocherasRes.data || []);
-            setRealVehicles(vehiclesRes.data || []);
+            // FULL GLOBAL REFRESH TO PREVENT VISUAL ARTIFACTS
+            refreshCustomerAssets();
         } catch (error) {
             console.error(error);
             toast.error("Error al desvincular vehículo");
@@ -335,26 +370,16 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
             const updatedVehicles = [...currentVehicles, vehicleToAdd];
 
-            // Determine persisted price (only update if upgrade)
-            const finalBasePrice = upgradeInfo.isUpgrade ? upgradeInfo.newBasePrice : selectedCochera.precioBase;
-
+            // Dynamic pricing will handle the new rate on the backend next time we fetch
             await api.patch(`/cocheras/${selectedCochera.id}`, {
-                vehiculos: updatedVehicles,
-                precioBase: finalBasePrice
+                vehiculos: updatedVehicles
             });
 
             toast.success("Vehículo agregado correctamente");
             setIsModalOpen(false);
 
-            // Refresh
-            setLoading(true);
-            const [cocherasRes, vehiclesRes] = await Promise.all([
-                api.get(`/cocheras?clienteId=${clientId}`),
-                api.get(`/vehiculos?customerId=${clientId}`)
-            ]);
-            setCocheras(cocherasRes.data || []);
-            setRealVehicles(vehiclesRes.data || []);
-            setLoading(false);
+            // Refresh globally
+            await refreshCustomerAssets();
 
         } catch (error) {
             console.error("Error saving vehicle:", error);
@@ -387,39 +412,120 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         subscriber.customerId ||
         subscriber.assignedTo;
 
+    // Standardized Refresher for Global UI state
+    const refreshCustomerAssets = async () => {
+        if (!clientId) return;
+        setLoading(true);
+        try {
+            const [cocherasRes, subsRes, vehiclesRes, debtsRes] = await Promise.all([
+                api.get(`/cocheras?clienteId=${clientId}`),
+                api.get(`/abonos?clientId=${clientId}`),
+                api.get(`/vehiculos?customerId=${clientId}`),
+                api.get(`/deudas/${clientId}`).catch(() => ({ data: [] }))
+            ]);
+
+            setCocheras(cocherasRes.data || []);
+            setSubscriptions(subsRes.data || []);
+            setRealVehicles(vehiclesRes.data || []);
+            setDebts((debtsRes.data || []).filter((d: any) => d.status === 'PENDING'));
+        } catch (err) {
+            console.error('Error refreshing client assets:', err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
     useEffect(() => {
-        const fetchAssets = async () => {
-            if (!clientId) return;
-            try {
-                // Fetch Cocheras, Subscriptions, and Vehicles in parallel
-                const [cocherasRes, subsRes, vehiclesRes] = await Promise.all([
-                    api.get(`/cocheras?clienteId=${clientId}`),
-                    api.get(`/abonos?clientId=${clientId}`), // Use clientId to get vehicle details
-                    api.get(`/vehiculos?customerId=${clientId}`)
-                ]);
-
-                setCocheras(cocherasRes.data || []);
-                setSubscriptions(subsRes.data || []);
-                setRealVehicles(vehiclesRes.data || []);
-
-                // Fetch deudas (Safe block para no romper toda la vista si falla)
-                try {
-                    const debtsRes = await api.get(`/deudas/${clientId}`);
-                    setDebts((debtsRes.data || []).filter((d: any) => d.status === 'PENDING'));
-                } catch (debtError) {
-                    console.error('Error fetching debts, bypassing UI crash:', debtError);
-                    setDebts([]);
-                }
-            } catch (err) {
-                console.error('Error fetching client assets:', err);
-                toast.error("Error al cargar datos del cliente");
-            } finally {
-                setLoading(false);
-            }
-        };
-
-        fetchAssets();
+        refreshCustomerAssets();
     }, [clientId]);
+
+    const handleOpenRenewalModal = (subId: string, cochera: any, amount: number, hasDebt: boolean) => {
+        setSelectedDebtSubId(subId);
+        setRenewalData({
+            amountToPay: amount,
+            metodoPago: 'Efectivo',
+            tipoFactura: 'Final',
+            cocheraDetails: cochera,
+            hasPendingDebt: hasDebt
+        });
+        setIsRenewalModalOpen(true);
+    };
+
+    // --- Live Lookup para Renovaciones sin Deuda ---
+    useEffect(() => {
+        if (!isRenewalModalOpen || renewalData.hasPendingDebt || !selectedDebtSubId) return;
+
+        const sub = subscriptions.find(s => s.id === selectedDebtSubId);
+        if (!sub) return;
+
+        const matrix = renewalData.metodoPago === 'Efectivo' ? standardPricesMatrix : electronicPricesMatrix;
+        if (!matrix || Object.keys(matrix).length === 0) return;
+
+        const normalize = (s: string) => s ? String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim() : '';
+
+        // Determinar Vehículo
+        let vKey = '';
+        const cochera = renewalData.cocheraDetails;
+        if (cochera && cochera.vehiculos && cochera.vehiculos.length > 0) {
+            const plateStr = typeof cochera.vehiculos[0] === 'string' ? cochera.vehiculos[0] : (cochera.vehiculos[0] as any).plate;
+            const v = realVehicles.find(rv => rv.plate === plateStr);
+            if (v && v.type) vKey = normalize(v.type);
+        } else if (sub.plate || sub.vehicleData?.plate) {
+            const plateStr = sub.plate || sub.vehicleData?.plate;
+            const v = realVehicles.find(rv => rv.plate === plateStr);
+            if (v && v.type) vKey = normalize(v.type);
+        }
+
+        // Determinar Tarifa
+        const subTypeRaw = sub.type || sub.subscriptionType || 'Movil';
+        let tKey = normalize(subTypeRaw);
+        if (subTypeRaw === 'Exclusiva') tKey = normalize('abono exclusivo');
+        else tKey = normalize(`abono ${subTypeRaw}`);
+
+        let foundPrice = 0;
+        const typeKey = Object.keys(matrix).find(k => normalize(k) === vKey);
+        if (typeKey && matrix[typeKey]) {
+            const priceKey = Object.keys(matrix[typeKey]).find(k => normalize(k) === tKey || normalize(k) === normalize(subTypeRaw));
+            if (priceKey) {
+                foundPrice = Number(matrix[typeKey][priceKey]);
+            }
+        }
+
+        if (foundPrice > 0) {
+            setRenewalData(prev => ({ ...prev, amountToPay: foundPrice }));
+        }
+
+    }, [renewalData.metodoPago, isRenewalModalOpen, standardPricesMatrix, electronicPricesMatrix, selectedDebtSubId, subscriptions, realVehicles, renewalData.hasPendingDebt]);
+
+    const handleRenewSubscription = async () => {
+        if (!selectedDebtSubId || !renewalData.amountToPay) {
+            toast.error("Error al procesar la renovación (Faltan datos)");
+            return;
+        }
+
+        const btnSpinner = toast.loading("Procesando pago de deuda...");
+        try {
+            await api.post('/abonos/renovar', {
+                subId: selectedDebtSubId,
+                amountToPay: renewalData.amountToPay,
+                paymentMethod: renewalData.metodoPago,
+                billingType: renewalData.tipoFactura,
+                operator: operatorName
+            });
+
+            toast.success("Renovación Exitosa! Imprimiendo Comprobante...", { id: btnSpinner });
+
+            // Re-use Printer Logic if desired. Leaving basic trace message.
+            setIsRenewalModalOpen(false);
+            refreshCustomerAssets(); // Auto Refresh State entirely
+
+        } catch (error: any) {
+            console.error("Renewal Error:", error);
+            const msg = error.response?.data?.error || error.message;
+            toast.error("Error renovando abono: " + msg, { id: btnSpinner });
+        }
+    };
+
 
 
     // Helper to merge Cochera vehicle string/obj with Subscription data
@@ -541,17 +647,48 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                     ) : (
                         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-8">
                             {cocheras.map((cochera) => {
-                                // Encontrar la subscripción asociada primariamente por cochera, o por patente del vehículo
-                                const associatedSub = subscriptions.find(s =>
-                                    s.spotNumber === cochera.numero ||
-                                    (cochera.vehiculos && cochera.vehiculos.includes(s.plate || s.vehicleData?.plate))
-                                );
+                                // Buscar los vehículos registrados en esta cochera para sacar sus IDs reales
+                                const cocheraVehicles = realVehicles.filter(v => cochera.vehiculos && cochera.vehiculos.includes(v.plate));
+                                const cocheraVehicleIds = cocheraVehicles.map(v => v.id);
+
+                                // Encontrar la subscripción asociada
+                                const associatedSub = subscriptions.find(s => {
+                                    // 1. Por número de cochera (Fijas)
+                                    if (s.spotNumber && cochera.numero && s.spotNumber === cochera.numero) return true;
+
+                                    // 2. Por ID de vehículo o PATENTE
+                                    const subVehicleId = s.vehicleId || (s as any).vehicle_id;
+                                    const subPlate = s.vehicleData?.plate || s.plate;
+
+                                    if (subVehicleId && cocheraVehicleIds.includes(subVehicleId)) return true;
+                                    if (subPlate && cochera.vehiculos?.includes(subPlate)) return true;
+
+                                    // 3. Por cliente y tipo
+                                    const subClientId = s.customerId || (s as any).clientId;
+                                    const isSameClient = subClientId === cochera.clienteId;
+
+                                    const normalizeType = (t: string) => {
+                                        if (!t) return '';
+                                        const lower = t.toLowerCase();
+                                        if (lower.includes('movil')) return 'Movil';
+                                        if (lower.includes('fija')) return 'Fija';
+                                        if (lower.includes('exclusiva')) return 'Exclusiva';
+                                        return '';
+                                    };
+
+                                    if (isSameClient && normalizeType(s.type || s.subscriptionType) === normalizeType(cochera.tipo)) {
+                                        return true;
+                                    }
+
+                                    return false;
+                                });
 
                                 // Logic for checking expiration: Compare to subscription endDate (if Exists), 
                                 // otherwise assume standard month based calculation from startDate
                                 const now = new Date();
                                 let isExpired = false;
                                 let expirationDate = "Sin Vencimiento";
+                                let relatedDebtAmount = 0;
 
                                 if (associatedSub) {
                                     let rawD: Date | null = null;
@@ -563,9 +700,22 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                     }
 
                                     if (rawD) {
-                                        isExpired = now > rawD;
+                                        // Normalizar para ignorar desfases horarios / milisegundos
+                                        const todayNorm = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                                        const expNorm = new Date(rawD.getFullYear(), rawD.getMonth(), rawD.getDate());
+
+                                        isExpired = todayNorm > expNorm;
                                         expirationDate = rawD.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
                                     }
+
+                                    // Match all pending debts for the customer to force "Vencido" state
+                                    // This prevents the issue of "orphaned" debts not blocking the user's active cocheras
+                                    const pendingDebts = debts.filter(d => d.status === 'PENDING');
+                                    if (pendingDebts.length > 0) {
+                                        isExpired = true; // Force True if outstanding debts exist anywhere for this client
+                                        relatedDebtAmount = pendingDebts.reduce((acc, curr) => acc + (curr.amount || 0) + (curr.surchargeApplied || 0), 0);
+                                    }
+
                                 } else {
                                     // Fallback to end of month if no sub found at all (Edge case)
                                     const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
@@ -573,8 +723,10 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                     isExpired = false; // Cannot definitively say expired if no sub
                                 }
 
+                                console.log(`[DEBUG] Cochera #${cochera.numero || 'Movil ID: ' + cochera.id.slice(0, 4)} - Sub Asociada: ${associatedSub?.id || 'Ninguna'} - EndDate: ${associatedSub?.endDate || 'N/A'} - Expirada: ${isExpired} - Deuda: $${relatedDebtAmount}`);
+
                                 return (
-                                    <div key={cochera.id} className="group relative bg-gray-900/40 backdrop-blur-md border border-gray-800 rounded-2xl p-6 hover:border-indigo-500/50 transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl hover:shadow-indigo-900/10 flex flex-col justify-between overflow-hidden">
+                                    <div key={cochera.id} className={`group relative backdrop-blur-md border ${isExpired ? 'bg-red-500/10 border-red-500/50 shadow-lg shadow-red-900/20' : 'bg-gray-900/40 border-gray-800 hover:border-indigo-500/50 hover:shadow-indigo-900/10'} rounded-2xl p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl flex flex-col justify-between overflow-hidden`}>
                                         <div className="absolute top-4 right-4 z-20 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                             <button
                                                 onClick={() => handleOpenModal(cochera)}
@@ -597,7 +749,10 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                         <div className="mb-8 relative">
                                             <div className="flex items-start justify-between mb-2">
                                                 <div className="flex flex-col">
-                                                    <span className="text-xs uppercase text-gray-500 font-bold tracking-widest mb-1">#{cochera.numero || 'S/N'}</span>
+                                                    <span className="text-xs uppercase text-gray-500 font-bold tracking-widest mb-1">
+                                                        #{cochera.numero || 'S/N'}
+                                                        {isExpired && <span className="ml-2 inline-flex items-center gap-1 bg-red-500 text-white text-[10px] px-2 py-0.5 rounded shadow-sm shadow-red-500/20 drop-shadow-md tracking-wider"><AlertTriangle className="w-3 h-3" />VENCIDO</span>}
+                                                    </span>
                                                     <span className={`text-2xl font-bold tracking-tight ${cochera.tipo === 'Exclusiva' ? 'text-amber-400' : 'text-white'}`}>{cochera.tipo}</span>
                                                 </div>
                                             </div>
@@ -690,9 +845,14 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                 </div>
                                             </div>
 
-                                            {isExpired && (
-                                                <button className="w-full py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 rounded-lg text-xs font-bold uppercase tracking-widest transition-all">
-                                                    Renovar Abono
+                                            {isExpired && associatedSub && (
+                                                <button
+                                                    onClick={() => handleOpenRenewalModal(associatedSub.id, cochera, relatedDebtAmount > 0 ? relatedDebtAmount : 0, relatedDebtAmount > 0)}
+                                                    className="w-full py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 rounded-lg text-xs font-bold uppercase tracking-widest transition-all"
+                                                >
+                                                    {relatedDebtAmount > 0
+                                                        ? `Renovar Abono ($${relatedDebtAmount.toLocaleString('es-AR')})`
+                                                        : `Renovar Nuevo Ciclo`}
                                                 </button>
                                             )}
                                         </div>
@@ -777,14 +937,14 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                     <span className="text-xl font-mono font-bold text-white">${upgradeInfo.diffToPay.toLocaleString()}</span>
                                                 </div>
                                                 <div className="flex justify-between items-end mt-1">
-                                                    <span className="text-gray-500 text-[10px] uppercase">Nuevo Precio Base</span>
+                                                    <span className="text-gray-500 text-[10px] uppercase">Nuevo Precio Base (Matriz)</span>
                                                     <span className="text-xs font-mono text-emerald-300">${upgradeInfo.newBasePrice.toLocaleString()}</span>
                                                 </div>
                                             </>
                                         ) : (
                                             <div className="flex items-center gap-2 text-gray-400">
                                                 <Check className="w-4 h-4" />
-                                                <span className="text-xs">Misma categoría. Sin cargos extra.</span>
+                                                <span className="text-xs">Misma categoría en la matriz de precios.</span>
                                             </div>
                                         )}
                                     </div>
@@ -802,54 +962,96 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
                 {isNewCocheraOpen && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-                        <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-2xl p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+                        <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-4xl p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto">
                             <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
                                 <Plus className="w-5 h-5 text-emerald-400" />
                                 Nueva Cochera
                             </h3>
 
-                            <div className="space-y-6">
-                                {/* 1. CONFIG COCHERA */}
-                                <div className="p-4 bg-gray-800/30 rounded-lg border border-gray-700/30 space-y-3">
-                                    <div className="flex gap-4 items-end">
-                                        <div className="flex-1">
-                                            <label className={labelStyle}>Tipo</label>
-                                            <div className="flex bg-gray-900 p-1 rounded-lg border border-gray-800">
-                                                {['Movil', 'Fija'].map(t => (
-                                                    <button
-                                                        key={t}
-                                                        onClick={() => setNewCocheraData({ ...newCocheraData, tipo: t, exclusiva: false, numero: t === 'Movil' ? '' : newCocheraData.numero })}
-                                                        className={`flex-1 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${newCocheraData.tipo === t ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-500 hover:text-gray-300'}`}
-                                                    >
-                                                        {t}
-                                                    </button>
-                                                ))}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                {/* COLUMNA IZQUIERDA: Configuración y Pagos */}
+                                <div className="space-y-6">
+                                    {/* 1. CONFIG COCHERA */}
+                                    <div className="p-4 bg-gray-800/30 rounded-lg border border-gray-700/30 space-y-3">
+                                        <div className="flex gap-4 items-end">
+                                            <div className="flex-1">
+                                                <label className={labelStyle}>Tipo</label>
+                                                <div className="flex bg-gray-900 p-1 rounded-lg border border-gray-800">
+                                                    {['Movil', 'Fija'].map(t => (
+                                                        <button
+                                                            key={t}
+                                                            onClick={() => setNewCocheraData({ ...newCocheraData, tipo: t, exclusiva: false, numero: t === 'Movil' ? '' : newCocheraData.numero })}
+                                                            className={`flex-1 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${newCocheraData.tipo === t ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-500 hover:text-gray-300'}`}
+                                                        >
+                                                            {t}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                            <div className={`flex-1 transition-all ${newCocheraData.tipo === 'Movil' ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
+                                                <label className={labelStyle}>Número</label>
+                                                <input
+                                                    className={`${inputStyle} text-center font-mono`}
+                                                    value={newCocheraData.numero}
+                                                    onChange={e => setNewCocheraData({ ...newCocheraData, numero: e.target.value })}
+                                                    placeholder="N°"
+                                                />
+                                            </div>
+                                            <div className={`flex items-center gap-2 pb-2 ${newCocheraData.tipo === 'Movil' ? 'opacity-50 pointer-events-none' : ''}`}>
+                                                <input
+                                                    type="checkbox"
+                                                    className="w-4 h-4 accent-amber-500 bg-gray-900 border-gray-700 rounded cursor-pointer"
+                                                    checked={newCocheraData.exclusiva}
+                                                    disabled={newCocheraData.tipo === 'Movil'}
+                                                    onChange={e => setNewCocheraData({ ...newCocheraData, exclusiva: e.target.checked })}
+                                                />
+                                                <span className="text-xs font-bold text-amber-500 uppercase tracking-wide cursor-pointer" onClick={() => { if (newCocheraData.tipo !== 'Movil') setNewCocheraData({ ...newCocheraData, exclusiva: !newCocheraData.exclusiva }) }}>Exclusiva</span>
                                             </div>
                                         </div>
-                                        <div className={`flex-1 transition-all ${newCocheraData.tipo === 'Movil' ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
-                                            <label className={labelStyle}>Número</label>
-                                            <input
-                                                className={`${inputStyle} text-center font-mono`}
-                                                value={newCocheraData.numero}
-                                                onChange={e => setNewCocheraData({ ...newCocheraData, numero: e.target.value })}
-                                                placeholder="N°"
-                                            />
+                                    </div>
+
+                                    {/* 3. FACTURACION */}
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className={labelStyle}>Método Pago</label>
+                                            <select className={`${inputStyle} appearance-none bg-gray-900`} value={newCocheraData.metodoPago} onChange={e => setNewCocheraData({ ...newCocheraData, metodoPago: e.target.value })}>
+                                                <option value="" disabled hidden>Seleccionar...</option>
+                                                <option value="Efectivo">Efectivo</option>
+                                                <option value="Transferencia">Transferencia</option>
+                                                <option value="Debito">Débito</option>
+                                                <option value="Credito">Crédito</option>
+                                                <option value="QR">QR</option>
+                                            </select>
                                         </div>
-                                        <div className={`flex items-center gap-2 pb-2 ${newCocheraData.tipo === 'Movil' ? 'opacity-50 pointer-events-none' : ''}`}>
-                                            <input
-                                                type="checkbox"
-                                                className="w-4 h-4 accent-amber-500 bg-gray-900 border-gray-700 rounded cursor-pointer"
-                                                checked={newCocheraData.exclusiva}
-                                                disabled={newCocheraData.tipo === 'Movil'}
-                                                onChange={e => setNewCocheraData({ ...newCocheraData, exclusiva: e.target.checked })}
-                                            />
-                                            <span className="text-xs font-bold text-amber-500 uppercase tracking-wide cursor-pointer" onClick={() => { if (newCocheraData.tipo !== 'Movil') setNewCocheraData({ ...newCocheraData, exclusiva: !newCocheraData.exclusiva }) }}>Exclusiva</span>
+                                        <div>
+                                            <label className={labelStyle}>Tipo Factura</label>
+                                            <select className={`${inputStyle} appearance-none bg-gray-900`} value={newCocheraData.tipoFactura} onChange={e => setNewCocheraData({ ...newCocheraData, tipoFactura: e.target.value })}>
+                                                <option value="" disabled hidden>Seleccionar...</option>
+                                                <option value="CC">CC</option>
+                                                <option value="A">A</option>
+                                                <option value="Final">Final</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    {/* SUMMARY */}
+                                    <div className="bg-emerald-900/10 border border-emerald-500/20 p-4 rounded-xl flex items-center justify-between">
+                                        <div>
+                                            <span className="block text-[10px] text-gray-500 uppercase font-bold tracking-widest">Precio Mensual</span>
+                                            <span className="text-sm font-mono text-gray-300">${newCocheraFinancials.basePrice.toLocaleString()}</span>
+                                        </div>
+                                        <div className="text-right">
+                                            <span className="block text-[10px] text-emerald-500 uppercase font-bold tracking-widest">Total Inicial (Prorrateado)</span>
+                                            <span className="text-2xl font-black text-white tracking-tighter">${newCocheraFinancials.proratedPrice.toLocaleString()}</span>
                                         </div>
                                     </div>
                                 </div>
 
-                                {/* 2. VEHICULO */}
-                                <div className="space-y-3">
+                                {/* COLUMNA DERECHA: Vehiculo */}
+                                <div className="space-y-4">
+                                    <div className="flex items-center gap-2 mb-2 text-gray-500">
+                                        <Car className="w-3.5 h-3.5" /> <span className="text-[10px] font-bold uppercase">Datos del Vehículo</span>
+                                    </div>
                                     <div className="grid grid-cols-2 gap-3">
                                         <div>
                                             <label className={labelStyle}>Patente</label>
@@ -876,22 +1078,77 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-3 gap-3">
-                                        <input className={inputStyle} placeholder="Marca" value={newCocheraData.marca} onChange={e => setNewCocheraData({ ...newCocheraData, marca: e.target.value })} />
-                                        <input className={inputStyle} placeholder="Modelo" value={newCocheraData.modelo} onChange={e => setNewCocheraData({ ...newCocheraData, modelo: e.target.value })} />
-                                        <input className={inputStyle} placeholder="Color" value={newCocheraData.color} onChange={e => setNewCocheraData({ ...newCocheraData, color: e.target.value })} />
+                                        <div>
+                                            <label className={labelStyle}>Marca</label>
+                                            <input className={inputStyle} value={newCocheraData.marca} onChange={e => setNewCocheraData({ ...newCocheraData, marca: e.target.value })} />
+                                        </div>
+                                        <div>
+                                            <label className={labelStyle}>Modelo</label>
+                                            <input className={inputStyle} value={newCocheraData.modelo} onChange={e => setNewCocheraData({ ...newCocheraData, modelo: e.target.value })} />
+                                        </div>
+                                        <div>
+                                            <label className={labelStyle}>Color</label>
+                                            <input className={inputStyle} value={newCocheraData.color} onChange={e => setNewCocheraData({ ...newCocheraData, color: e.target.value })} />
+                                        </div>
                                     </div>
                                     <div className="grid grid-cols-2 gap-3">
-                                        <input className={inputStyle} placeholder="Año" value={newCocheraData.anio} onChange={e => setNewCocheraData({ ...newCocheraData, anio: e.target.value })} />
-                                        <input className={inputStyle} placeholder="Seguro" value={newCocheraData.seguro} onChange={e => setNewCocheraData({ ...newCocheraData, seguro: e.target.value })} />
+                                        <div>
+                                            <label className={labelStyle}>Año</label>
+                                            <input className={inputStyle} value={newCocheraData.anio} onChange={e => setNewCocheraData({ ...newCocheraData, anio: e.target.value })} />
+                                        </div>
+                                        <div>
+                                            <label className={labelStyle}>Seguro</label>
+                                            <input className={inputStyle} value={newCocheraData.seguro} onChange={e => setNewCocheraData({ ...newCocheraData, seguro: e.target.value })} />
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {errorMessage && (
+                                <div className="mt-4 bg-red-500/10 border border-red-500/50 p-3 rounded-xl flex items-start gap-2 animate-in fade-in slide-in-from-top-2">
+                                    <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                                    <span className="text-xs text-red-400 font-medium leading-relaxed">{errorMessage}</span>
+                                </div>
+                            )}
+
+                            <div className="flex gap-3 mt-8 pt-4 border-t border-gray-800">
+                                <button onClick={() => setIsNewCocheraOpen(false)} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-bold uppercase transition-colors">Cancelar</button>
+                                <button onClick={handleCreateCochera} className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold uppercase transition-colors shadow-lg shadow-emerald-900/20 flex items-center justify-center gap-2">
+                                    <Plus className="w-4 h-4" /> Crear Cochera
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* --- RENEWAL CHECKOUT MODAL --- */}
+                {isRenewalModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+                        <div className="bg-gray-900 border border-red-500/30 rounded-2xl w-full max-w-lg p-6 shadow-2xl relative shadow-red-900/20">
+                            <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
+                                <AlertTriangle className="w-5 h-5 text-red-500" />
+                                Renovar Abono
+                            </h3>
+
+                            <div className="space-y-6">
+                                <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex justify-between items-center ring-1 ring-inset ring-red-500/10">
+                                    <div className="text-red-400">
+                                        <span className="block text-[10px] uppercase tracking-widest font-bold mb-1">Deuda Total a Pagar</span>
+                                        <span className="text-sm font-medium">Cochera {renewalData.cocheraDetails?.tipo} #{renewalData.cocheraDetails?.numero || 'S/N'}</span>
+                                    </div>
+                                    <div className="text-3xl font-black text-white font-mono tracking-tighter">
+                                        ${renewalData.amountToPay.toLocaleString()}
                                     </div>
                                 </div>
 
-                                {/* 3. FACTURACION */}
                                 <div className="grid grid-cols-2 gap-4">
                                     <div>
-                                        <label className={labelStyle}>Método Pago</label>
-                                        <select className={`${inputStyle} appearance-none bg-gray-900`} value={newCocheraData.metodoPago} onChange={e => setNewCocheraData({ ...newCocheraData, metodoPago: e.target.value })}>
-                                            <option value="" disabled hidden>Seleccionar...</option>
+                                        <label className={labelStyle}>Método de Pago</label>
+                                        <select
+                                            className={`${inputStyle} appearance-none bg-gray-950`}
+                                            value={renewalData.metodoPago}
+                                            onChange={e => setRenewalData({ ...renewalData, metodoPago: e.target.value })}
+                                        >
                                             <option value="Efectivo">Efectivo</option>
                                             <option value="Transferencia">Transferencia</option>
                                             <option value="Debito">Débito</option>
@@ -900,34 +1157,24 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                         </select>
                                     </div>
                                     <div>
-                                        <label className={labelStyle}>Tipo Factura</label>
-                                        <select className={`${inputStyle} appearance-none bg-gray-900`} value={newCocheraData.tipoFactura} onChange={e => setNewCocheraData({ ...newCocheraData, tipoFactura: e.target.value })}>
-                                            <option value="" disabled hidden>Seleccionar...</option>
-                                            <option value="Final">Consumidor Final</option>
+                                        <label className={labelStyle}>Facturación</label>
+                                        <select
+                                            className={`${inputStyle} appearance-none bg-gray-950`}
+                                            value={renewalData.tipoFactura}
+                                            onChange={e => setRenewalData({ ...renewalData, tipoFactura: e.target.value })}
+                                        >
+                                            <option value="CC">Cuenta Corriente</option>
                                             <option value="A">Factura A</option>
-                                            <option value="B">Factura B</option>
+                                            <option value="Final">Consumidor Final</option>
                                         </select>
                                     </div>
                                 </div>
-
-                                {/* SUMMARY */}
-                                <div className="bg-emerald-900/10 border border-emerald-500/20 p-4 rounded-xl flex items-center justify-between">
-                                    <div>
-                                        <span className="block text-[10px] text-gray-500 uppercase font-bold tracking-widest">Precio Mensual</span>
-                                        <span className="text-sm font-mono text-gray-300">${newCocheraFinancials.basePrice.toLocaleString()}</span>
-                                    </div>
-                                    <div className="text-right">
-                                        <span className="block text-[10px] text-emerald-500 uppercase font-bold tracking-widest">Total Inicial (Prorrateado)</span>
-                                        <span className="text-2xl font-black text-white tracking-tighter">${newCocheraFinancials.proratedPrice.toLocaleString()}</span>
-                                    </div>
-                                </div>
-
                             </div>
 
-                            <div className="flex gap-3 mt-6 pt-4 border-t border-gray-800">
-                                <button onClick={() => setIsNewCocheraOpen(false)} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-bold uppercase transition-colors">Cancelar</button>
-                                <button onClick={handleCreateCochera} className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold uppercase transition-colors shadow-lg shadow-emerald-900/20 flex items-center justify-center gap-2">
-                                    <Plus className="w-4 h-4" /> Crear Cochera
+                            <div className="flex gap-3 mt-8 pt-4 border-t border-gray-800">
+                                <button onClick={() => setIsRenewalModalOpen(false)} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-bold uppercase transition-colors">Cancelar</button>
+                                <button onClick={handleRenewSubscription} className="flex-1 py-3 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold uppercase transition-colors shadow-lg shadow-red-900/20 flex items-center justify-center gap-2">
+                                    <Check className="w-4 h-4" /> Confirmar Pago
                                 </button>
                             </div>
                         </div>
