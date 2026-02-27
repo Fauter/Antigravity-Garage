@@ -110,7 +110,9 @@ export class SyncService {
             'Tariff': 'tariffs',
             'Subscription': 'subscriptions',
             'Cochera': 'cocheras',
-            'Debt': 'debts'
+            'Debt': 'debts',
+            'ShiftClose': 'shift_closes',
+            'PartialClose': 'partial_closes'
         };
 
         const tableName = tableMap[entityType];
@@ -151,6 +153,9 @@ export class SyncService {
             await db.subscriptions.remove({}, { multi: true }); // Required Purge for Ghost syncs
             await db.cocheras.remove({}, { multi: true }); // Purge cocheras
             await db.debts.remove({}, { multi: true }); // Purge debts
+            await db.financialConfigs.remove({}, { multi: true }); // Purge configs
+            await db.shiftCloses.remove({}, { multi: true }); // Purge shift_closes
+            await db.partialCloses.remove({}, { multi: true }); // Purge partial_closes
 
             // ROBUST PURGE: Compaction to physically remove phantom records from filesystem
             console.log('🧹 Sync: Forcing NeDB Compaction across all collections...');
@@ -164,7 +169,8 @@ export class SyncService {
 
             const storesToCompact = [
                 db.stays, db.movements, db.tariffs, db.vehicleTypes, db.prices,
-                db.customers, db.vehicles, db.subscriptions, db.cocheras, db.debts
+                db.customers, db.vehicles, db.subscriptions, db.cocheras, db.debts, db.financialConfigs,
+                db.shiftCloses, db.partialCloses
             ];
 
             storesToCompact.forEach(forceCompact);
@@ -177,6 +183,7 @@ export class SyncService {
             await this.fetchTable('vehicle_types', garageId, 'VehicleType');
             await this.fetchTable('tariffs', garageId, 'Tariff');
             await this.fetchTable('prices', garageId, 'Price'); // New: Sync Prices
+            await this.fetchTable('financial_configs', garageId, 'FinancialConfig');
 
             // 2. Core Operational Entities
             await this.fetchTable('customers', garageId, 'Customer');
@@ -188,6 +195,8 @@ export class SyncService {
             await this.fetchTable('movements', garageId, 'Movement');
             await this.fetchTable('subscriptions', garageId, 'Subscription');
             await this.fetchTable('debts', garageId, 'Debt');
+            await this.fetchTable('shift_closes', garageId, 'ShiftClose');
+            await this.fetchTable('partial_closes', garageId, 'PartialClose');
 
             console.log('✅ Sync: Bootstrap Complete.');
             this.isGlobalSyncing = false;
@@ -200,6 +209,7 @@ export class SyncService {
 
     private async fetchTable(tableName: string, garageId: string, entityType: string) {
         try {
+            console.log(`🔍 Sync: Fetching table [${tableName}] for garage [${garageId}]...`);
             // Basic query filtering by nature
             let query = supabase.from(tableName).select('*');
 
@@ -211,6 +221,10 @@ export class SyncService {
 
             const { data, error } = await query;
             if (error) throw error;
+
+            if (!data || data.length === 0) {
+                console.warn(`⚠️ Sync: No records found for ${entityType} in Supabase.`);
+            }
 
             if (data && data.length > 0) {
                 console.log(`📥 Sync: Fetched ${data.length} records for ${entityType}, preparing bulk insert...`);
@@ -232,6 +246,9 @@ export class SyncService {
                     case 'Garage': collection = db.garages; break;
                     case 'Cochera': collection = db.cocheras; break;
                     case 'Debt': collection = db.debts; break;
+                    case 'FinancialConfig': collection = db.financialConfigs; break;
+                    case 'ShiftClose': collection = db.shiftCloses; break;
+                    case 'PartialClose': collection = db.partialCloses; break;
                 }
 
                 if (collection) {
@@ -311,6 +328,32 @@ export class SyncService {
             if (local.price_list) { local.priceList = local.price_list; delete local.price_list; }
             if (local.amount !== undefined) { local.amount = Number(local.amount); }
             if (local.id) { local.id = String(local.id); } // Usar ID único de Supabase
+        }
+
+        if (type === 'FinancialConfig') {
+            if (local.surcharge_config && typeof local.surcharge_config === 'string') {
+                try {
+                    local.surchargeConfig = JSON.parse(local.surcharge_config);
+                } catch (e) {
+                    console.error("Failed to parse surcharge_config", e);
+                    local.surchargeConfig = local.surcharge_config;
+                }
+                delete local.surcharge_config;
+            } else if (local.surcharge_config) {
+                local.surchargeConfig = local.surcharge_config;
+                delete local.surcharge_config;
+            }
+        }
+
+        if (type === 'ShiftClose') {
+            if (local.total_in_cash !== undefined) { local.totalInCash = Number(local.total_in_cash); delete local.total_in_cash; }
+            if (local.staying_in_cash !== undefined) { local.stayingInCash = Number(local.staying_in_cash); delete local.staying_in_cash; }
+            if (local.rendered_amount !== undefined) { local.renderedAmount = Number(local.rendered_amount); delete local.rendered_amount; }
+        }
+
+        if (type === 'PartialClose') {
+            if (local.recipient_name !== undefined) { local.recipientName = local.recipient_name; delete local.recipient_name; }
+            if (local.amount !== undefined) { local.amount = Number(local.amount); }
         }
 
         return local;
@@ -446,6 +489,34 @@ export class SyncService {
             const allowedDebtFields = ['id', 'subscription_id', 'customer_id', 'amount', 'surcharge_applied', 'status', 'due_date', 'garage_id', 'created_at', 'updated_at'];
             Object.keys(base).forEach(key => {
                 if (!allowedDebtFields.includes(key)) {
+                    delete base[key];
+                }
+            });
+        }
+
+        if (type === 'ShiftClose') {
+            if (base.totalInCash !== undefined) { base.total_in_cash = base.totalInCash; delete base.totalInCash; }
+            if (base.stayingInCash !== undefined) { base.staying_in_cash = base.stayingInCash; delete base.stayingInCash; }
+            if (base.renderedAmount !== undefined) { base.rendered_amount = base.renderedAmount; delete base.renderedAmount; }
+            if (base.garageId !== undefined) { base.garage_id = base.garageId; delete base.garageId; }
+            if (base.timestamp !== undefined) { base.timestamp = new Date(base.timestamp).toISOString(); }
+
+            const allowedFields = ['id', 'garage_id', 'operator', 'total_in_cash', 'staying_in_cash', 'rendered_amount', 'timestamp'];
+            Object.keys(base).forEach(key => {
+                if (!allowedFields.includes(key)) {
+                    delete base[key];
+                }
+            });
+        }
+
+        if (type === 'PartialClose') {
+            if (base.recipientName !== undefined) { base.recipient_name = base.recipientName; delete base.recipientName; }
+            if (base.garageId !== undefined) { base.garage_id = base.garageId; delete base.garageId; }
+            if (base.timestamp !== undefined) { base.timestamp = new Date(base.timestamp).toISOString(); }
+
+            const allowedFields = ['id', 'garage_id', 'operator', 'amount', 'recipient_name', 'notes', 'timestamp'];
+            Object.keys(base).forEach(key => {
+                if (!allowedFields.includes(key)) {
                     delete base[key];
                 }
             });

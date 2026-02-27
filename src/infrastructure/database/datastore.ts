@@ -3,7 +3,19 @@ import path from 'path';
 import fs from 'fs';
 
 // Ensure data directory exists
-const DATA_DIR = path.resolve(process.cwd(), '.data');
+let DATA_DIR: string;
+
+try {
+    const { app } = require('electron');
+    if (app) {
+        DATA_DIR = path.join(app.getPath('userData'), 'database');
+    } else {
+        DATA_DIR = path.resolve(process.cwd(), '.data');
+    }
+} catch (e) {
+    DATA_DIR = path.resolve(process.cwd(), '.data');
+}
+
 if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
 }
@@ -27,11 +39,14 @@ export const db = {
     garages: createStore('garages'), // Added for Metadata
     cocheras: createStore('cocheras'),
     debts: createStore('debts'),
+    shiftCloses: createStore('shift_closes'),
+    partialCloses: createStore('partial_closes'),
 
     // Config Stores
     vehicleTypes: createStore('vehicle_types'),
     tariffs: createStore('tariffs'),
     prices: createStore('prices'),
+    financialConfigs: createStore('financial_configs'),
 
     // Sync Queue
     mutations: createStore('mutations'),

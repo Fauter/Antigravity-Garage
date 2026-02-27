@@ -3,14 +3,14 @@ import { createClient } from '@supabase/supabase-js';
 
 // Helper to get env vars with fallback
 const getEnv = (key: string, fallback: string): string => {
-    // Check various sources: process.env (Node), import.meta.env (Vite), or fallback
-    if (typeof process !== 'undefined' && process.env && process.env[key]) {
-        return process.env[key] as string;
-    }
+    // Priority: import.meta.env (Vite) -> process.env (Node) -> fallback
     // @ts-ignore
     if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env[key]) {
         // @ts-ignore
         return import.meta.env[key] as string;
+    }
+    if (typeof process !== 'undefined' && process.env && process.env[key]) {
+        return process.env[key] as string;
     }
     return fallback;
 };

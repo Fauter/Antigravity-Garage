@@ -29,12 +29,14 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     const [realVehicles, setRealVehicles] = useState<any[]>([]); // Real vehicle table datastore
     const [debts, setDebts] = useState<any[]>([]); // Deudas pendientes
     const [loading, setLoading] = useState(true);
+    const [allGarageCocheras, setAllGarageCocheras] = useState<any[]>([]);
 
     // --- Configuration State ---
     const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
     const [pricesMatrix, setPricesMatrix] = useState<any>({});
     const [standardPricesMatrix, setStandardPricesMatrix] = useState<any>({});
     const [electronicPricesMatrix, setElectronicPricesMatrix] = useState<any>({});
+    const [financialConfig, setFinancialConfig] = useState<any>(null);
 
     // --- Modal State ---
     const [isModalOpen, setIsModalOpen] = useState(false);
@@ -48,7 +50,9 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         modelo: '',
         color: '',
         anio: '',
-        companiaSeguro: ''
+        companiaSeguro: '',
+        metodoPago: 'Efectivo',
+        tipoFactura: 'Final'
     });
 
     // --- Financial Logic State (Upgrade) ---
@@ -87,11 +91,16 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     const [isRenewalModalOpen, setIsRenewalModalOpen] = useState(false);
     const [selectedDebtSubId, setSelectedDebtSubId] = useState<string | null>(null);
     const [renewalData, setRenewalData] = useState({
+        baseAmount: 0,
+        surchargeAmount: 0,
         amountToPay: 0,
         metodoPago: 'Efectivo',
         tipoFactura: 'Final',
         cocheraDetails: null as any,
-        hasPendingDebt: false
+        hasPendingDebt: false,
+        isGlobalDebt: false,
+        targetDebts: [] as any[],
+        surchargeStep: null as any
     });
 
     // --- Expanded Vehicles State (Accordion) ---
@@ -112,8 +121,9 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 const fetchStandardPrices = api.get('/precios?metodo=efectivo').catch(e => { console.error("Standard price load error:", e); return null; });
                 const fetchElectronicPrices = api.get('/precios?metodo=otros').catch(e => { console.error("Electronic price load error:", e); return null; });
                 const fetchTypes = api.get('/tipos-vehiculo').catch(e => { console.error("Type load error:", e); return null; });
+                const fetchFinancialConfig = api.get('/configuracion-financiera').catch(e => { console.error("Fin config load error:", e); return null; });
 
-                const [standardPricesRes, electronicPricesRes, typesRes] = await Promise.all([fetchStandardPrices, fetchElectronicPrices, fetchTypes]);
+                const [standardPricesRes, electronicPricesRes, typesRes, finConfigRes] = await Promise.all([fetchStandardPrices, fetchElectronicPrices, fetchTypes, fetchFinancialConfig]);
 
                 if (typesRes && typesRes.data && vehicleTypes.length === 0) {
                     setVehicleTypes(typesRes.data);
@@ -125,6 +135,9 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 if (electronicPricesRes && electronicPricesRes.data) {
                     setElectronicPricesMatrix(electronicPricesRes.data.otros || electronicPricesRes.data.efectivo || electronicPricesRes.data);
                 }
+                if (finConfigRes && finConfigRes.data) {
+                    setFinancialConfig(finConfigRes.data);
+                }
             } catch (error) {
                 console.error("Error loading configuration:", error);
                 toast.error("Error cargando configuración de precios");
@@ -133,45 +146,60 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         loadConfig();
     }, []);
 
+    // --- Fetch All Cocheras for Validation ---
+    useEffect(() => {
+        if (isNewCocheraOpen) {
+            api.get('/cocheras')
+                .then(res => setAllGarageCocheras(res.data))
+                .catch(err => console.error("Error loading all cocheras:", err));
+        }
+    }, [isNewCocheraOpen]);
+
     // --- Business Logic: Price Calculation ---
     useEffect(() => {
-        if (!selectedCochera || !newVehicleData.tipoVehiculo || Object.keys(pricesMatrix).length === 0) {
+        const activeMatrix = newVehicleData.metodoPago === 'Efectivo' ? standardPricesMatrix : electronicPricesMatrix;
+
+        if (!selectedCochera || !newVehicleData.tipoVehiculo || Object.keys(activeMatrix).length === 0 || Object.keys(standardPricesMatrix).length === 0) {
             setUpgradeInfo({ isUpgrade: false, diffToPay: 0, newBasePrice: 0 });
             return;
         }
 
         const normalize = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
-        // 1. Find price in matrix
-        let matrixPrice = 0;
-        const typeKey = Object.keys(pricesMatrix).find(k => normalize(k) === normalize(newVehicleData.tipoVehiculo));
-
-        if (typeKey && pricesMatrix[typeKey]) {
-            // Cochera type key: 'Movil', 'Fija', 'Exclusiva'
-            const cocheraType = selectedCochera.tipo;
-            const priceKey = Object.keys(pricesMatrix[typeKey]).find(k => normalize(k) === normalize(cocheraType));
-
-            if (priceKey) {
-                matrixPrice = Number(pricesMatrix[typeKey][priceKey]);
+        const findPriceInMatrix = (matrix: any) => {
+            let foundPrice = 0;
+            const typeKey = Object.keys(matrix).find(k => normalize(k) === normalize(newVehicleData.tipoVehiculo));
+            if (typeKey && matrix[typeKey]) {
+                const cocheraType = selectedCochera.tipo;
+                const priceKey = Object.keys(matrix[typeKey]).find(k => normalize(k) === normalize(cocheraType));
+                if (priceKey) {
+                    foundPrice = Number(matrix[typeKey][priceKey]);
+                }
             }
-        }
+            return foundPrice;
+        };
+
+        // 1. Find prices in matrices
+        const priceForMovement = findPriceInMatrix(activeMatrix);
+        const priceForBase = findPriceInMatrix(standardPricesMatrix);
 
         // 2. Compare with current base price
         const currentPrice = selectedCochera.precioBase || 0;
 
-        if (matrixPrice > currentPrice) {
+        // Upgrade condition: If the base price of the new vehicle is higher, it's an upgrade.
+        // We also check against priceForMovement just in case.
+        if (priceForBase > currentPrice || priceForMovement > currentPrice) {
             // Upgrade Logic
-            const diff = matrixPrice - currentPrice;
+            const diff = priceForMovement - currentPrice;
             const today = new Date().getDate();
-            // User requested: Math.floor(((precioMatriz - cochera.precioBase) / 30) * (31 - new Date().getDate()))
             // Assuming current month calculation (days remaining in hypothetical 30-day billing cycle or simply till end of month)
             // The formula provided by user is (31 - today), effectively days remaining.
-            const proratedCharge = Math.floor((diff / 30) * (31 - today));
+            const proratedCharge = diff > 0 ? Math.floor((diff / 30) * (31 - today)) : 0;
 
             setUpgradeInfo({
                 isUpgrade: true,
                 diffToPay: Math.max(0, proratedCharge),
-                newBasePrice: matrixPrice
+                newBasePrice: priceForBase // Strictly the standard matrix price
             });
         } else {
             setUpgradeInfo({
@@ -181,7 +209,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             });
         }
 
-    }, [newVehicleData.tipoVehiculo, selectedCochera, pricesMatrix]);
+    }, [newVehicleData.tipoVehiculo, newVehicleData.metodoPago, selectedCochera, standardPricesMatrix, electronicPricesMatrix]);
 
     useEffect(() => {
         if (!isNewCocheraOpen || !newCocheraData.tipoVehiculo) {
@@ -208,32 +236,52 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             return finalPrice;
         };
 
-        const standardPrice = findPrice(standardPricesMatrix);
-        const currentPrice = findPrice(pricesMatrix);
+        const activeMatrix = newCocheraData.metodoPago === 'Efectivo' ? standardPricesMatrix : electronicPricesMatrix;
+        const priceForMovement = findPrice(activeMatrix);
+        const priceStandard = findPrice(standardPricesMatrix);
 
         // 3. Prorata (Exact current month exact rounding)
         const now = new Date();
         const currentDay = now.getDate();
         const ultimoDiaMes = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
         const diasRestantes = (ultimoDiaMes - currentDay) + 1;
-        const exactCalc = (currentPrice / ultimoDiaMes) * diasRestantes;
+        const exactCalc = (priceForMovement / ultimoDiaMes) * diasRestantes;
         const roundedDown = Math.floor(exactCalc / 100) * 100;
 
         setNewCocheraFinancials({
-            basePrice: standardPrice,
+            basePrice: priceStandard,
             proratedPrice: roundedDown
         });
 
-    }, [newCocheraData.tipo, newCocheraData.exclusiva, newCocheraData.tipoVehiculo, pricesMatrix, standardPricesMatrix, isNewCocheraOpen]);
+    }, [newCocheraData.tipo, newCocheraData.exclusiva, newCocheraData.tipoVehiculo, newCocheraData.metodoPago, electronicPricesMatrix, standardPricesMatrix, isNewCocheraOpen]);
 
     useEffect(() => {
         setErrorMessage(null);
-    }, [newCocheraData.numero, newCocheraData.tipo, newCocheraData.patente, isNewCocheraOpen]);
+        if (isNewCocheraOpen && (newCocheraData.tipo === 'Fija' || newCocheraData.exclusiva) && newCocheraData.numero) {
+            const isOccupied = allGarageCocheras.some(c =>
+                c.numero === newCocheraData.numero && c.status === 'Ocupada'
+            );
+            if (isOccupied) {
+                setErrorMessage("⚠️ Esta cochera ya está ocupada por otro vehículo.");
+            }
+        }
+    }, [newCocheraData.numero, newCocheraData.tipo, newCocheraData.patente, isNewCocheraOpen, allGarageCocheras]);
 
     const handleCreateCochera = async () => {
         if (!clientId) { toast.error("Error: Cliente no identificado"); return; }
         if (!newCocheraData.patente || !newCocheraData.tipoVehiculo) { toast.error("Patente y Tipo de Vehículo obligatorios"); return; }
         if ((newCocheraData.tipo === 'Fija' || newCocheraData.exclusiva) && !newCocheraData.numero) { toast.error("Número de cochera obligatorio"); return; }
+
+        if ((newCocheraData.tipo === 'Fija' || newCocheraData.exclusiva) && newCocheraData.numero) {
+            const isOccupied = allGarageCocheras.some(c =>
+                c.numero === newCocheraData.numero && c.status === 'Ocupada'
+            );
+            if (isOccupied) {
+                setErrorMessage("⚠️ Esta cochera ya está ocupada por otro vehículo.");
+                toast.error("La cochera seleccionada ya se encuentra ocupada.");
+                return;
+            }
+        }
 
         setErrorMessage(null);
 
@@ -244,7 +292,9 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             const rawAddress = subscriber.customerData?.address || subscriber.domicilio || subscriber.localidad || '';
 
             const payload = {
+                garageId: '1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02', // User explicit requested inclusion
                 customerData: {
+                    garageId: '1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02',
                     nombreApellido: clientName,
                     dni: String(rawDni),
                     email: rawEmail,
@@ -340,7 +390,9 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             modelo: '',
             color: '',
             anio: '',
-            companiaSeguro: ''
+            companiaSeguro: '',
+            metodoPago: 'Efectivo',
+            tipoFactura: 'Final'
         });
         setIsModalOpen(true);
     };
@@ -351,6 +403,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             toast.error("Patente y Tipo son obligatorios");
             return;
         }
+
+        const btnSpinner = toast.loading("Procesando agregado de vehículo...");
 
         try {
             // CRITICAL: Always use raw 'vehiculos' from DB if available to avoid saving populated wrappers.
@@ -370,12 +424,31 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
             const updatedVehicles = [...currentVehicles, vehicleToAdd];
 
-            // Dynamic pricing will handle the new rate on the backend next time we fetch
-            await api.patch(`/cocheras/${selectedCochera.id}`, {
-                vehiculos: updatedVehicles
-            });
+            // FINANCES: Process Upgrade if applicable
+            if (upgradeInfo.isUpgrade && upgradeInfo.diffToPay > 0) {
+                await api.post('/caja/movimientos', {
+                    type: 'CobroAbono',
+                    amount: upgradeInfo.diffToPay,
+                    paymentMethod: newVehicleData.metodoPago,
+                    invoiceType: newVehicleData.tipoFactura,
+                    plate: vehicleToAdd.plate,
+                    relatedEntityId: selectedCochera.id,
+                    garageId: selectedCochera.garageId, // <--- User request: add garageId explicitly
+                    operator: operatorName,
+                    notes: `Upgrade de vehículo: ${vehicleToAdd.plate} (Lista: ${newVehicleData.metodoPago === 'Efectivo' ? 'Standard' : 'Electronic'})`,
+                    timestamp: new Date().toISOString()
+                });
+            }
 
-            toast.success("Vehículo agregado correctamente");
+            // Dynamic pricing will handle the new rate on the backend next time we fetch
+            const patchPayload: any = { vehiculos: updatedVehicles };
+            if (upgradeInfo.isUpgrade) {
+                patchPayload.precioBase = upgradeInfo.newBasePrice;
+            }
+
+            await api.patch(`/cocheras/${selectedCochera.id}`, patchPayload);
+
+            toast.success("Vehículo agregado correctamente", { id: btnSpinner });
             setIsModalOpen(false);
 
             // Refresh globally
@@ -383,7 +456,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
         } catch (error) {
             console.error("Error saving vehicle:", error);
-            toast.error("Error al guardar vehículo");
+            toast.error("Error al guardar vehículo", { id: btnSpinner });
         }
     };
 
@@ -439,14 +512,39 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         refreshCustomerAssets();
     }, [clientId]);
 
-    const handleOpenRenewalModal = (subId: string, cochera: any, amount: number, hasDebt: boolean) => {
+    const getActiveSurchargeStep = () => {
+        const today = new Date().getDate();
+        if (financialConfig?.surchargeConfig?.global_default?.steps) {
+            const steps = financialConfig.surchargeConfig.global_default.steps;
+            const sortedSteps = [...steps].sort((a: any, b: any) => b.day - a.day);
+            for (const step of sortedSteps) {
+                if (today >= step.day) {
+                    return step;
+                }
+            }
+        }
+        return null;
+    };
+
+    const calculateSurcharge = (baseAmount: number) => {
+        const step = getActiveSurchargeStep();
+        const surchargePercentage = step ? (Number(step.percentage) || 0) : 0;
+        return Math.floor(baseAmount * (surchargePercentage / 100));
+    };
+
+    const handleOpenRenewalModal = (subId: string, cochera: any, baseAmount: number, surchargeAmount: number, totalAmount: number, hasDebt: boolean, isGlobalDebt: boolean = false, targetDebts: any[] = []) => {
         setSelectedDebtSubId(subId);
         setRenewalData({
-            amountToPay: amount,
+            baseAmount: baseAmount,
+            surchargeAmount: surchargeAmount,
+            amountToPay: totalAmount,
             metodoPago: 'Efectivo',
             tipoFactura: 'Final',
             cocheraDetails: cochera,
-            hasPendingDebt: hasDebt
+            hasPendingDebt: hasDebt,
+            isGlobalDebt: isGlobalDebt,
+            targetDebts: targetDebts,
+            surchargeStep: getActiveSurchargeStep() // New implicit field for UI detail
         });
         setIsRenewalModalOpen(true);
     };
@@ -492,7 +590,13 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         }
 
         if (foundPrice > 0) {
-            setRenewalData(prev => ({ ...prev, amountToPay: foundPrice }));
+            const mora = calculateSurcharge(foundPrice);
+            setRenewalData(prev => ({
+                ...prev,
+                baseAmount: foundPrice,
+                amountToPay: foundPrice + mora,
+                surchargeAmount: mora
+            }));
         }
 
     }, [renewalData.metodoPago, isRenewalModalOpen, standardPricesMatrix, electronicPricesMatrix, selectedDebtSubId, subscriptions, realVehicles, renewalData.hasPendingDebt]);
@@ -507,15 +611,42 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         try {
             await api.post('/abonos/renovar', {
                 subId: selectedDebtSubId,
+                customerId: clientId,
                 amountToPay: renewalData.amountToPay,
                 paymentMethod: renewalData.metodoPago,
                 billingType: renewalData.tipoFactura,
-                operator: operatorName
+                operator: operatorName,
+                isDebtPaymentOnly: renewalData.hasPendingDebt,
+                isGlobalDebt: renewalData.isGlobalDebt,
+                targetDebtIds: renewalData.targetDebts ? renewalData.targetDebts.map((d: any) => d.id) : []
             });
 
             toast.success("Renovación Exitosa! Imprimiendo Comprobante...", { id: btnSpinner });
 
-            // Re-use Printer Logic if desired. Leaving basic trace message.
+            // Prepare Payload for Printing
+            const printPayload = {
+                titular: clientName,
+                monto: renewalData.amountToPay,
+                operador: operatorName,
+                cocheraTexto: renewalData.isGlobalDebt
+                    ? "PAGO DEUDA TOTAL"
+                    : (renewalData.cocheraDetails?.tipo === 'Movil' ? 'Móvil' : `#${renewalData.cocheraDetails?.numero || 'S/N'}`),
+                patentes: [] as string[]
+            };
+
+            if (renewalData.isGlobalDebt && renewalData.targetDebts) {
+                const plates = renewalData.targetDebts
+                    .map((d: any) => d.plate)
+                    .filter((p: any) => !!p);
+                printPayload.patentes = Array.from(new Set(plates));
+            } else if (renewalData.cocheraDetails?.vehiculos) {
+                printPayload.patentes = renewalData.cocheraDetails.vehiculos.map((v: any) =>
+                    typeof v === 'string' ? v : v.plate
+                );
+            }
+
+            PrinterService.printRenewalTicket(printPayload);
+
             setIsRenewalModalOpen(false);
             refreshCustomerAssets(); // Auto Refresh State entirely
 
@@ -600,21 +731,35 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
                 {/* DEUDA BANNER PENDING */}
                 {debts.length > 0 && (
-                    <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-6 backdrop-blur-sm flex items-center justify-between animate-in fade-in duration-500">
-                        <div className="flex items-center gap-4">
+                    <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-6 backdrop-blur-sm flex flex-col md:flex-row items-center justify-between animate-in fade-in duration-500 gap-4">
+                        <div className="flex items-center gap-4 flex-1">
                             <div className="p-3 bg-red-500/20 rounded-full">
                                 <AlertTriangle className="w-6 h-6 text-red-500" />
                             </div>
                             <div>
                                 <h4 className="text-red-400 font-bold uppercase tracking-widest text-sm mb-1">Deuda Acumulada</h4>
-                                <p className="text-gray-300 text-sm">Este cliente tiene {debts.length} abonos no pagados identificados. Consulte la sección de caja para abonarlos y recalcular recargos.</p>
+                                <p className="text-gray-300 text-sm">Este cliente tiene {debts.length} abonos no pagados identificados. Puede pagar la totalidad desde aquí.</p>
                             </div>
                         </div>
-                        <div className="text-right">
-                            <span className="block text-2xl font-mono text-red-400 font-bold">
-                                ${debts.reduce((sum, d) => sum + (d.amount || 0) + (d.surchargeApplied || 0), 0).toLocaleString()}
-                            </span>
-                            <span className="text-xs text-red-500/80 font-bold uppercase">Monto Base Sin Recargos Act.</span>
+                        <div className="text-right flex flex-col items-end gap-3 text-red-400 font-bold">
+                            <div className="text-right">
+                                <span className="block text-2xl font-mono text-red-400 font-bold">
+                                    ${debts.reduce((sum, d) => sum + (d.amount || 0), 0).toLocaleString()}
+                                </span>
+                                <span className="text-xs text-red-500/80 font-bold uppercase">Monto Base Pendiente (Los recargos se calcularán al pagar)</span>
+                            </div>
+                            <button
+                                onClick={() => {
+                                    const totalAmount = debts.reduce((sum, d) => sum + (d.amount || 0), 0);
+                                    const totalSurcharge = debts.reduce((sum, d) => sum + calculateSurcharge(d.amount || 0), 0);
+                                    const totalDebt = totalAmount + totalSurcharge;
+                                    const firstSubId = debts[0]?.subscriptionId || subscriptions[0]?.id || '';
+                                    handleOpenRenewalModal(firstSubId, null, totalAmount, totalSurcharge, totalDebt, true, true, debts);
+                                }}
+                                className="px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-bold uppercase tracking-widest transition-all shadow-lg shadow-red-900/20"
+                            >
+                                Pagar Deuda Total
+                            </button>
                         </div>
                     </div>
                 )}
@@ -653,31 +798,33 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
                                 // Encontrar la subscripción asociada
                                 const associatedSub = subscriptions.find(s => {
-                                    // 1. Por número de cochera (Fijas)
-                                    if (s.spotNumber && cochera.numero && s.spotNumber === cochera.numero) return true;
+                                    // 1. Prioridad definitiva (Número de Cochera)
+                                    if (s.spotNumber && cochera.numero && String(s.spotNumber) === String(cochera.numero)) return true;
 
-                                    // 2. Por ID de vehículo o PATENTE
-                                    const subVehicleId = s.vehicleId || (s as any).vehicle_id;
+                                    // 2. Prioridad por ID de vehículo y patente
+                                    const subVehicleId = s.vehicleId || s.vehicle_id;
                                     const subPlate = s.vehicleData?.plate || s.plate;
 
                                     if (subVehicleId && cocheraVehicleIds.includes(subVehicleId)) return true;
                                     if (subPlate && cochera.vehiculos?.includes(subPlate)) return true;
 
-                                    // 3. Por cliente y tipo
-                                    const subClientId = s.customerId || (s as any).clientId;
-                                    const isSameClient = subClientId === cochera.clienteId;
+                                    // 3. Fallback Genérico: Por cliente y tipo SOLO si la suscripción NO tiene vehículo específico (vehicleId ni plate)
+                                    if (!subVehicleId && !subPlate) {
+                                        const subClientId = s.customerId || s.customer_id || s.clientId;
+                                        const isSameClient = subClientId === cochera.clienteId;
 
-                                    const normalizeType = (t: string) => {
-                                        if (!t) return '';
-                                        const lower = t.toLowerCase();
-                                        if (lower.includes('movil')) return 'Movil';
-                                        if (lower.includes('fija')) return 'Fija';
-                                        if (lower.includes('exclusiva')) return 'Exclusiva';
-                                        return '';
-                                    };
+                                        const normalizeType = (t: string) => {
+                                            if (!t) return '';
+                                            const lower = t.toLowerCase();
+                                            if (lower.includes('movil')) return 'Movil';
+                                            if (lower.includes('fija')) return 'Fija';
+                                            if (lower.includes('exclusiva')) return 'Exclusiva';
+                                            return '';
+                                        };
 
-                                    if (isSameClient && normalizeType(s.type || s.subscriptionType) === normalizeType(cochera.tipo)) {
-                                        return true;
+                                        if (isSameClient && normalizeType(s.type || s.subscriptionType) === normalizeType(cochera.tipo)) {
+                                            return true;
+                                        }
                                     }
 
                                     return false;
@@ -688,7 +835,6 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                 const now = new Date();
                                 let isExpired = false;
                                 let expirationDate = "Sin Vencimiento";
-                                let relatedDebtAmount = 0;
 
                                 if (associatedSub) {
                                     let rawD: Date | null = null;
@@ -708,14 +854,6 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                         expirationDate = rawD.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
                                     }
 
-                                    // Match all pending debts for the customer to force "Vencido" state
-                                    // This prevents the issue of "orphaned" debts not blocking the user's active cocheras
-                                    const pendingDebts = debts.filter(d => d.status === 'PENDING');
-                                    if (pendingDebts.length > 0) {
-                                        isExpired = true; // Force True if outstanding debts exist anywhere for this client
-                                        relatedDebtAmount = pendingDebts.reduce((acc, curr) => acc + (curr.amount || 0) + (curr.surchargeApplied || 0), 0);
-                                    }
-
                                 } else {
                                     // Fallback to end of month if no sub found at all (Edge case)
                                     const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
@@ -723,18 +861,20 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                     isExpired = false; // Cannot definitively say expired if no sub
                                 }
 
-                                console.log(`[DEBUG] Cochera #${cochera.numero || 'Movil ID: ' + cochera.id.slice(0, 4)} - Sub Asociada: ${associatedSub?.id || 'Ninguna'} - EndDate: ${associatedSub?.endDate || 'N/A'} - Expirada: ${isExpired} - Deuda: $${relatedDebtAmount}`);
+                                console.log(`[DEBUG] Cochera #${cochera.numero || 'Móvil ID: ' + cochera.id.slice(0, 4)} - Sub Asociada: ${associatedSub?.id || 'Ninguna'} - EndDate: ${associatedSub?.endDate || 'N/A'} - Expirada: ${isExpired} - Deuda: 0`);
 
                                 return (
                                     <div key={cochera.id} className={`group relative backdrop-blur-md border ${isExpired ? 'bg-red-500/10 border-red-500/50 shadow-lg shadow-red-900/20' : 'bg-gray-900/40 border-gray-800 hover:border-indigo-500/50 hover:shadow-indigo-900/10'} rounded-2xl p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl flex flex-col justify-between overflow-hidden`}>
                                         <div className="absolute top-4 right-4 z-20 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <button
-                                                onClick={() => handleOpenModal(cochera)}
-                                                className="p-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 hover:text-emerald-300 rounded-lg border border-emerald-500/20 backdrop-blur-sm transition-colors"
-                                                title="Agregar Vehículo"
-                                            >
-                                                <Plus className="w-3.5 h-3.5" />
-                                            </button>
+                                            {cochera.tipo !== 'Movil' && (
+                                                <button
+                                                    onClick={() => handleOpenModal(cochera)}
+                                                    className="p-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 hover:text-emerald-300 rounded-lg border border-emerald-500/20 backdrop-blur-sm transition-colors"
+                                                    title="Agregar Vehículo"
+                                                >
+                                                    <Plus className="w-3.5 h-3.5" />
+                                                </button>
+                                            )}
                                             <button
                                                 onClick={() => handleReleaseCochera(cochera.id)}
                                                 className="p-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg border border-red-500/20 backdrop-blur-sm transition-colors"
@@ -753,7 +893,9 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                         #{cochera.numero || 'S/N'}
                                                         {isExpired && <span className="ml-2 inline-flex items-center gap-1 bg-red-500 text-white text-[10px] px-2 py-0.5 rounded shadow-sm shadow-red-500/20 drop-shadow-md tracking-wider"><AlertTriangle className="w-3 h-3" />VENCIDO</span>}
                                                     </span>
-                                                    <span className={`text-2xl font-bold tracking-tight ${cochera.tipo === 'Exclusiva' ? 'text-amber-400' : 'text-white'}`}>{cochera.tipo}</span>
+                                                    <span className={`text-2xl font-bold tracking-tight ${cochera.tipo === 'Exclusiva' ? 'text-amber-400' : 'text-white'}`}>
+                                                        {cochera.tipo === 'Movil' ? 'Móvil' : cochera.tipo}
+                                                    </span>
                                                 </div>
                                             </div>
                                             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-gray-950/50 border border-gray-800/50">
@@ -790,13 +932,15 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                                     )}
                                                                 </div>
                                                                 <div className="flex items-center gap-2">
-                                                                    <button
-                                                                        onClick={(e) => { e.stopPropagation(); handleUnlinkVehicle(cochera.id, plateText); }}
-                                                                        className="p-1.5 text-red-500/50 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
-                                                                        title="Desvincular Vehículo"
-                                                                    >
-                                                                        <Unlink className="w-3.5 h-3.5" />
-                                                                    </button>
+                                                                    {cochera.tipo !== 'Movil' && (
+                                                                        <button
+                                                                            onClick={(e) => { e.stopPropagation(); handleUnlinkVehicle(cochera.id, plateText); }}
+                                                                            className="p-1.5 text-red-500/50 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                                                                            title="Desvincular Vehículo"
+                                                                        >
+                                                                            <Unlink className="w-3.5 h-3.5" />
+                                                                        </button>
+                                                                    )}
                                                                     <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
                                                                 </div>
                                                             </div>
@@ -847,12 +991,22 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
                                             {isExpired && associatedSub && (
                                                 <button
-                                                    onClick={() => handleOpenRenewalModal(associatedSub.id, cochera, relatedDebtAmount > 0 ? relatedDebtAmount : 0, relatedDebtAmount > 0)}
+                                                    onClick={() => {
+                                                        const base = cochera.precioBase || 0;
+                                                        const mora = calculateSurcharge(base);
+
+                                                        // Precisamente filtrar la deuda base canon de este abono
+                                                        const specificDebts = debts.filter(d => d.subscriptionId === associatedSub.id);
+                                                        const targetDebt = specificDebts.find(d => d.amount === base) || specificDebts[0];
+                                                        const targetDebtsArray = targetDebt ? [targetDebt] : [];
+
+                                                        // Pass hasDebt = true when it's expired so the live lookup doesn't override with live prices if not intended, OR keep it clean.
+                                                        // Instructed: "Asegúrate de que si isExpired es true, la llamada a handleOpenRenewalModal pase el argumento hasDebt como true"
+                                                        handleOpenRenewalModal(associatedSub.id, cochera, base, mora, base + mora, isExpired, false, targetDebtsArray);
+                                                    }}
                                                     className="w-full py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 rounded-lg text-xs font-bold uppercase tracking-widest transition-all"
                                                 >
-                                                    {relatedDebtAmount > 0
-                                                        ? `Renovar Abono ($${relatedDebtAmount.toLocaleString('es-AR')})`
-                                                        : `Renovar Nuevo Ciclo`}
+                                                    Renovar Abono (${(cochera.precioBase || 0).toLocaleString('es-AR')})
                                                 </button>
                                             )}
                                         </div>
@@ -924,6 +1078,29 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                     </div>
                                 </div>
 
+                                {upgradeInfo.isUpgrade && (
+                                    <div className="grid grid-cols-2 gap-3 mt-4">
+                                        <div>
+                                            <label className={labelStyle}>Método de Pago</label>
+                                            <select className={`${inputStyle} appearance-none bg-gray-900 border-gray-700/50`} value={newVehicleData.metodoPago} onChange={e => setNewVehicleData({ ...newVehicleData, metodoPago: e.target.value })}>
+                                                <option value="Efectivo">Efectivo</option>
+                                                <option value="Transferencia">Transferencia</option>
+                                                <option value="Debito">Débito</option>
+                                                <option value="Credito">Crédito</option>
+                                                <option value="QR">QR</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className={labelStyle}>Tipo Factura</label>
+                                            <select className={`${inputStyle} appearance-none bg-gray-900 border-gray-700/50`} value={newVehicleData.tipoFactura} onChange={e => setNewVehicleData({ ...newVehicleData, tipoFactura: e.target.value })}>
+                                                <option value="CC">CC</option>
+                                                <option value="A">A</option>
+                                                <option value="Final">Final</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                )}
+
                                 {newVehicleData.tipoVehiculo && (
                                     <div className={`p-4 rounded-lg border ${upgradeInfo.isUpgrade ? 'bg-emerald-900/20 border-emerald-500/30' : 'bg-gray-800/30 border-gray-700/30'} transition-all`}>
                                         {upgradeInfo.isUpgrade ? (
@@ -983,7 +1160,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                             onClick={() => setNewCocheraData({ ...newCocheraData, tipo: t, exclusiva: false, numero: t === 'Movil' ? '' : newCocheraData.numero })}
                                                             className={`flex-1 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${newCocheraData.tipo === t ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-500 hover:text-gray-300'}`}
                                                         >
-                                                            {t}
+                                                            {t === 'Movil' ? 'Móvil' : t}
                                                         </button>
                                                     ))}
                                                 </div>
@@ -1131,13 +1308,39 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                             </h3>
 
                             <div className="space-y-6">
-                                <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex justify-between items-center ring-1 ring-inset ring-red-500/10">
-                                    <div className="text-red-400">
-                                        <span className="block text-[10px] uppercase tracking-widest font-bold mb-1">Deuda Total a Pagar</span>
-                                        <span className="text-sm font-medium">Cochera {renewalData.cocheraDetails?.tipo} #{renewalData.cocheraDetails?.numero || 'S/N'}</span>
+                                <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex flex-col gap-3 ring-1 ring-inset ring-red-500/10">
+                                    <div className="flex justify-between items-end border-b border-red-500/20 pb-2">
+                                        <div className="text-red-400/80">
+                                            <span className="block text-[10px] uppercase tracking-widest font-bold mb-0.5">Subtotal</span>
+                                            <span className="text-xs font-medium">Monto base</span>
+                                        </div>
+                                        <div className="text-lg font-bold text-gray-300 font-mono tracking-tighter">
+                                            ${renewalData.baseAmount.toLocaleString()}
+                                        </div>
                                     </div>
-                                    <div className="text-3xl font-black text-white font-mono tracking-tighter">
-                                        ${renewalData.amountToPay.toLocaleString()}
+                                    <div className="flex justify-between items-end border-b border-red-500/20 pb-2">
+                                        <div className="text-red-400">
+                                            <span className="block text-[10px] uppercase tracking-widest font-bold mb-0.5">Mora por Retraso</span>
+                                            {renewalData.surchargeAmount > 0 ? (
+                                                <span className="text-[10px] font-medium block">
+                                                    Aplicado {renewalData.surchargeStep?.percentage}% de recargo por superar el día {renewalData.surchargeStep?.day} del mes
+                                                </span>
+                                            ) : (
+                                                <span className="text-xs font-medium">Sin recargos pendientes</span>
+                                            )}
+                                        </div>
+                                        <div className="text-lg font-bold text-red-300 font-mono tracking-tighter">
+                                            ${renewalData.surchargeAmount.toLocaleString()}
+                                        </div>
+                                    </div>
+                                    <div className="flex justify-between items-end pt-1">
+                                        <div className="text-red-400">
+                                            <span className="block text-[10px] uppercase tracking-widest font-bold mb-1">Total Final a Cobrar</span>
+                                            <span className="text-sm font-medium">Cochera {renewalData.cocheraDetails?.tipo === 'Movil' ? 'Móvil' : renewalData.cocheraDetails?.tipo} #{renewalData.cocheraDetails?.numero || 'S/N'}</span>
+                                        </div>
+                                        <div className="text-3xl font-black text-white font-mono tracking-tighter">
+                                            ${renewalData.amountToPay.toLocaleString()}
+                                        </div>
                                     </div>
                                 </div>
 

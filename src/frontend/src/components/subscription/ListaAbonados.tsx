@@ -138,7 +138,7 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                                     <td className="p-4">
                                         <div className="flex gap-2 flex-wrap">
                                             {displayPlates.length > 0 ? (
-                                                displayPlates.map((plate: string, i: number) => (
+                                                displayPlates.map((plate: any, i: number) => (
                                                     <span key={i} className="font-mono bg-gray-950 px-2 py-1 rounded text-emerald-400 border border-emerald-900/30 text-xs tracking-wider font-bold shadow-sm">
                                                         {plate}
                                                     </span>

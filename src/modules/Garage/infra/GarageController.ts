@@ -86,6 +86,81 @@ export class GarageController {
         this.debtRepo = new DebtRepository();
     }
 
+    private recalculateCocheraPrice = async (cochera: any, garageId: string): Promise<number> => {
+        if (!cochera.vehiculos || cochera.vehiculos.length === 0) {
+            return cochera.precioBase || 0;
+        }
+
+        try {
+            const [prices, vehicleTypes, tariffs] = await Promise.all([
+                db.prices.find({ garageId, priceList: 'standard' }),
+                db.vehicleTypes.find({ garageId }),
+                db.tariffs.find({ garageId })
+            ]);
+
+            const vTypeMap = new Map(vehicleTypes.map((v: any) => [v.id.trim(), v.name]));
+            const tariffMap = new Map(tariffs.map((t: any) => [t.id.trim(), t.name]));
+
+            const standardMatrix: Record<string, Record<string, number>> = {};
+            prices.forEach((p: any) => {
+                const vIdRaw = (p.vehicleTypeId || p.vehicle_type_id || '').trim();
+                const tIdRaw = (p.tariffId || p.tariff_id || '').trim();
+                const vName = vTypeMap.get(vIdRaw);
+                const tName = tariffMap.get(tIdRaw);
+                if (vName && tName) {
+                    const vKey = String(vName).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+                    const tKey = String(tName).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+                    if (!standardMatrix[vKey]) standardMatrix[vKey] = {};
+                    standardMatrix[vKey][tKey] = Number(p.amount || 0);
+                }
+            });
+
+            const subTypeRaw = cochera.tipo || 'Movil';
+            let tKey = String(subTypeRaw).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+            if (subTypeRaw === 'Exclusiva') tKey = 'abono exclusivo';
+            else tKey = `abono ${tKey}`;
+
+            let maxPrice = 0;
+            let priceFound = false;
+
+            for (const vElement of cochera.vehiculos) {
+                const plate = typeof vElement === 'string' ? vElement : (vElement as any).plate;
+                if (!plate) continue;
+
+                const vehicle = await this.vehicleRepo.findByPlate(plate);
+                if (vehicle && vehicle.type) {
+                    const vKey = String(vehicle.type).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+                    let resolvedPrice = 0;
+
+                    if (standardMatrix[vKey]) {
+                        if (standardMatrix[vKey][tKey]) {
+                            resolvedPrice = standardMatrix[vKey][tKey];
+                        } else if (standardMatrix[vKey][String(subTypeRaw).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim()]) {
+                            resolvedPrice = standardMatrix[vKey][String(subTypeRaw).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim()];
+                        }
+                    }
+
+                    if (resolvedPrice > 0) {
+                        if (resolvedPrice > maxPrice) maxPrice = resolvedPrice;
+                        priceFound = true;
+                    }
+                }
+            }
+
+            if (priceFound) {
+                return maxPrice;
+            }
+
+            // Fallback robusto a PRICING_CONFIG o precioBase
+            const fallbackValue = PRICING_CONFIG.mensual[cochera.tipo as keyof typeof PRICING_CONFIG.mensual]?.Efectivo || cochera.precioBase || 0;
+            return fallbackValue;
+
+        } catch (error) {
+            console.error("Error recalculando precio de cochera:", error);
+            return PRICING_CONFIG.mensual[cochera.tipo as keyof typeof PRICING_CONFIG.mensual]?.Efectivo || cochera.precioBase || 0;
+        }
+    };
+
     // --- COCHERAS API ---
 
     getAllCocheras = async (req: Request, res: Response) => {
@@ -268,6 +343,11 @@ export class GarageController {
                 cochera.vehiculos = cleanPlates;
             }
 
+            // Recalculate dynamic cochera price automatically
+            if (precioBase === undefined) {
+                cochera.precioBase = await this.recalculateCocheraPrice(cochera, garageId);
+            }
+
             // Persist
             await cocherasDB.updateOne({ id } as any, cochera);
 
@@ -298,6 +378,11 @@ export class GarageController {
 
             // Remove vehicle from cochera
             cochera.vehiculos = (cochera.vehiculos || []).filter((v: any) => typeof v === 'string' ? v !== plate : (v as any).plate !== plate);
+
+            // Recalculate base price after removing vehicle
+            const garageId = cochera.garageId || req.headers['x-garage-id'] as string || '';
+            cochera.precioBase = await this.recalculateCocheraPrice(cochera, garageId);
+
             await cocherasDB.updateOne({ id: cocheraId } as any, cochera);
 
             // Change isSubscriber to false for this specific vehicle and decouple from customer
@@ -647,17 +732,43 @@ export class GarageController {
                 const MAX_LOOPS = 24;
 
                 const subClientId = sub.customerId || (sub as any).clientId;
-                const relatedCochera = allCocheras.find((c: any) => c.clienteId === subClientId);
-                const cocheraBasePrice = relatedCochera ? Number(relatedCochera.precioBase || 0) : 0;
 
-                const subPlate = sub.plate || sub.vehicleData?.plate || (sub as any).vehicle_plate;
+                let subPlate = sub.plate || sub.vehicleData?.plate || (sub as any).vehicle_plate;
                 let vKey = '';
-                if (subPlate) {
+                const vehicleId = sub.vehicleId || (sub as any).vehicle_id;
+
+                if (!subPlate && vehicleId) {
+                    const v = await (this.vehicleRepo as any).findById(vehicleId);
+                    if (v) {
+                        subPlate = v.plate;
+                        if (v.type) {
+                            vKey = String(v.type).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+                        }
+                    }
+                } else if (subPlate) {
                     const vehicle = await this.vehicleRepo.findByPlate(subPlate);
                     if (vehicle && vehicle.type) {
                         vKey = String(vehicle.type).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
                     }
                 }
+
+                const subSpotNumber = (sub as any).spotNumber;
+
+                let relatedCochera = allCocheras.find((c: any) => {
+                    if (c.clienteId !== subClientId) return false;
+                    const isSpotMatch = subSpotNumber && c.numero === String(subSpotNumber);
+                    const isPlateMatch = subPlate && c.vehiculos && c.vehiculos.some((v: any) =>
+                        (typeof v === 'string' ? v : v.plate) === subPlate
+                    );
+                    return isSpotMatch || isPlateMatch;
+                });
+
+                if (!relatedCochera) {
+                    relatedCochera = allCocheras.find((c: any) => c.clienteId === subClientId);
+                }
+
+                const cocheraBasePrice = relatedCochera ? Number(relatedCochera.precioBase || 0) : 0;
+
                 const subTypeRaw = sub.type || (sub as any).subscriptionType || 'Movil';
                 let tKey = String(subTypeRaw).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
                 if (subTypeRaw === 'Exclusiva') tKey = 'abono exclusivo';
@@ -672,8 +783,8 @@ export class GarageController {
                     }
                 }
 
-                // ESTRUCTURAL POINT 2: Strict Fallback & Prohibition of sub.price
-                const finalPrice = resolvedPrice > 0 ? resolvedPrice : cocheraBasePrice;
+                // PRIORIDAD ESTRICTA: El precio del registro cocheraBasePrice (si existe y es > 0) PISA al precio de matriz
+                const finalPrice = cocheraBasePrice > 0 ? cocheraBasePrice : resolvedPrice;
 
                 if (finalPrice <= 0) continue; // Safety abort
 
@@ -762,11 +873,17 @@ export class GarageController {
             const debts = await this.debtRepo.findByCustomerId(String(clientId));
 
             // Apply Dynamic Surcharge based on real Garage settings from Supabase
-            let garageSettings = {};
+            let garageSettings: any = {};
             if (garageId) {
                 const garage: any = await db.garages.findOne({ id: garageId });
                 // Settings usually mapped to 'settings' or 'config', handle both or root
                 garageSettings = garage?.settings || garage?.config || garage || {};
+
+                // Include new threshold-based financial configs
+                const financialConfigs: any = await db.financialConfigs.find({ garageId });
+                if (financialConfigs && financialConfigs.length > 0) {
+                    garageSettings.surchargeConfig = financialConfigs[0].surchargeConfig || financialConfigs[0];
+                }
             }
 
             const debtsWithDynamicSurcharge = debts
@@ -826,6 +943,132 @@ export class GarageController {
     // Wrapper for server.ts compatibility
     getSubscriptions = this.getAllSubscriptions;
     createFullSubscription = this.createSubscription;
+
+    renewSubscription = async (req: Request, res: Response) => {
+        try {
+            const { subId, customerId, amountToPay, paymentMethod, billingType, operator, isDebtPaymentOnly, isGlobalDebt, targetDebts, targetDebtIds } = req.body;
+            const garageId = req.headers['x-garage-id'] as string;
+
+            if (!amountToPay) {
+                return res.status(400).json({ error: 'amountToPay is required' });
+            }
+
+            // Pay debts flow
+            const allDebts = customerId ? await this.debtRepo.findByCustomerId(String(customerId)) : [];
+            const pendingDebts = allDebts.filter(d => d.status === 'PENDING' && (d as any).garageId === garageId);
+
+            let debtsToPay: any[] = [];
+            let subsToRenew: Set<string> = new Set();
+            let hasSubscriptionsToRenew = false;
+
+            if (isGlobalDebt) {
+                // Pago Total: Todas las deudas del cliente proporcionadas en el payload (o filtradas por Target).
+                if (targetDebtIds && targetDebtIds.length > 0) {
+                    debtsToPay = pendingDebts.filter(d => targetDebtIds.includes(d.id));
+                } else if (targetDebts && targetDebts.length > 0) {
+                    const targetIds = targetDebts.map((td: any) => td.id);
+                    debtsToPay = pendingDebts.filter(d => targetIds.includes(d.id));
+                } else {
+                    debtsToPay = pendingDebts;
+                }
+
+                // Identificar deudas que corresponden a suscripciones y necesitan renovación
+                for (const debt of debtsToPay) {
+                    if (debt.subscriptionId) {
+                        subsToRenew.add(debt.subscriptionId);
+                        hasSubscriptionsToRenew = true;
+                    }
+                }
+            } else {
+                // Pago Individual / Renovación Individual: Exclusivo a una única Card (Suscripción o Cochera)
+                if (!subId) {
+                    return res.status(400).json({ error: 'subId is required for individual renewal/payment' });
+                }
+
+                // SECURITY: Pagar EXCLUSIVAMENTE los debtIds enviados explícitamente desde el frontend.
+                // Esto evita el borrado accidental de deudas "Manuales" atadas a la subscrpición durante la liquidación de "Canon".
+                if (targetDebtIds && targetDebtIds.length > 0) {
+                    debtsToPay = pendingDebts.filter(d => d.subscriptionId === subId && targetDebtIds.includes(d.id));
+                } else if (targetDebts && targetDebts.length > 0) {
+                    const targetIds = targetDebts.map((td: any) => td.id);
+                    debtsToPay = pendingDebts.filter(d => d.subscriptionId === subId && targetIds.includes(d.id));
+                } else {
+                    // Si el Front end no envia deudas explícitas (e.g., porque no las hay al renovar de forma anticipada)
+                    // entonces no pagamos ABSOLUTAMENTE NADA de forma automática/implicita.
+                    debtsToPay = [];
+                }
+
+                subsToRenew.add(subId);
+                hasSubscriptionsToRenew = true;
+            }
+
+            // 1. Mark target debts as PAID
+            for (const debt of debtsToPay) {
+                debt.status = 'PAID';
+                debt.updatedAt = new Date();
+                await this.debtRepo.save(debt);
+            }
+
+            // 2. Register single payment movement
+            const movementNotes = isGlobalDebt
+                ? `Pago de Deuda Total Acumulada (${debtsToPay.length} abonos)`
+                : `Renovación Abono / Pago Deuda Individual - ${subId || 'N/A'}`;
+
+            const plateForMovement = isGlobalDebt ? 'Multiples' : (await this.subscriptionRepo.findById(subId))?.plate || 'N/A';
+
+            await this.movementRepo.save({
+                id: uuidv4(),
+                type: 'CobroAbono',
+                amount: amountToPay,
+                paymentMethod: paymentMethod || 'Efectivo',
+                timestamp: new Date(),
+                notes: movementNotes,
+                relatedEntityId: isGlobalDebt ? (customerId || subId) : subId, // Relacionar a cliente (global) o sub (indiv)
+                plate: plateForMovement,
+                garageId: garageId,
+                operator: operator || 'Sistema',
+                invoice_type: billingType || 'Final',
+                createdAt: new Date()
+            } as any);
+
+            // 3. Renew Subscriptions concurrently (using SubscriptionManager logic)
+            let renewedSubs: any[] = [];
+            const activeCustomerSubs = customerId ? await this.subscriptionRepo.findByCustomerId(customerId).then(subs => subs.filter(s => s.active)) : [];
+
+            // Evaluamos si el action es renovación (no solo apagar el rojo, sino extender el endDate)
+            // Por la directriz 3: "Si el cliente tiene 2 o 3 suscripciones vencidas, todas deben quedar con su endDate actualizado"
+            // También se requiere para flujo individual.
+
+            // Si subsToRenew tiene items, renovamos. Pero sólo renovamos si pasaron el proceso de pago (flujo default del sistema actual)
+            for (const subIdToRenew of subsToRenew) {
+                const subToRenew = await this.subscriptionRepo.findById(subIdToRenew);
+                if (subToRenew && subToRenew.active) {
+                    const vehicle = await this.vehicleRepo.findByPlate(subToRenew.plate || '');
+
+                    const renewedSub = SubscriptionManager.renewSubscription(
+                        subToRenew,
+                        new Date(),
+                        activeCustomerSubs,
+                        PRICING_CONFIG,
+                        vehicle || undefined
+                    );
+
+                    await this.subscriptionRepo.save(renewedSub);
+                    renewedSubs.push(renewedSub);
+                }
+            }
+
+            if (isGlobalDebt) {
+                return res.json({ message: 'Deuda global pagada y suscripciones vinculadas renovadas', subscriptions: renewedSubs });
+            } else {
+                return res.json({ message: 'Abono individual renovado y su deuda pagada', subscription: renewedSubs[0] || null });
+            }
+
+        } catch (error: any) {
+            console.error('Renew Error:', error);
+            res.status(500).json({ error: error.message });
+        }
+    };
 
     getVehicleByPlate = async (req: Request, res: Response) => {
         try {
@@ -926,7 +1169,59 @@ export class GarageController {
     }
 
     closeShift = async (req: Request, res: Response) => {
-        res.json({ status: 'closed', message: 'Turno cerrado simulado' });
+        try {
+            const { operator, total_in_cash, staying_in_cash, rendered_amount, garageId } = req.body;
+            const finalGarageId = (req.headers['x-garage-id'] as string) || garageId;
+
+            const shiftClose = {
+                id: uuidv4(),
+                garageId: finalGarageId,
+                operator: operator || 'Sistema',
+                total_in_cash: Number(total_in_cash) || 0,
+                staying_in_cash: Number(staying_in_cash) || 0,
+                rendered_amount: Number(rendered_amount) || 0,
+                timestamp: new Date()
+            };
+
+            await db.shiftCloses.insert(shiftClose);
+
+            // Queue for sync
+            const q = new QueueService();
+            await q.enqueue('ShiftClose', 'CREATE', shiftClose);
+
+            res.json({ status: 'closed', message: 'Turno cerrado y rendido', data: shiftClose });
+        } catch (error: any) {
+            console.error('Error closing shift:', error);
+            res.status(500).json({ error: error.message });
+        }
+    }
+
+    partialClose = async (req: Request, res: Response) => {
+        try {
+            const { operator, amount, recipient_name, notes, garageId } = req.body;
+            const finalGarageId = (req.headers['x-garage-id'] as string) || garageId;
+
+            const partialClose = {
+                id: uuidv4(),
+                garageId: finalGarageId,
+                operator: operator || 'Sistema',
+                amount: Number(amount) || 0,
+                recipient_name: recipient_name || 'Desconocido',
+                notes: notes || '',
+                timestamp: new Date()
+            };
+
+            await db.partialCloses.insert(partialClose);
+
+            // Queue for sync
+            const q = new QueueService();
+            await q.enqueue('PartialClose', 'CREATE', partialClose);
+
+            res.json({ status: 'partial_close', message: 'Retiro parcial registrado', data: partialClose });
+        } catch (error: any) {
+            console.error('Error in partial close:', error);
+            res.status(500).json({ error: error.message });
+        }
     }
 
     getCurrentShift = async (req: Request, res: Response) => {
@@ -940,4 +1235,17 @@ export class GarageController {
         await this.customerRepo.reset(); // Also reset customers
         await this.movementRepo.reset();
     }
+
+    getFinancialConfig = async (req: Request, res: Response) => {
+        try {
+            const configs = await db.financialConfigs.find({});
+            if (configs && configs.length > 0) {
+                return res.json(configs[0]);
+            }
+            return res.json({});
+        } catch (error) {
+            console.error("Error fetching financial config:", error);
+            return res.status(500).json({ error: "Failed to fetch financial config" });
+        }
+    };
 }

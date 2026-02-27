@@ -193,6 +193,37 @@ export const ShiftSchema = z.object({
 export type Shift = z.infer<typeof ShiftSchema>;
 
 /**
+ * ShiftClose / Cierre de Caja
+ * Representa el momento exacto donde un operador rinde la caja.
+ */
+export const ShiftCloseSchema = z.object({
+  id: UuidSchema,
+  garageId: UuidSchema.optional(),
+  operator: z.string(),
+  total_in_cash: z.number(),
+  staying_in_cash: z.number(),
+  rendered_amount: z.number(),
+  timestamp: TimestampSchema.default(() => new Date()),
+});
+export type ShiftClose = z.infer<typeof ShiftCloseSchema>;
+
+/**
+ * PartialClose / Retiro Parcial de Caja
+ * Representa retiros de dinero de la caja (Ej: Pagos a proveedores).
+ */
+export const PartialCloseSchema = z.object({
+  id: UuidSchema,
+  garageId: UuidSchema.optional(),
+  operator: z.string(),
+  amount: z.number(),
+  recipient_name: z.string(),
+  notes: z.string().optional(),
+  timestamp: TimestampSchema.default(() => new Date()),
+});
+export type PartialClose = z.infer<typeof PartialCloseSchema>;
+
+
+/**
  * Employee / User
  * Compatible with Supabase EmployeeAccount
  */
@@ -224,7 +255,7 @@ export type Employee = z.infer<typeof EmployeeSchema>;
  */
 export const MutationSchema = z.object({
   id: UuidSchema,
-  entityType: z.enum(['Customer', 'Vehicle', 'Subscription', 'Movement', 'Shift', 'Employee', 'Cochera']),
+  entityType: z.enum(['Customer', 'Vehicle', 'Subscription', 'Movement', 'Shift', 'Employee', 'Cochera', 'ShiftClose', 'PartialClose']),
   entityId: UuidSchema,
   operation: z.enum(['CREATE', 'UPDATE', 'DELETE']),
   payload: z.any(),

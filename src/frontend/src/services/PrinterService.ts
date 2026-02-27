@@ -14,6 +14,13 @@ const getGarageConfig = () => {
 };
 
 export const PrinterService = {
+    getLegalFooter: () => `
+        <div style="margin-top: 10px; text-align: center; font-size: 12px; line-height: 1.2;">
+            <div>Aceptación Contrato (Adm.)</div>
+            <div>Jurisdicción: Tribunales CABA</div>
+        </div>
+    `,
+
     generateBase64Barcode: (text: string): string => {
         try {
             const canvas = document.createElement('canvas');
@@ -100,6 +107,8 @@ export const PrinterService = {
                     <div style="font-weight: bold; margin-top: 5px;">¡Gracias por su visita!</div>
                 </div>
                 
+                ${PrinterService.getLegalFooter()}
+
                 <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
@@ -207,6 +216,8 @@ export const PrinterService = {
                     <div>¡Gracias por su visita!</div>
                 </div>
                 
+                ${PrinterService.getLegalFooter()}
+
                 <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
@@ -236,8 +247,8 @@ export const PrinterService = {
         const ultimoDia = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
         const daysRemaining = (ultimoDia - now.getDate()) + 1;
 
-        const content = `
-            <div style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center;">
+        const generateTicketHtml = (typeLabel: string) => `
+            <div style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center; page-break-after: always;">
                 
                 <div style="margin-bottom: 10px; margin-top: 10px;">
                     <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
@@ -254,6 +265,7 @@ export const PrinterService = {
 
                 <div style="margin-bottom: 10px;">
                     <div style="font-size: 14px; font-weight: bold; letter-spacing: 1px;">COMPROBANTE ALTA</div>
+                    <div style="font-size: 12px; font-weight: bold; margin-top: 3px;">${typeLabel}</div>
                     <div style="font-size: 11px; margin-top: 3px;">ABONO MES</div>
                 </div>
 
@@ -320,6 +332,8 @@ export const PrinterService = {
                     <div>se paga del 1 al 10 de cada mes.</div>
                 </div>
                 
+                ${PrinterService.getLegalFooter()}
+
                 <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
@@ -328,8 +342,84 @@ export const PrinterService = {
             </div>
         `;
 
-        printHtml(content);
-        toast.info(`🖨️ Imprimiendo Comprobante Alta Abono: ${data.patente}`);
+        const ticketOriginal = generateTicketHtml('ORIGINAL');
+        const ticketDuplicado = generateTicketHtml('DUPLICADO (CONTROL)');
+
+        printHtml(ticketOriginal + ticketDuplicado);
+        toast.info(`🖨️ Imprimiendo Comprobantes Alta Abono (x2): ${data.patente}`);
+    },
+
+    printRenewalTicket: (data: any) => {
+        const config = getGarageConfig();
+        const formattedDate = new Date().toLocaleString('es-AR', {
+            day: '2-digit', month: '2-digit', year: 'numeric',
+            hour: '2-digit', minute: '2-digit'
+        });
+
+        const generateRenewalHtml = (typeLabel: string) => `
+            <div style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center; page-break-after: always;">
+                
+                <div style="margin-bottom: 5px; margin-top: 10px;">
+                    <h2 style="margin: 0; font-size: 16px; font-weight: 900; text-transform: uppercase;">${config.name}</h2>
+                    <div style="font-size: 11px;">${config.address}</div>
+                </div>
+
+                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+
+                <div style="margin-bottom: 10px;">
+                    <div style="font-size: 14px; font-weight: bold; letter-spacing: 0.5px;">RENOVACIÓN DE ABONO</div>
+                    <div style="font-size: 12px; font-weight: bold; margin-top: 2px;">${typeLabel}</div>
+                </div>
+
+                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+
+                <div style="text-align: left; font-size: 12px; margin: 10px 0; line-height: 1.4;">
+                    <div style="margin-bottom: 3px;">
+                        <span style="font-weight: bold;">TITULAR:</span> ${String(data.titular).toUpperCase()}
+                    </div>
+                    <div style="margin-bottom: 3px;">
+                        <span style="font-weight: bold;">COCHERA:</span> ${data.cocheraTexto}
+                    </div>
+                    <div style="margin-bottom: 3px;">
+                        <span style="font-weight: bold;">PATENTES:</span>
+                        <div style="margin-left: 10px;">
+                            ${data.patentes.map((p: string) => `<div>- ${p}</div>`).join('')}
+                        </div>
+                    </div>
+                </div>
+
+                <div style="margin: 15px 0; background: #000; color: #fff; padding: 8px; text-align: center;">
+                    <div style="font-size: 11px; font-weight: bold; margin-bottom: 2px;">MONTO PAGADO:</div>
+                    <div style="font-size: 22px; font-weight: 900;">$${Number(data.monto).toLocaleString('es-AR')}</div>
+                </div>
+
+                <div style="text-align: left; font-size: 11px; margin: 10px 0; line-height: 1.3;">
+                    <div><span style="font-weight: bold;">FECHA:</span> ${formattedDate}</div>
+                    <div><span style="font-weight: bold;">OPERADOR:</span> ${data.operador}</div>
+                </div>
+
+                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+
+                <div style="font-size: 10px; line-height: 1.3; margin-top: 10px;">
+                    <div style="font-weight: bold; text-transform: uppercase;">Comprobante de Renovación</div>
+                    <div style="margin-top: 2px;">CONSERVE ESTE TICKET</div>
+                </div>
+                
+                ${PrinterService.getLegalFooter()}
+
+                <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
+                    XXXXXXXXXXXXXXXXX
+                </div>
+                <!-- Spacing for printer cut -->
+                <div style="height: 30px;"></div>
+            </div>
+        `;
+
+        const original = generateRenewalHtml('ORIGINAL');
+        const duplicado = generateRenewalHtml('DUPLICADO');
+
+        printHtml(original + duplicado);
+        toast.info(`🖨️ Imprimiendo Comprobante Renovación (x2): ${data.titular}`);
     }
 };
 

@@ -1,6 +1,6 @@
 import mongoose, { Schema } from 'mongoose';
 import {
-    Vehicle, Customer, Subscription, Movement, Shift, Employee, Debt, Cochera
+    Vehicle, Customer, Subscription, Movement, Shift, Employee, Debt, Cochera, ShiftClose, PartialClose
 } from '../../shared/schemas';
 
 // --- Cochera ---
@@ -143,6 +143,32 @@ const ShiftSchema = new Schema<Shift>({
 });
 
 export const ShiftModel = mongoose.model<Shift>('Shift', ShiftSchema);
+
+// --- ShiftClose ---
+const ShiftCloseSchema = new Schema<ShiftClose>({
+    id: { type: String, required: true, unique: true },
+    garageId: { type: String },
+    operator: { type: String, required: true },
+    total_in_cash: { type: Number, required: true },
+    staying_in_cash: { type: Number, required: true },
+    rendered_amount: { type: Number, required: true },
+    timestamp: { type: Date, default: Date.now }
+});
+
+export const ShiftCloseModel = mongoose.model<ShiftClose>('ShiftClose', ShiftCloseSchema);
+
+// --- PartialClose ---
+const PartialCloseSchema = new Schema<PartialClose>({
+    id: { type: String, required: true, unique: true },
+    garageId: { type: String },
+    operator: { type: String, required: true },
+    amount: { type: Number, required: true },
+    recipient_name: { type: String, required: true },
+    notes: { type: String },
+    timestamp: { type: Date, default: Date.now }
+});
+
+export const PartialCloseModel = mongoose.model<PartialClose>('PartialClose', PartialCloseSchema);
 
 // --- Employee ---
 const EmployeeSchema = new Schema<Employee>({

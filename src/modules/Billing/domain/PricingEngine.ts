@@ -259,15 +259,32 @@ export class PricingEngine {
     static calculateSurcharge(baseAmount: number, config: any = {}): number {
         try {
             const today = new Date().getDate();
-            const rate11 = config?.apartirdia11 != null ? Number(config.apartirdia11) : 0;
-            const rate22 = config?.apartirdia22 != null ? Number(config.apartirdia22) : 0;
-
             let surchargePercentage = 0;
 
-            if (today >= 22) {
-                surchargePercentage = rate22;
-            } else if (today >= 11) {
-                surchargePercentage = rate11;
+            // Check if flexible step config exists in surchargeConfig JSON structure
+            if (config?.surchargeConfig?.global_default?.steps && Array.isArray(config.surchargeConfig.global_default.steps)) {
+                const steps = config.surchargeConfig.global_default.steps;
+                if (steps.length > 0) {
+                    // Sort descending by day to find the highest applicable threshold
+                    const sortedSteps = [...steps].sort((a, b) => b.day - a.day);
+
+                    for (const step of sortedSteps) {
+                        if (today >= step.day) {
+                            surchargePercentage = Number(step.percentage) || 0;
+                            break;
+                        }
+                    }
+                }
+            } else {
+                // Legacy Fallback
+                const rate11 = config?.apartirdia11 != null ? Number(config.apartirdia11) : 0;
+                const rate22 = config?.apartirdia22 != null ? Number(config.apartirdia22) : 0;
+
+                if (today >= 22) {
+                    surchargePercentage = rate22;
+                } else if (today >= 11) {
+                    surchargePercentage = rate11;
+                }
             }
 
             if (surchargePercentage === 0) return 0;

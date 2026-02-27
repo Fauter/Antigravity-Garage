@@ -2,6 +2,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
+import path from 'path';
 
 // Mongoose removed. Zero-Install Arch.
 import { SUPABASE_URL } from '../lib/supabase.js';
@@ -20,6 +21,18 @@ export const startServer = async () => {
     }));
 
     app.use(express.json());
+
+    // Serve static files in production
+    if (process.env.NODE_ENV === 'production' || (typeof (process as any).resourcesPath !== 'undefined')) {
+        const frontendDist = path.resolve(process.cwd(), 'src/frontend/dist');
+        app.use(express.static(frontendDist));
+
+        // Handle SPA routing
+        app.get('*', (req, res, next) => {
+            if (req.path.startsWith('/api')) return next();
+            res.sendFile(path.join(frontendDist, 'index.html'));
+        });
+    }
 
     const httpServer = createServer(app);
     const io = new Server(httpServer, {
@@ -54,6 +67,9 @@ export const startServer = async () => {
 
     // Mount Configuration Routes
     app.use('/api', configRoutes);
+
+    // Configuration Route
+    app.get('/api/configuracion-financiera', garageController.getFinancialConfig ? garageController.getFinancialConfig.bind(garageController) : (r, s) => s.status(404).send());
 
     // Access Control
     app.post('/api/estadias/entrada', accessController.registerEntry ? accessController.registerEntry.bind(accessController) : (r, s) => s.status(404).send('Method not found'));
@@ -92,6 +108,7 @@ export const startServer = async () => {
     // Shift Management
     app.post('/api/caja/apertura', garageController.openShift ? garageController.openShift.bind(garageController) : (r, s) => s.status(404).send());
     app.post('/api/caja/cierre', garageController.closeShift ? garageController.closeShift.bind(garageController) : (r, s) => s.status(404).send());
+    app.post('/api/caja/cierre-parcial', garageController.partialClose ? garageController.partialClose.bind(garageController) : (r, s) => s.status(404).send());
     app.get('/api/caja/turno-actual', garageController.getCurrentShift ? garageController.getCurrentShift.bind(garageController) : (r, s) => s.status(404).send());
 
     // Auth Routes

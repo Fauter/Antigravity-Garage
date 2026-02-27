@@ -83,7 +83,8 @@ export class SubscriptionManager {
         // Calculamos precio mes completo
         const year = renewalDate.getFullYear();
         const month = renewalDate.getMonth();
-        const endOfMonth = new Date(year, month + 1, 0);
+        // Último segundo del último día del mes actual
+        const endOfMonth = new Date(year, month + 1, 0, 23, 59, 59, 999);
 
         const price = PricingEngine.calculateSubscriptionFee(
             subscription.type,
@@ -97,6 +98,7 @@ export class SubscriptionManager {
         return {
             ...subscription,
             startDate: renewalDate,
+            endDate: endOfMonth,
             price,
             updatedAt: new Date()
         };

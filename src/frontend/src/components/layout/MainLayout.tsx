@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Ticket, Wallet, LogOut, User as UserIcon, Eye, Settings, Database, Loader2 } from 'lucide-react';
+import { LayoutDashboard, Ticket, Wallet, LogOut, User as UserIcon, Eye, Settings, Database, Loader2, AlertTriangle, Clock } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -41,7 +41,7 @@ const SyncOverlay: React.FC<{ isVisible: boolean }> = ({ isVisible }) => {
 
 const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     // Added 'config' back to activeTab
-    const [activeTab, setActiveTab] = useState<'operador' | 'abonos' | 'caja' | 'audit' | 'config'>('operador');
+    const [activeTab, setActiveTab] = useState<'operador' | 'audit' | 'anticipados' | 'abonos' | 'caja' | 'incidentes' | 'config'>('operador');
     const [garageConfig, setGarageConfig] = useState<{ name: string; address: string } | null>(null);
     const [refreshKey, setRefreshKey] = useState(0);
 
@@ -78,18 +78,22 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     useEffect(() => {
         const path = location.pathname;
         if (path === '/' || path.startsWith('/estadias')) setActiveTab('operador');
+        else if (path.startsWith('/audit')) setActiveTab('audit');
+        else if (path.startsWith('/anticipados')) setActiveTab('anticipados');
         else if (path.startsWith('/abonos')) setActiveTab('abonos');
         else if (path.startsWith('/caja')) setActiveTab('caja');
-        else if (path.startsWith('/audit')) setActiveTab('audit');
+        else if (path.startsWith('/incidentes')) setActiveTab('incidentes');
         else if (path.startsWith('/config')) setActiveTab('config');
     }, [location]);
 
-    const handleTabChange = (tab: 'operador' | 'abonos' | 'caja' | 'audit' | 'config') => {
+    const handleTabChange = (tab: 'operador' | 'audit' | 'anticipados' | 'abonos' | 'caja' | 'incidentes' | 'config') => {
         setActiveTab(tab);
         if (tab === 'operador') navigate('/');
+        if (tab === 'audit') navigate('/audit');
+        if (tab === 'anticipados') navigate('/anticipados');
         if (tab === 'abonos') navigate('/abonos');
         if (tab === 'caja') navigate('/caja');
-        if (tab === 'audit') navigate('/audit');
+        if (tab === 'incidentes') navigate('/incidentes');
         if (tab === 'config') navigate('/config');
     };
 
@@ -111,10 +115,10 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
             <SyncOverlay isVisible={isGlobalSyncing} />
 
             {/* --- HEADER --- */}
-            <header className="h-14 border-b border-gray-800 bg-gray-950 flex items-center justify-between px-4 shrink-0 z-50">
+            <header className="h-14 border-b border-gray-800 bg-gray-950 flex items-center justify-between px-4 shrink-0 z-50 relative">
 
                 {/* Brand - Dynamic per Terminal Config and Sync Status */}
-                <div className="flex items-center gap-3 w-1/3">
+                <div className="flex items-center gap-3 flex-1">
                     <div className="flex flex-col justify-center h-full max-w-[250px]">
                         <h1 className="text-white font-bold text-base leading-tight tracking-tight truncate pb-0.5">
                             {garageConfig?.name || 'ANTIGRAVITY'}
@@ -132,37 +136,56 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                     )}
                 </div>
 
-                {/* Navigation Tabs */}
-                <nav className="flex items-center gap-1 bg-gray-900/50 p-1 rounded-lg border border-gray-800/50">
-                    <NavButton
-                        active={activeTab === 'operador'}
-                        onClick={() => handleTabChange('operador')}
-                        icon={<LayoutDashboard className="w-4 h-4" />}
-                        label="Operador"
-                    />
-                    <NavButton
-                        active={activeTab === 'audit'}
-                        onClick={() => handleTabChange('audit')}
-                        icon={<Eye className="w-4 h-4" />}
-                        label="Auditoría"
-                    />
-                    <NavButton
-                        active={activeTab === 'abonos'}
-                        onClick={() => handleTabChange('abonos')}
-                        icon={<Ticket className="w-4 h-4" />}
-                        label="Abonos"
-                    />
-                    {/* RESTORED Config Button */}
-                    <NavButton
-                        active={activeTab === 'config'}
-                        onClick={() => handleTabChange('config')}
-                        icon={<Settings className="w-4 h-4" />}
-                        label="Config"
-                    />
-                </nav>
+                {/* Navigation Tabs Container - Centered */}
+                <div className="absolute left-1/2 -translate-x-1/2">
+                    <nav className="flex items-center gap-1 bg-gray-900/50 p-1 rounded-lg border border-gray-800/50">
+                        <NavButton
+                            active={activeTab === 'operador'}
+                            onClick={() => handleTabChange('operador')}
+                            icon={<LayoutDashboard className="w-4 h-4" />}
+                            label="Operador"
+                        />
+                        <NavButton
+                            active={activeTab === 'audit'}
+                            onClick={() => handleTabChange('audit')}
+                            icon={<Eye className="w-4 h-4" />}
+                            label="Auditoría"
+                        />
+                        <NavButton
+                            active={activeTab === 'abonos'}
+                            onClick={() => handleTabChange('abonos')}
+                            icon={<Ticket className="w-4 h-4" />}
+                            label="Abonos"
+                        />
+                        {/* <NavButton
+                            active={activeTab === 'anticipados'}
+                            onClick={() => handleTabChange('anticipados')}
+                            icon={<Clock className="w-4 h-4" />}
+                            label="Anticipados"
+                        /> */}
+                        <NavButton
+                            active={activeTab === 'caja'}
+                            onClick={() => handleTabChange('caja')}
+                            icon={<Wallet className="w-4 h-4" />}
+                            label="Caja"
+                        />
+                        {/* <NavButton
+                            active={activeTab === 'incidentes'}
+                            onClick={() => handleTabChange('incidentes')}
+                            icon={<AlertTriangle className="w-4 h-4" />}
+                            label="Incidente"
+                        /> */}
+                        {/* <NavButton
+                            active={activeTab === 'config'}
+                            onClick={() => handleTabChange('config')}
+                            icon={<Settings className="w-4 h-4" />}
+                            label="Config"
+                        /> */}
+                    </nav>
+                </div>
 
                 {/* User & Actions */}
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 flex-1 justify-end">
                     <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-900 rounded-full border border-gray-800">
                         <div className={`w-2 h-2 rounded-full animate-pulse ${user ? 'bg-emerald-500' : 'bg-gray-500'}`}></div>
                         <UserIcon className="w-3 h-3 text-gray-400" />

@@ -1,12 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../../services/api';
 import { toast } from 'sonner';
-import { Camera, Car, Check, User, Phone, CreditCard, AlertTriangle, Wallet } from 'lucide-react';
+import { Camera, Car, Check, User, Phone, AlertTriangle, Wallet } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { WebcamModal } from '../common/WebcamModal';
 import { PrinterService } from '../../services/PrinterService';
 
-const FormularioAbono: React.FC = () => {
+interface FormularioAbonoProps {
+    onCancel?: () => void;
+    onSubmit?: (data: any) => void;
+}
+
+const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit }) => {
     // --- STATE ---
     const [loading, setLoading] = useState(false);
     const [showCameraModal, setShowCameraModal] = useState(false);
@@ -267,6 +272,10 @@ const FormularioAbono: React.FC = () => {
             // Allow state reset only on success
             setShowSuccessScreen(true);
 
+            if (onSubmit) {
+                onSubmit(payload);
+            }
+
             setTimeout(() => {
                 setShowSuccessScreen(false);
                 setFormData({
@@ -316,22 +325,27 @@ const FormularioAbono: React.FC = () => {
     const labelStyle = "block text-[10px] uppercase text-gray-500 font-bold mb-0.5 tracking-wider";
 
     return (
-        <div className="h-full bg-[#0a0a0a] flex flex-col p-2 overflow-hidden text-white relative">
+        <div className="h-[calc(100vh-64px)] bg-[#0a0a0a] flex flex-col p-2 overflow-hidden text-white relative">
             <h1 className="text-base font-bold mb-2 flex items-center gap-2 pl-2 text-gray-300">
                 <User className="text-emerald-500 w-4 h-4" /> Nueva Suscripción
+                {onCancel && (
+                    <button type="button" onClick={onCancel} className="ml-auto mr-2 text-[10px] bg-gray-800 hover:bg-gray-700 px-2 py-1 rounded">
+                        Cancelar
+                    </button>
+                )}
             </h1>
 
-            <div className="flex-1 bg-gray-900/50 border border-gray-800 rounded-xl flex overflow-hidden shadow-2xl relative">
+            <div className="flex-1 min-h-0 bg-gray-900/50 border border-gray-800 rounded-xl flex overflow-hidden shadow-2xl relative">
 
                 {/* --- MAIN FORM (LEFT) --- */}
                 <div className="flex-1 overflow-y-auto p-3 scrollbar-hide">
-                    <form id="abono-form" onSubmit={handleSubmit} className="space-y-3">
+                    <form id="abono-form" onSubmit={handleSubmit} className="space-y-6">
 
                         {/* 1. CONFIG COCHERA (Compact) */}
                         <div className="flex items-center gap-4 bg-black/40 py-1.5 px-3 rounded-lg border border-gray-800/60">
                             <span className="text-[10px] font-bold text-emerald-500/80 uppercase tracking-widest">Config Cochera</span>
                             <div className="flex bg-gray-950 p-0.5 rounded border border-gray-800">
-                                {['Movil', 'Fija'].map(type => (
+                                {['Movil', 'Fija'].map((type: any) => (
                                     <button type="button" key={type}
                                         onClick={() => {
                                             if (type === 'Movil') {
@@ -379,7 +393,7 @@ const FormularioAbono: React.FC = () => {
 
                         {/* 3. DOCUMENTACION (Horizontal) */}
                         <div className="flex gap-2">
-                            {['Seguro', 'DNI', 'Cédula'].map(doc => (
+                            {['Seguro', 'DNI', 'Cédula'].map((doc: any) => (
                                 <button key={doc} type="button" onClick={() => openCamera(doc)}
                                     className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded border border-dashed text-[10px] font-bold uppercase transition-all ${photos[doc] ? 'border-emerald-500/50 bg-emerald-900/10 text-emerald-400' : 'border-gray-800 bg-gray-950/20 text-gray-500 hover:bg-white/5'}`}>
                                     {photos[doc] ? <Check className="w-3 h-3" /> : <Camera className="w-3 h-3" />} {doc}
@@ -426,7 +440,7 @@ const FormularioAbono: React.FC = () => {
                 </div>
 
                 {/* --- SIDEBAR (RIGHT) --- */}
-                <div className="w-64 bg-gray-950 border-l border-gray-800 p-3 flex flex-col shrink-0 z-10 gap-4">
+                <div className="w-64 h-full bg-gray-950 border-l border-gray-800 p-3 flex flex-col shrink-0 z-10 gap-4">
 
                     {/* Payment Config Section */}
                     <div className="space-y-3">
