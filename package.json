@@ -11,7 +11,7 @@
     "build:frontend": "npm run build --prefix src/frontend",
     "build:backend": "tsc -p tsconfig.backend.json",
     "build:all": "npm run build:frontend && npm run build:backend",
-    "clean": "node -e \"const fs = require('fs'); ['dist_electron', 'dist_main', 'src/frontend/dist'].forEach(d => fs.rmSync(d, { recursive: true, force: true }))\"",
+    "clean": "node -e \"const fs = require('fs'); ['dist_electron', 'dist_main', 'src/frontend/dist'].forEach(d => { if (fs.existsSync(d)) fs.rmSync(d, { recursive: true, force: true }); console.log('Limpiado: ' + d); })\"",
     "electron:dev": "concurrently --names \"BACK,FRONT,ELECTRON\" --kill-others \"npm run server\" \"npm run client\" \"wait-on http://localhost:5173 && electron .\"",
     "dist": "npm run clean && npm run build:all && electron-builder"
   },

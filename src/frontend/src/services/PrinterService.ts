@@ -139,7 +139,7 @@ export const PrinterService = {
         const operatorName = movement ? (movement.operator || 'Sys') : 'Sys';
 
         const generateTicket = (title: string, showTotal: boolean = true) => `
-            <div style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center; page-break-after: always;">
+            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center;">
                 
                 <div style="margin-bottom: 10px; margin-top: 10px;">
                     <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
@@ -248,7 +248,7 @@ export const PrinterService = {
         const daysRemaining = (ultimoDia - now.getDate()) + 1;
 
         const generateTicketHtml = (typeLabel: string) => `
-            <div style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center; page-break-after: always;">
+            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center;">
                 
                 <div style="margin-bottom: 10px; margin-top: 10px;">
                     <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
@@ -357,7 +357,7 @@ export const PrinterService = {
         });
 
         const generateRenewalHtml = (typeLabel: string) => `
-            <div style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center; page-break-after: always;">
+            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center;">
                 
                 <div style="margin-bottom: 5px; margin-top: 10px;">
                     <h2 style="margin: 0; font-size: 16px; font-weight: 900; text-transform: uppercase;">${config.name}</h2>
@@ -423,10 +423,40 @@ export const PrinterService = {
     }
 };
 
-const printHtml = (html: string) => {
-    // Kiosk printing requires the iframe to remain in the DOM, 
-    // or at least not be removed too quickly. We'll use a hidden 
-    // element that persists, re-using it if it exists.
+const buildFullHtml = (html: string): string => `
+    <html>
+        <head>
+            <title>Pos Print</title>
+            <style>
+                @media print {
+                    @page { margin: 0; size: 58mm auto; }
+                    body { margin: 0; padding: 0; }
+                    .page-break { page-break-after: always; }
+                }
+                /* Screen styles for PDF/Blob preview */
+                body { margin: 0; padding: 0; background: #fff; }
+                .page-break { page-break-after: always; }
+            </style>
+        </head>
+        <body>${html}</body>
+    </html>
+`;
+
+const printHtml = (html: string, isVirtual: boolean = false) => {
+    if (isVirtual) {
+        // ── PDF Preview Mode ──
+        // Abre el ticket en una pestaña del navegador como HTML renderizado.
+        // Desde ahí el usuario puede guardar como PDF o inspeccionar.
+        const fullHtml = buildFullHtml(html);
+        const blob = new Blob([fullHtml], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank');
+        return;
+    }
+
+    // ── Silent Print Mode (kiosk-printing) ──
+    // El iframe persiste en el DOM para evitar que el spooler de Windows
+    // cancele el trabajo al desmontar elementos.
     let hiddenFrame = document.getElementById('ag-printer-frame') as HTMLIFrameElement;
 
     if (!hiddenFrame) {
@@ -442,69 +472,18 @@ const printHtml = (html: string) => {
     }
 
     const doc = hiddenFrame.contentWindow?.document;
-    if (doc) {
-        doc.open();
-        doc.write(`
-            <html>
-                <head>
-                    <title>Pos Print</title>
-                    <style>
-                        @media print {
-                            @page { margin: 0; }
-                            body { margin: 0; padding: 0; }
-                        }
-                    </style>
-                </head>
-                <body>${html}</body>
-            </html>
-        `);
-        doc.close();
-
-        // Give time for base64 images to render, then print
-        setTimeout(() => {
-            try {
-                hiddenFrame.contentWindow?.focus();
-                hiddenFrame.contentWindow?.print();
-                // WE NO LONGER REMOVE THE IFRAME.
-                // Removing it kills the print spooler in kiosk mode on some OS/Chrome versions.
-            } catch (err) {
-                console.error("Fallo al ejecutar print() en modo silencioso", err);
-                // Fallback: Si falla el iframe (ej. permisos estrictos), abrimos en nueva pestaña
-                openPrintFallback(html);
-            }
-        }, 500); // 500ms es suficiente pata renderizar el HTML y el base64 local
-    } else {
-        // Fallback total
-        openPrintFallback(html);
+    if (!doc) {
+        console.error('ag-printer-frame: no se pudo acceder al document del iframe');
+        return;
     }
-};
 
-// Fallback: Abre el ticket en una pestaña nueva para imprimir manualmente o guardar PDF
-const openPrintFallback = (html: string) => {
-    const printWindow = window.open('', '_blank');
-    if (printWindow) {
-        printWindow.document.write(`
-            <html>
-                <head>
-                    <title>Ticket Fallback</title>
-                    <style>
-                        @media print {
-                            @page { margin: 0; }
-                            body { margin: 0; padding: 0; }
-                        }
-                    </style>
-                </head>
-                <body>${html}</body>
-            </html>
-        `);
-        printWindow.document.close();
+    doc.open();
+    doc.write(buildFullHtml(html));
+    doc.close();
 
-        // Auto-print en la nueva pestaña (esto sí levantará diálogo, pero al menos no falla)
-        setTimeout(() => {
-            printWindow.focus();
-            printWindow.print();
-        }, 500);
-    } else {
-        toast.error("Por favor, permita las ventanas emergentes (Pop-ups) para imprimir el ticket.");
-    }
+    // Esperar a que las imágenes base64 se rendericen, luego imprimir
+    setTimeout(() => {
+        hiddenFrame.contentWindow?.focus();
+        hiddenFrame.contentWindow?.print();
+    }, 500);
 };

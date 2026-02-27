@@ -1,6 +1,7 @@
 import mongoose, { Schema } from 'mongoose';
 import {
-    Vehicle, Customer, Subscription, Movement, Shift, Employee, Debt, Cochera, ShiftClose, PartialClose
+    Vehicle, Customer, Subscription, Movement, Shift, Employee, Debt, Cochera, ShiftClose, PartialClose, Incident,
+    Mutation, SyncConflict, VehicleType, Tariff, Price
 } from '../../shared/schemas';
 
 // --- Cochera ---
@@ -169,6 +170,17 @@ const PartialCloseSchema = new Schema<PartialClose>({
 });
 
 export const PartialCloseModel = mongoose.model<PartialClose>('PartialClose', PartialCloseSchema);
+
+// --- Incident ---
+const IncidentSchema = new Schema<Incident>({
+    id: { type: String, required: true, unique: true },
+    garageId: { type: String, required: true },
+    operator: { type: String, required: true },
+    description: { type: String, required: true },
+    createdAt: { type: Date, default: Date.now }
+});
+
+export const IncidentModel = mongoose.model<Incident>('Incident', IncidentSchema);
 
 // --- Employee ---
 const EmployeeSchema = new Schema<Employee>({

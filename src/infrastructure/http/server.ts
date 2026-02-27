@@ -3,142 +3,326 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import path from 'path';
+import { db } from '../database/datastore.js';
+import { QueueService } from '../../modules/Sync/application/QueueService.js';
 
 // Mongoose removed. Zero-Install Arch.
-import { SUPABASE_URL } from '../lib/supabase.js';
+import { SUPABASE_URL } from '../lib/supabase';
+import fs from 'fs';
 
 console.log('🚀 [BACKEND] Proceso de arranque iniciado (Modo: Zero-Install / Offline-First)...');
 console.log(`🔗 Conectado a Supabase en: ${SUPABASE_URL}`);
 
 export const startServer = async () => {
-    const app = express();
+    try {
+        const app = express();
+        const isPackaged = (process as any).resourcesPath !== undefined && !process.env.NODE_ENV;
 
-    // 1. CORS Middleware
-    app.use(cors({
-        origin: 'http://localhost:5173',
-        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-        allowedHeaders: ['Content-Type', 'Authorization', 'x-garage-id']
-    }));
+        // 1. CORS Middleware
+        app.use(cors({
+            origin: 'http://localhost:5173',
+            methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+            allowedHeaders: ['Content-Type', 'Authorization', 'x-garage-id']
+        }));
 
-    app.use(express.json());
+        app.use(express.json());
 
-    // Serve static files in production
-    if (process.env.NODE_ENV === 'production' || (typeof (process as any).resourcesPath !== 'undefined')) {
-        const frontendDist = path.resolve(process.cwd(), 'src/frontend/dist');
-        app.use(express.static(frontendDist));
-
-        // Handle SPA routing
-        app.get('*', (req, res, next) => {
-            if (req.path.startsWith('/api')) return next();
-            res.sendFile(path.join(frontendDist, 'index.html'));
+        const httpServer = createServer(app);
+        const io = new Server(httpServer, {
+            cors: {
+                origin: "http://localhost:5173",
+                methods: ["GET", "POST", "PATCH"]
+            }
         });
-    }
 
-    const httpServer = createServer(app);
-    const io = new Server(httpServer, {
-        cors: {
-            origin: "http://localhost:5173",
-            methods: ["GET", "POST", "PATCH"]
+        // --- API Routes & Controllers ---
+
+        // Decisive loader: uses require() in production to avoid ESM engine triggering
+        async function loadModule(modulePath: string) {
+            try {
+                if (isPackaged) {
+                    // In production, we assume CommonJS (dist_main)
+                    const absolutePath = path.resolve(__dirname, modulePath);
+                    // @ts-ignore - Dynamic require is necessary for the packaged environment
+                    const mod = require(absolutePath);
+                    return mod.default || mod;
+                } else {
+                    // In development, dynamic import or require could both work, but tsx prefers import
+                    const mod = await import(modulePath);
+                    return mod.default || mod;
+                }
+            } catch (err: any) {
+                console.error(`❌ [SERVER] Error cargando módulo ${modulePath}:`, err);
+                return null;
+            }
         }
-    });
 
-    // --- API Routes & Controllers ---
+        // --- Universal Named-Export Extractor ---
+        // All three controllers use `export class ClassName` (named export, no `export default`).
+        // In CJS (packaged), require() returns { ClassName: [Function] }.
+        // In ESM (dev), dynamic import() returns the same shape.
+        // Priority: named export by known key > .default > module itself (last resort).
+        const accessMod = await loadModule('../../modules/AccessControl/infra/AccessController.js');
+        const garageMod = await loadModule('../../modules/Garage/infra/GarageController.js');
+        const authMod = await loadModule('../../modules/Identity/infra/AuthController.js');
+        const syncMod = await loadModule('../../modules/Sync/application/SyncService.js');
 
-    // Dynamic import (Robust extraction to handle tsx / node ESM differences)
-    const accessMod = await import('../../modules/AccessControl/infra/AccessController.js');
-    const AccessControllerClass = accessMod.AccessController || (accessMod.default && accessMod.default.AccessController);
+        const AccessControllerClass = accessMod?.AccessController ?? accessMod?.default?.AccessController ?? accessMod?.default ?? accessMod;
+        const GarageControllerClass = garageMod?.GarageController ?? garageMod?.default?.GarageController ?? garageMod?.default ?? garageMod;
+        const AuthControllerClass = authMod?.AuthController ?? authMod?.default?.AuthController ?? authMod?.default ?? authMod;
+        const syncService = syncMod?.syncService ?? syncMod?.default?.syncService ?? syncMod?.default ?? syncMod;
 
-    const { GarageController: GarageControllerClass } = await import('../../modules/Garage/infra/GarageController.js');
+        // Configuration Module Routes
+        const configRoutes = await loadModule('../../modules/Configuration/http/routes.js');
 
-    const authMod = await import('../../modules/Identity/infra/AuthController.js');
-    const AuthControllerClass = authMod.AuthController || (authMod.default && authMod.default.AuthController);
+        // --- Type Guards before instantiation ---
+        // If a class fails to resolve, we log a descriptive error but don't crash the sync process.
+        function safeInstantiate<T>(Class: any, name: string): T | null {
+            if (typeof Class !== 'function') {
+                console.error(`❌ [SERVER] '${name}' no es un constructor. Módulo recibido:`, typeof Class, Class);
+                return null;
+            }
+            try {
+                return new Class() as T;
+            } catch (err) {
+                console.error(`❌ [SERVER] Error al instanciar '${name}':`, err);
+                return null;
+            }
+        }
 
-    const syncMod = await import('../../modules/Sync/application/SyncService.js');
-    const syncService = syncMod.syncService || (syncMod.default && syncMod.default.syncService);
+        const accessController = safeInstantiate<any>(AccessControllerClass, 'AccessController');
+        const garageController = safeInstantiate<any>(GarageControllerClass, 'GarageController');
+        const authController = safeInstantiate<any>(AuthControllerClass, 'AuthController');
 
-    // Configuration Module Routes
-    const configModule = await import('../../modules/Configuration/http/routes.js');
-    const configRoutes = configModule.default || configModule.router;
+        // Mount Configuration Routes
+        if (configRoutes) app.use('/api', configRoutes as any);
 
-    const accessController = new AccessControllerClass();
-    const garageController = new GarageControllerClass();
-    const authController = new AuthControllerClass();
-    // syncService is already instantiated
+        // --- Route Bindings with Safe Guards ---
 
-    // Mount Configuration Routes
-    app.use('/api', configRoutes);
+        // Financial Config
+        app.get('/api/configuracion-financiera', (req, res) => {
+            if (garageController?.getFinancialConfig) return garageController.getFinancialConfig(req, res);
+            res.status(404).json({ error: 'Method not available' });
+        });
 
-    // Configuration Route
-    app.get('/api/configuracion-financiera', garageController.getFinancialConfig ? garageController.getFinancialConfig.bind(garageController) : (r, s) => s.status(404).send());
+        // Access Control
+        app.post('/api/estadias/entrada', (req, res) => {
+            if (accessController?.registerEntry) return accessController.registerEntry(req, res);
+            res.status(404).send('Method not found');
+        });
+        app.post('/api/estadias/salida', (req, res) => {
+            if (accessController?.registerExit) return accessController.registerExit(req, res);
+            res.status(404).send('Method not found');
+        });
+        app.get('/api/estadias/activa/:plate', (req, res) => {
+            if (accessController?.getActiveStay) return accessController.getActiveStay(req, res);
+            res.status(404).send('Method not found');
+        });
+        app.get('/api/estadias', (req, res) => {
+            if (accessController?.getAllActiveStays) return accessController.getAllActiveStays(req, res);
+            res.status(404).send('Method not found');
+        });
 
-    // Access Control
-    app.post('/api/estadias/entrada', accessController.registerEntry ? accessController.registerEntry.bind(accessController) : (r, s) => s.status(404).send('Method not found'));
-    app.post('/api/estadias/salida', accessController.registerExit ? accessController.registerExit.bind(accessController) : (r, s) => s.status(404).send('Method not found'));
-    app.get('/api/estadias/activa/:plate', accessController.getActiveStay ? accessController.getActiveStay.bind(accessController) : (r, s) => s.status(404).send('Method not found'));
-    app.get('/api/estadias', accessController.getAllActiveStays ? accessController.getAllActiveStays.bind(accessController) : (r, s) => s.status(404).send('Method not found'));
+        // Garage Management
+        app.get('/api/cocheras', (req, res) => {
+            if (garageController?.getAllCocheras) return garageController.getAllCocheras(req, res);
+            res.status(404).send('Method not found');
+        });
+        app.post('/api/cocheras', (req, res) => {
+            if (garageController?.createCochera) return garageController.createCochera(req, res);
+            res.status(404).send('Method not found');
+        });
+        app.patch('/api/cocheras/:id', (req, res) => {
+            if (garageController?.updateCochera) return garageController.updateCochera(req, res);
+            res.status(404).send('Method not found');
+        });
+        app.post('/api/cocheras/desvincular-vehiculo', (req, res) => {
+            if (garageController?.unassignVehicle) return garageController.unassignVehicle(req, res);
+            res.status(404).send();
+        });
+        app.post('/api/cocheras/liberar', (req, res) => {
+            if (garageController?.releaseCochera) return garageController.releaseCochera(req, res);
+            res.status(404).send();
+        });
 
-    // Garage Management
-    app.get('/api/cocheras', garageController.getAllCocheras ? garageController.getAllCocheras.bind(garageController) : (r, s) => s.status(404).send('Method not found'));
-    app.post('/api/cocheras', garageController.createCochera ? garageController.createCochera.bind(garageController) : (r, s) => s.status(404).send('Method not found'));
-    app.patch('/api/cocheras/:id', garageController.updateCochera ? garageController.updateCochera.bind(garageController) : (r, s) => s.status(404).send('Method not found'));
-    app.post('/api/cocheras/desvincular-vehiculo', garageController.unassignVehicle ? garageController.unassignVehicle.bind(garageController) : (r, s) => s.status(404).send());
-    app.post('/api/cocheras/liberar', garageController.releaseCochera ? garageController.releaseCochera.bind(garageController) : (r, s) => s.status(404).send());
+        // Subscriptions logic
+        app.get('/api/abonos', (req, res) => {
+            if (garageController?.getSubscriptions) return garageController.getSubscriptions(req, res);
+            res.status(404).send('Method not found');
+        });
+        app.post('/api/abonos', (req, res) => {
+            if (garageController?.createSubscription) return garageController.createSubscription(req, res);
+            res.status(404).send('Method not found');
+        });
+        app.post('/api/abonos/alta-completa', (req, res) => {
+            if (garageController?.createFullSubscription) return garageController.createFullSubscription(req, res);
+            res.status(404).send('Method not found');
+        });
+        app.post('/api/abonos/renovar', (req, res) => {
+            if (garageController?.renewSubscription) return garageController.renewSubscription(req, res);
+            res.status(404).send('Method not found');
+        });
+        app.post('/api/abonos/evaluar-deudas', (req, res) => {
+            if (garageController?.triggerDebtSweep) return garageController.triggerDebtSweep(req, res);
+            res.status(404).send('Method not found');
+        });
 
-    // Subscriptions logic
-    app.get('/api/abonos', garageController.getSubscriptions ? garageController.getSubscriptions.bind(garageController) : (r, s) => s.status(404).send('Method not found'));
-    app.post('/api/abonos', garageController.createSubscription ? garageController.createSubscription.bind(garageController) : (r, s) => s.status(404).send('Method not found'));
-    app.post('/api/abonos/alta-completa', garageController.createFullSubscription ? garageController.createFullSubscription.bind(garageController) : (r, s) => s.status(404).send('Method not found'));
-    app.post('/api/abonos/renovar', garageController.renewSubscription ? garageController.renewSubscription.bind(garageController) : (r, s) => s.status(404).send('Method not found'));
-    app.post('/api/abonos/evaluar-deudas', garageController.triggerDebtSweep ? garageController.triggerDebtSweep.bind(garageController) : (r, s) => s.status(404).send('Method not found'));
+        // Customers & Vehicles
+        app.get('/api/clientes', (req, res) => {
+            if (garageController?.findClientByDni) return garageController.findClientByDni(req, res);
+            res.status(404).send();
+        });
+        app.post('/api/clientes', (req, res) => {
+            if (garageController?.createClient) return garageController.createClient(req, res);
+            res.status(404).send();
+        });
+        app.get('/api/clientes/:id', (req, res) => {
+            if (garageController?.getCustomerById) return garageController.getCustomerById(req, res);
+            res.status(404).send();
+        });
+        app.get('/api/deudas/:clientId', (req, res) => {
+            if (garageController?.getDebtsByCustomer) return garageController.getDebtsByCustomer(req, res);
+            res.status(404).send();
+        });
+        app.get('/api/vehiculos', (req, res) => {
+            if (garageController?.getVehicles) return garageController.getVehicles(req, res);
+            res.status(404).send();
+        });
 
-    // Customers & Vehicles
-    app.get('/api/clientes', garageController.findClientByDni ? garageController.findClientByDni.bind(garageController) : (r, s) => s.status(404).send());
-    app.post('/api/clientes', garageController.createClient ? garageController.createClient.bind(garageController) : (r, s) => s.status(404).send());
-    app.get('/api/clientes/:id', garageController.getCustomerById ? garageController.getCustomerById.bind(garageController) : (r, s) => s.status(404).send());
-    app.get('/api/deudas/:clientId', garageController.getDebtsByCustomer ? garageController.getDebtsByCustomer.bind(garageController) : (r, s) => s.status(404).send());
-    app.get('/api/vehiculos', garageController.getVehicles ? garageController.getVehicles.bind(garageController) : (r, s) => s.status(404).send());
+        app.get('/api/vehiculos/:plate', (req, res) => {
+            if (garageController?.getVehicleByPlate) return garageController.getVehicleByPlate(req, res);
+            res.status(404).send();
+        });
+        app.patch('/api/clientes/:id', (req, res) => {
+            if (garageController?.updateCustomer) return garageController.updateCustomer(req, res);
+            res.status(404).send();
+        });
 
-    app.get('/api/vehiculos/:plate', garageController.getVehicleByPlate ? garageController.getVehicleByPlate.bind(garageController) : (r, s) => s.status(404).send());
-    app.patch('/api/clientes/:id', garageController.updateCustomer ? garageController.updateCustomer.bind(garageController) : (r, s) => s.status(404).send());
+        // Billing
+        app.get('/api/caja/movimientos', (req, res) => {
+            if (garageController?.getMovements) return garageController.getMovements(req, res);
+            res.status(404).send();
+        });
+        app.post('/api/caja/movimientos', (req, res) => {
+            if (garageController?.createMovement) return garageController.createMovement(req, res);
+            res.status(404).send();
+        });
 
-    // Billing
-    app.get('/api/caja/movimientos', garageController.getMovements ? garageController.getMovements.bind(garageController) : (r, s) => s.status(404).send());
-    app.post('/api/caja/movimientos', garageController.createMovement ? garageController.createMovement.bind(garageController) : (r, s) => s.status(404).send());
+        // Incidents Management
+        app.post('/api/incidents', async (req, res) => {
+            try {
+                const incident = req.body;
+                console.log('📥 [Server /api/incidents] Payload recibido:', JSON.stringify(incident));
 
-    // Shift Management
-    app.post('/api/caja/apertura', garageController.openShift ? garageController.openShift.bind(garageController) : (r, s) => s.status(404).send());
-    app.post('/api/caja/cierre', garageController.closeShift ? garageController.closeShift.bind(garageController) : (r, s) => s.status(404).send());
-    app.post('/api/caja/cierre-parcial', garageController.partialClose ? garageController.partialClose.bind(garageController) : (r, s) => s.status(404).send());
-    app.get('/api/caja/turno-actual', garageController.getCurrentShift ? garageController.getCurrentShift.bind(garageController) : (r, s) => s.status(404).send());
+                if (!incident || !incident.id) {
+                    return res.status(400).json({ error: 'Payload inválido: falta id' });
+                }
 
-    // Auth Routes
-    app.post('/api/auth/login', authController.login ? authController.login.bind(authController) : (r, s) => s.status(404).send('Method not found'));
+                // Sanitizar: eliminar campos null/undefined antes de NeDB
+                const cleanIncident: any = {};
+                for (const [key, value] of Object.entries(incident)) {
+                    if (value !== null && value !== undefined) {
+                        cleanIncident[key] = value;
+                    }
+                }
 
-    // Sync Bootstrap Endpoint
-    app.post('/api/sync/bootstrap', async (req, res) => {
-        const { garageId } = req.body;
-        if (!garageId) return res.status(400).json({ error: 'garageId required' });
+                // 1. Guardar en NeDB local
+                await db.incidents.insert(cleanIncident);
+                console.log('✅ [Server] Incidente guardado en NeDB local');
 
-        console.log(`🔌 Manual Sync Triggered for ${garageId}`);
-        syncService.pullAllData(garageId).then(() => {
-            syncService.initRealtime(garageId);
-        }).catch(err => console.error('Sync Error', err));
+                // 2. Encolar para Supabase — IMPORTANTE: Usar 'Incident' (PascalCase)
+                // para que coincida con el tableMap del SyncService
+                const queue = new QueueService();
+                await queue.enqueue('Incident', 'CREATE', cleanIncident);
+                console.log('✅ [Server] Incidente encolado como mutación tipo "Incident"');
 
-        res.json({ message: 'Sync started' });
-    });
+                res.status(201).json({ success: true });
+            } catch (error) {
+                console.error('❌ [Server] Error en /api/incidents:', error);
+                res.status(500).json({ error: 'Error interno al guardar incidente' });
+            }
+        });
 
-    // Check Sync Status Endpoint
-    app.get('/api/sync/check', (req, res) => {
-        res.json({ syncing: syncService.isGlobalSyncing });
-    });
+        // Shift Management
+        app.post('/api/caja/apertura', (req, res) => {
+            if (garageController?.openShift) return garageController.openShift(req, res);
+            res.status(404).send();
+        });
+        app.post('/api/caja/cierre', (req, res) => {
+            if (garageController?.closeShift) return garageController.closeShift(req, res);
+            res.status(404).send();
+        });
+        app.post('/api/caja/cierre-parcial', (req, res) => {
+            if (garageController?.partialClose) return garageController.partialClose(req, res);
+            res.status(404).send();
+        });
+        app.get('/api/caja/cierres-parciales', (req, res) => {
+            if (garageController?.getPartialCloses) return garageController.getPartialCloses(req, res);
+            res.status(404).send();
+        });
+        app.get('/api/caja/cierres', (req, res) => {
+            if (garageController?.getShiftCloses) return garageController.getShiftCloses(req, res);
+            res.status(404).send();
+        });
+        app.get('/api/caja/turno-actual', (req, res) => {
+            if (garageController?.getCurrentShift) return garageController.getCurrentShift(req, res);
+            res.status(404).send();
+        });
 
-    // --- Start Server ---
-    const PORT = process.env.PORT || 3000;
+        // Auth Routes
+        app.post('/api/auth/login', (req, res) => {
+            if (authController?.login) return authController.login(req, res);
+            res.status(404).send('Method not found');
+        });
 
-    httpServer.listen(PORT, async () => {
-        console.log(`✅ Servidor GarageIA escuchando en http://localhost:${PORT}`);
-        console.log(`✅ Base de Datos Local: LISTA (Archivo ./.data/)`);
-    });
+        // Sync Bootstrap Endpoint
+        app.post('/api/sync/bootstrap', async (req, res) => {
+            const { garageId } = req.body;
+            if (!garageId) return res.status(400).json({ error: 'garageId required' });
+
+            console.log(`🔌 Manual Sync Triggered for ${garageId}`);
+            if (syncService?.pullAllData) {
+                syncService.pullAllData(garageId).then(() => {
+                    syncService.initRealtime(garageId);
+                }).catch((err: any) => console.error('Sync Error', err));
+            }
+
+            res.json({ message: 'Sync started' });
+        });
+
+        // Check Sync Status Endpoint
+        app.get('/api/sync/check', (req, res) => {
+            res.json({ syncing: syncService?.isGlobalSyncing || false });
+        });
+
+        // --- 2. Production Static Files & Robust Path Resolution (Moved to after API) ---
+        let frontendDist = isPackaged
+            ? path.join((process as any).resourcesPath, 'app.asar', 'src', 'frontend', 'dist')
+            : path.join(__dirname, '..', '..', '..', '..', 'src', 'frontend', 'dist');
+
+        if (!fs.existsSync(frontendDist)) {
+            frontendDist = path.resolve(__dirname, '../../frontend/dist');
+        }
+
+        if (fs.existsSync(frontendDist)) {
+            console.log(`✅ [PROD] Sirviendo Frontend desde: ${frontendDist}`);
+            app.use(express.static(frontendDist));
+            app.use((req, res, next) => {
+                if (req.path.startsWith('/api')) return next();
+                res.sendFile(path.join(frontendDist, 'index.html'));
+            });
+        }
+
+        // --- Start Server ---
+        const PORT = process.env.PORT || 3000;
+
+        httpServer.listen(PORT, async () => {
+            console.log(`✅ Servidor GarageIA escuchando en http://localhost:${PORT}`);
+            console.log(`✅ Base de Datos Local: LISTA (Archivo ./.data/)`);
+        });
+    } catch (err) {
+        console.error('❌ Error fatal en startServer:', err);
+    }
 };
 
-startServer();
+startServer().catch(err => console.error('❌ Error en la promesa de arranque:', err));

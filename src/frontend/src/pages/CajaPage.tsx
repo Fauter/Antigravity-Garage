@@ -1,22 +1,37 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
-import { Wallet, TrendingUp, Calendar, User, ArrowUpRight, ArrowDownRight, LogOut, FileText, CheckCircle } from 'lucide-react';
+import { toast } from 'sonner';
+import { Wallet, TrendingUp, Calendar, User, ArrowDownRight, LogOut, FileText, CheckCircle } from 'lucide-react';
 
 interface Movement {
     id?: string;
     plate: string;
     amount: number;
     paymentMethod: string;
+    payment_method?: string;
     invoiceType: string;
     operator: string;
     timestamp: string;
     type: string;
 }
 
+interface PartialClose {
+    id: string;
+    operator: string;
+    amount: string | number;
+    timestamp: string;
+    recipient_name?: string;
+    notes?: string;
+}
+
+type UnifiedRow =
+    | (Movement & { _kind: 'movement' })
+    | (PartialClose & { _kind: 'partial_close' });
+
 const CajaPage: React.FC = () => {
     const { user, operatorName, logout } = useAuth();
-    const [movements, setMovements] = useState<Movement[]>([]);
+    const [unifiedRows, setUnifiedRows] = useState<UnifiedRow[]>([]);
     const [loading, setLoading] = useState(true);
     const [total, setTotal] = useState(0);
 
@@ -42,24 +57,76 @@ const CajaPage: React.FC = () => {
 
     const loadMovements = async () => {
         try {
-            const res = await api.get('/caja/movimientos');
+            const [movRes, pcRes, scRes] = await Promise.all([
+                api.get('/caja/movimientos'),
+                api.get('/caja/cierres-parciales'),
+                api.get('/caja/cierres')
+            ]);
+
             const today = new Date().toLocaleDateString();
 
-            // Filtrar movimientos: 
-            // 1. Fecha de hoy
-            // 2. Operador actual (usamos operatorName o username)
-            const todaysMovements = res.data.filter((m: any) => {
-                const isToday = new Date(m.timestamp).toLocaleDateString() === today;
-                const isMyMovement = m.operator === operatorName || m.operator === user?.username;
-                return isToday && isMyMovement;
-            });
+            // Encontrar el "ancla": último cierre de caja final de este operador
+            const myShiftCloses = (scRes.data || [])
+                .filter((sc: any) => sc.operator === operatorName || sc.operator === user?.username)
+                .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
-            // Ordenar de más reciente a más antiguo
-            todaysMovements.sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+            const lastCloseTimestamp = myShiftCloses.length > 0
+                ? new Date(myShiftCloses[0].timestamp).getTime()
+                : null;
 
-            setMovements(todaysMovements);
-            const sum = todaysMovements.reduce((acc: number, curr: Movement) => acc + (curr.amount || 0), 0);
-            setTotal(sum);
+            // Función de filtrado: posterior al último cierre, o del día si no hay cierres
+            const isInCurrentShift = (timestamp: string, operator: string) => {
+                const isMyOp = operator === operatorName || operator === user?.username;
+                if (!isMyOp) return false;
+
+                if (lastCloseTimestamp) {
+                    // Solo mostrar movimientos POSTERIORES al último cierre
+                    return new Date(timestamp).getTime() > lastCloseTimestamp;
+                } else {
+                    // Sin cierres previos: fallback a movimientos de hoy
+                    return new Date(timestamp).toLocaleDateString() === today;
+                }
+            };
+
+            // Filtrar movimientos del turno activo
+            const shiftMovements: UnifiedRow[] = movRes.data
+                .filter((m: any) => isInCurrentShift(m.timestamp, m.operator))
+                .map((m: any) => ({ ...m, _kind: 'movement' as const }));
+
+            // Filtrar cierres parciales del turno activo
+            const shiftPartials: UnifiedRow[] = (pcRes.data || [])
+                .filter((pc: any) => isInCurrentShift(pc.timestamp, pc.operator))
+                .map((pc: any) => ({ ...pc, _kind: 'partial_close' as const }));
+
+            // Combinar y ordenar por timestamp descendente
+            const combined = [...shiftMovements, ...shiftPartials];
+            combined.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+            setUnifiedRows(combined);
+
+            // Fondo Inicial: staying_in_cash del último cierre global (cualquier operador)
+            // Nota: los registros locales usan staying_in_cash (snake_case),
+            // pero los sincronizados desde Supabase usan stayingInCash (camelCase)
+            const allShiftClosesSorted = (scRes.data || [])
+                .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+            const lastGlobalClose = allShiftClosesSorted.length > 0 ? allShiftClosesSorted[0] : null;
+            const fondoInicial = lastGlobalClose
+                ? Number(lastGlobalClose.staying_in_cash ?? lastGlobalClose.stayingInCash) || 0
+                : 0;
+            console.log('[CajaPage] Fondo Inicial:', fondoInicial, '| Último cierre:', lastGlobalClose);
+
+            // Cálculo: fondo inicial + suma de efectivo - suma de retiros parciales
+            const cashSum = shiftMovements
+                .filter((m) => {
+                    const method = ((m as Movement).paymentMethod || (m as Movement).payment_method || '').toLowerCase();
+                    return method === 'efectivo';
+                })
+                .reduce((acc, curr) => acc + Number(curr.amount), 0);
+
+            const partialsSum = shiftPartials
+                .reduce((acc, curr) => acc + Number(curr.amount), 0);
+
+            setTotal(fondoInicial + cashSum - partialsSum);
         } catch (error) {
             console.error('Error loading movements', error);
         } finally {
@@ -75,11 +142,11 @@ const CajaPage: React.FC = () => {
                 staying_in_cash: Number(stayingInCash),
                 rendered_amount: renderedAmount
             });
-            alert('Cierre de caja registrado exitosamente. La sesión se cerrará automáticamente.');
+            toast.success('CIERRE DE CAJA EXITOSO. La sesión se cerrará automáticamente.');
             logout(); // Cierre forzoso de sesión
         } catch (error) {
             console.error("Error al cerrar caja", error);
-            alert('Error al registrar cierre de caja');
+            toast.error('Error al procesar la operación');
         }
     };
 
@@ -91,15 +158,16 @@ const CajaPage: React.FC = () => {
                 recipient_name: recipientName,
                 notes: partialNotes
             });
-            alert('Cierre parcial registrado exitosamente');
+            toast.success('RETIRO PARCIAL REGISTRADO CORRECTAMENTE');
             setIsPartialCloseModalOpen(false);
             setPartialCloseStep(1);
             setPartialAmount('');
             setRecipientName('');
             setPartialNotes('');
+            loadMovements(); // Refrescar movimientos + retiros
         } catch (error) {
             console.error("Error al registrar cierre parcial", error);
-            alert('Error al registrar cierre parcial');
+            toast.error('Error al procesar la operación');
         }
     };
 
@@ -125,7 +193,7 @@ const CajaPage: React.FC = () => {
                             <TrendingUp className="w-8 h-8" />
                         </div>
                         <div>
-                            <span className="block text-emerald-500/80 text-xs font-bold uppercase tracking-widest">Recaudación Total</span>
+                            <span className="block text-emerald-500/80 text-xs font-bold uppercase tracking-widest">Cálculo de Caja</span>
                             <span className="text-4xl font-black text-white tracking-tighter">${total.toLocaleString()}</span>
                         </div>
                     </div>
@@ -171,28 +239,50 @@ const CajaPage: React.FC = () => {
                         <tbody className="divide-y divide-slate-800">
                             {loading ? (
                                 <tr><td colSpan={5} className="p-8 text-center text-slate-500">Cargando movimientos...</td></tr>
-                            ) : movements.length === 0 ? (
+                            ) : unifiedRows.length === 0 ? (
                                 <tr><td colSpan={5} className="p-8 text-center text-slate-500">Sin movimientos en este turno.</td></tr>
                             ) : (
-                                movements.map((m, idx) => (
-                                    <tr key={idx} className="hover:bg-slate-800/50 transition-colors">
-                                        <td className="p-4 font-mono text-slate-400">
-                                            {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                        </td>
-                                        <td className="p-4 text-slate-300">
-                                            {m.type === 'CobroEstadia' ? 'Estadía' : m.type === 'CobroAbono' ? 'Abono' : m.type}
-                                        </td>
-                                        <td className="p-4 font-mono font-bold text-white">{m.plate || '---'}</td>
-                                        <td className="p-4">
-                                            <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-slate-800 border border-slate-700 text-slate-300">
-                                                {m.paymentMethod}
-                                            </span>
-                                        </td>
-                                        <td className="p-4 font-mono font-bold text-emerald-400 text-right">
-                                            ${m.amount?.toLocaleString()}
-                                        </td>
-                                    </tr>
-                                ))
+                                unifiedRows.map((row, idx) => {
+                                    if (row._kind === 'partial_close') {
+                                        return (
+                                            <tr key={`pc-${idx}`} className="hover:bg-slate-800/50 transition-colors bg-slate-900/30">
+                                                <td className="p-4 font-mono text-slate-400">
+                                                    {new Date(row.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                </td>
+                                                <td className="p-4 text-amber-400 font-semibold flex items-center gap-1.5">
+                                                    <ArrowDownRight className="w-4 h-4" /> Cierre Parcial
+                                                </td>
+                                                <td className="p-4 font-mono text-slate-600">---</td>
+                                                <td className="p-4 text-slate-600">---</td>
+                                                <td className="p-4 font-mono font-bold text-slate-500 text-right">
+                                                    -${Number(row.amount).toLocaleString()}
+                                                </td>
+                                            </tr>
+                                        );
+                                    }
+
+                                    // Movement row (existing behavior)
+                                    const m = row as Movement & { _kind: 'movement' };
+                                    return (
+                                        <tr key={`mv-${idx}`} className="hover:bg-slate-800/50 transition-colors">
+                                            <td className="p-4 font-mono text-slate-400">
+                                                {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            </td>
+                                            <td className="p-4 text-slate-300">
+                                                {m.type === 'CobroEstadia' ? 'Hora' : m.type === 'CobroAbono' ? 'Abono' : m.type}
+                                            </td>
+                                            <td className="p-4 font-mono font-bold text-white">{m.plate || '---'}</td>
+                                            <td className="p-4">
+                                                <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-slate-800 border border-slate-700 text-slate-300">
+                                                    {m.paymentMethod}
+                                                </span>
+                                            </td>
+                                            <td className="p-4 font-mono font-bold text-emerald-400 text-right">
+                                                ${m.amount?.toLocaleString()}
+                                            </td>
+                                        </tr>
+                                    );
+                                })
                             )}
                         </tbody>
                     </table>
@@ -208,6 +298,11 @@ const CajaPage: React.FC = () => {
                                 <h3 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
                                     <LogOut className="text-red-500 w-6 h-6" /> Cierre de Caja
                                 </h3>
+
+                                <div className="bg-slate-950/50 border border-slate-800 rounded-xl p-4 mb-6 flex items-center justify-between">
+                                    <span className="text-slate-400 text-sm font-bold uppercase tracking-wide">Cálculo de Caja</span>
+                                    <span className="text-2xl font-black text-emerald-400 font-mono">${total.toLocaleString()}</span>
+                                </div>
 
                                 <div className="space-y-4 mb-8">
                                     <div>
@@ -250,7 +345,7 @@ const CajaPage: React.FC = () => {
                                     </button>
                                     <button
                                         onClick={() => {
-                                            if (totalInCash === '' || stayingInCash === '') return alert('Completa los montos');
+                                            if (totalInCash === '' || stayingInCash === '') return toast.warning('Completa los montos');
                                             setShiftCloseStep(2)
                                         }}
                                         className="flex-1 bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-500 transition"
@@ -358,7 +453,7 @@ const CajaPage: React.FC = () => {
                                     </button>
                                     <button
                                         onClick={() => {
-                                            if (partialAmount === '' || !recipientName.trim()) return alert('Complete monto y destinatario');
+                                            if (partialAmount === '' || !recipientName.trim()) return toast.warning('Complete monto y destinatario');
                                             setPartialCloseStep(2);
                                         }}
                                         className="flex-1 bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-500 transition"

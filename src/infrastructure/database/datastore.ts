@@ -41,6 +41,7 @@ export const db = {
     debts: createStore('debts'),
     shiftCloses: createStore('shift_closes'),
     partialCloses: createStore('partial_closes'),
+    incidents: createStore('incidents'),
 
     // Config Stores
     vehicleTypes: createStore('vehicle_types'),

@@ -1048,9 +1048,7 @@ export class GarageController {
                     const renewedSub = SubscriptionManager.renewSubscription(
                         subToRenew,
                         new Date(),
-                        activeCustomerSubs,
-                        PRICING_CONFIG,
-                        vehicle || undefined
+                        PRICING_CONFIG as any
                     );
 
                     await this.subscriptionRepo.save(renewedSub);
@@ -1221,6 +1219,24 @@ export class GarageController {
         } catch (error: any) {
             console.error('Error in partial close:', error);
             res.status(500).json({ error: error.message });
+        }
+    }
+
+    getPartialCloses = async (req: Request, res: Response) => {
+        try {
+            const all = await db.partialCloses.find({});
+            res.json(all);
+        } catch (e: any) {
+            res.status(500).json({ error: e.message });
+        }
+    }
+
+    getShiftCloses = async (req: Request, res: Response) => {
+        try {
+            const all = await db.shiftCloses.find({});
+            res.json(all);
+        } catch (e: any) {
+            res.status(500).json({ error: e.message });
         }
     }
 

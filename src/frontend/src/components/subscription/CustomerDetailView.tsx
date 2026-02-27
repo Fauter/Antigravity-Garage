@@ -355,7 +355,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
     // --- ENPOINTS DESVINCULACION ---
     const handleReleaseCochera = async (cocheraId: string) => {
-        if (!confirm("¿Seguro que deseas liberar esta cochera? Se desvincularán todos los vehículos y se cortará el abono (pero los vehículos seguirán registrados).")) return;
+        if (!confirm("¿Seguro que deseas liberar esta cochera? Se desvincularán todos los vehículos y se cortará el abono.")) return;
         try {
             await api.post('/cocheras/liberar', { cocheraId });
             toast.success("Cochera liberada con éxito");

@@ -112,7 +112,8 @@ export class SyncService {
             'Cochera': 'cocheras',
             'Debt': 'debts',
             'ShiftClose': 'shift_closes',
-            'PartialClose': 'partial_closes'
+            'PartialClose': 'partial_closes',
+            'Incident': 'incidents'
         };
 
         const tableName = tableMap[entityType];
@@ -156,6 +157,7 @@ export class SyncService {
             await db.financialConfigs.remove({}, { multi: true }); // Purge configs
             await db.shiftCloses.remove({}, { multi: true }); // Purge shift_closes
             await db.partialCloses.remove({}, { multi: true }); // Purge partial_closes
+            await db.incidents.remove({}, { multi: true }); // Purge incidents
 
             // ROBUST PURGE: Compaction to physically remove phantom records from filesystem
             console.log('🧹 Sync: Forcing NeDB Compaction across all collections...');
@@ -170,7 +172,7 @@ export class SyncService {
             const storesToCompact = [
                 db.stays, db.movements, db.tariffs, db.vehicleTypes, db.prices,
                 db.customers, db.vehicles, db.subscriptions, db.cocheras, db.debts, db.financialConfigs,
-                db.shiftCloses, db.partialCloses
+                db.shiftCloses, db.partialCloses, db.incidents
             ];
 
             storesToCompact.forEach(forceCompact);
@@ -197,6 +199,7 @@ export class SyncService {
             await this.fetchTable('debts', garageId, 'Debt');
             await this.fetchTable('shift_closes', garageId, 'ShiftClose');
             await this.fetchTable('partial_closes', garageId, 'PartialClose');
+            await this.fetchTable('incidents', garageId, 'Incident');
 
             console.log('✅ Sync: Bootstrap Complete.');
             this.isGlobalSyncing = false;
@@ -249,6 +252,7 @@ export class SyncService {
                     case 'FinancialConfig': collection = db.financialConfigs; break;
                     case 'ShiftClose': collection = db.shiftCloses; break;
                     case 'PartialClose': collection = db.partialCloses; break;
+                    case 'Incident': collection = db.incidents; break;
                 }
 
                 if (collection) {
@@ -354,6 +358,11 @@ export class SyncService {
         if (type === 'PartialClose') {
             if (local.recipient_name !== undefined) { local.recipientName = local.recipient_name; delete local.recipient_name; }
             if (local.amount !== undefined) { local.amount = Number(local.amount); }
+        }
+
+        if (type === 'Incident') {
+            if (local.garage_id) { local.garageId = local.garage_id; delete local.garage_id; }
+            if (local.created_at) { local.createdAt = local.created_at; delete local.created_at; }
         }
 
         return local;
@@ -515,6 +524,18 @@ export class SyncService {
             if (base.timestamp !== undefined) { base.timestamp = new Date(base.timestamp).toISOString(); }
 
             const allowedFields = ['id', 'garage_id', 'operator', 'amount', 'recipient_name', 'notes', 'timestamp'];
+            Object.keys(base).forEach(key => {
+                if (!allowedFields.includes(key)) {
+                    delete base[key];
+                }
+            });
+        }
+
+        if (type === 'Incident') {
+            if (base.garageId !== undefined) { base.garage_id = base.garageId; delete base.garageId; }
+            if (base.createdAt !== undefined) { base.created_at = new Date(base.createdAt).toISOString(); delete base.createdAt; }
+
+            const allowedFields = ['id', 'garage_id', 'operator', 'description', 'created_at'];
             Object.keys(base).forEach(key => {
                 if (!allowedFields.includes(key)) {
                     delete base[key];

@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Ticket, Wallet, LogOut, User as UserIcon, Eye, Settings, Database, Loader2, AlertTriangle, Clock } from 'lucide-react';
+import { LayoutDashboard, Ticket, Wallet, LogOut, User as UserIcon, Eye, Database, Loader2, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { api } from '../../services/api';
+import { toast } from 'sonner';
 
 
 interface MainLayoutProps {
@@ -42,8 +44,11 @@ const SyncOverlay: React.FC<{ isVisible: boolean }> = ({ isVisible }) => {
 const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     // Added 'config' back to activeTab
     const [activeTab, setActiveTab] = useState<'operador' | 'audit' | 'anticipados' | 'abonos' | 'caja' | 'incidentes' | 'config'>('operador');
-    const [garageConfig, setGarageConfig] = useState<{ name: string; address: string } | null>(null);
+    const [garageConfig, setGarageConfig] = useState<{ name: string; address: string; garage_id: string } | null>(null);
     const [refreshKey, setRefreshKey] = useState(0);
+    const [isIncidentModalOpen, setIsIncidentModalOpen] = useState(false);
+    const [incidentDescription, setIncidentDescription] = useState('');
+    const [isSavingIncident, setIsSavingIncident] = useState(false);
 
     const location = useLocation();
     const { user, logout, isGlobalSyncing } = useAuth();
@@ -110,6 +115,66 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
         return user.username;
     };
 
+    const handleSaveIncident = async () => {
+        console.log('🚀 [Incident] INICIO handleSaveIncident');
+
+        // 1. Logs de inspección profunda
+        console.log('👤 [DEBUG] User Object:', user);
+        console.log('🆔 [DEBUG] user.garage_id:', user?.garage_id);
+        console.log('🏢 [DEBUG] garageConfig.garage_id:', garageConfig?.garage_id);
+
+        if (!incidentDescription.trim()) {
+            console.warn('⚠️ [Incident] Validación falló: Descripción vacía');
+            toast.error('La descripción no puede estar vacía');
+            return;
+        }
+
+        // 2. Normalización del Garage ID — prioridad: user > terminal config
+        const gId = user?.garage_id || garageConfig?.garage_id;
+        console.log('🏢 [Incident] Garage ID resuelto:', gId, '| Fuente:', user?.garage_id ? 'user.garage_id' : garageConfig?.garage_id ? 'garageConfig (terminal)' : 'NINGUNA');
+
+        if (!gId) {
+            console.error('❌ [Incident] Validación falló: No se encontró garage_id en user ni en terminal config');
+            toast.error('No se pudo determinar el garaje actual');
+            return;
+        }
+
+        setIsSavingIncident(true);
+
+        try {
+            // 3. Fallback para crypto.randomUUID si no estás en HTTPS/Localhost
+            const incidentId = (typeof crypto?.randomUUID === 'function')
+                ? crypto.randomUUID()
+                : `inc-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+            const newIncident = {
+                id: incidentId,
+                garageId: gId, // Enviamos como camelCase para el schema
+                operator: getUserDisplayName(),
+                description: incidentDescription,
+                createdAt: new Date().toISOString(),
+            };
+
+            console.log('📤 [Incident] Intentando POST a /incidents con:', newIncident);
+
+            const response = await api.post('/incidents', newIncident);
+
+            console.log('✅ [Incident] ÉXITO. Respuesta del servidor:', response.data);
+
+            toast.success('Incidente registrado correctamente');
+            setIsIncidentModalOpen(false);
+            setIncidentDescription('');
+
+        } catch (error: any) {
+            console.error('🔥 [Incident] ERROR FATAL EN EL FLUJO:', error);
+            // Si el error es de Axios, mostramos la respuesta del servidor
+            const errorMsg = error.response?.data?.error || error.message;
+            toast.error(`Error al guardar: ${errorMsg}`);
+        } finally {
+            setIsSavingIncident(false);
+        }
+    };
+
     return (
         <div className="h-screen overflow-hidden bg-black text-gray-200 font-sans selection:bg-emerald-500/30 flex flex-col">
             <SyncOverlay isVisible={isGlobalSyncing} />
@@ -169,12 +234,12 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                             icon={<Wallet className="w-4 h-4" />}
                             label="Caja"
                         />
-                        {/* <NavButton
+                        <NavButton
                             active={activeTab === 'incidentes'}
-                            onClick={() => handleTabChange('incidentes')}
+                            onClick={() => setIsIncidentModalOpen(true)}
                             icon={<AlertTriangle className="w-4 h-4" />}
                             label="Incidente"
-                        /> */}
+                        />
                         {/* <NavButton
                             active={activeTab === 'config'}
                             onClick={() => handleTabChange('config')}
@@ -207,6 +272,67 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
             <main key={refreshKey} className="flex-1 overflow-auto relative">
                 {children}
             </main>
+
+            {/* --- INCIDENT MODAL --- */}
+            {isIncidentModalOpen && (
+                <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="w-full max-w-md bg-gray-950 border border-gray-800 rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+                        <div className="px-6 py-4 border-b border-gray-800 flex items-center gap-3">
+                            <div className="p-2 bg-red-900/20 rounded-lg">
+                                <AlertTriangle className="w-5 h-5 text-red-500" />
+                            </div>
+                            <h2 className="text-lg font-bold text-white uppercase tracking-tight">Registrar Incidente</h2>
+                        </div>
+
+                        <div className="p-6 space-y-4">
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500 px-1">
+                                    Descripción del Incidente / Novedad
+                                </label>
+                                <textarea
+                                    autoFocus
+                                    value={incidentDescription}
+                                    onChange={(e) => setIncidentDescription(e.target.value)}
+                                    placeholder="Detalle lo sucedido..."
+                                    className="w-full h-32 bg-gray-900 border border-gray-800 rounded-lg p-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all resize-none placeholder:text-gray-600"
+                                />
+                            </div>
+
+                            <div className="flex items-center gap-2 p-3 bg-gray-900/50 rounded-lg border border-gray-800/50 text-[10px] text-gray-400">
+                                <span className="font-bold uppercase tracking-tight shrink-0">Operador:</span>
+                                <span className="font-mono text-emerald-500 uppercase truncate">{getUserDisplayName()}</span>
+                            </div>
+                        </div>
+
+                        <div className="px-6 py-4 bg-gray-900/30 border-t border-gray-800 flex items-center justify-end gap-3">
+                            <button
+                                onClick={() => {
+                                    setIsIncidentModalOpen(false);
+                                    setIncidentDescription('');
+                                }}
+                                disabled={isSavingIncident}
+                                className="px-4 py-2 text-xs font-bold uppercase tracking-widest text-gray-500 hover:text-white transition-colors"
+                            >
+                                Cancelar
+                            </button>
+                            <button
+                                onClick={handleSaveIncident}
+                                disabled={isSavingIncident || !incidentDescription.trim()}
+                                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-800 disabled:text-gray-600 text-white text-xs font-bold uppercase tracking-widest rounded-lg shadow-lg shadow-emerald-900/20 transition-all flex items-center gap-2"
+                            >
+                                {isSavingIncident ? (
+                                    <>
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                        Guardando...
+                                    </>
+                                ) : (
+                                    'Guardar Incidente'
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

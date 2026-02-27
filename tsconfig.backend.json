@@ -1,13 +1,14 @@
 {
     "compilerOptions": {
         "target": "ESNext",
-        "module": "NodeNext",
-        "moduleResolution": "NodeNext",
+        "module": "CommonJS",
+        "moduleResolution": "Node",
         "lib": [
             "ESNext"
         ],
         "strict": false,
         "esModuleInterop": true,
+        "allowSyntheticDefaultImports": true,
         "skipLibCheck": true,
         "forceConsistentCasingInFileNames": true,
         "outDir": "./dist_main",
@@ -24,6 +25,8 @@
         "src/frontend/**/*",
         "node_modules",
         "**/*.spec.ts",
-        "**/*.test.ts"
+        "**/*.test.ts",
+        "**/test/**/*",
+        "**/tests/**/*"
     ]
 }

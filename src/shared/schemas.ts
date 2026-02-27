@@ -222,11 +222,24 @@ export const PartialCloseSchema = z.object({
 });
 export type PartialClose = z.infer<typeof PartialCloseSchema>;
 
+/**
+* Incident / Incidente
+* Registro de eventos o novedades en el garaje.
+*/
+export const IncidentSchema = z.object({
+  id: UuidSchema,
+  garageId: UuidSchema,
+  operator: z.string(),
+  description: z.string().min(1, "La descripción es obligatoria"),
+  createdAt: TimestampSchema.default(() => new Date()),
+});
+export type Incident = z.infer<typeof IncidentSchema>;
+
 
 /**
- * Employee / User
- * Compatible with Supabase EmployeeAccount
- */
+  * Employee / User
+  * Compatible with Supabase EmployeeAccount
+  */
 export const EmployeePermissionsSchema = z.object({
   sections: z.array(z.string()),
   allowed_garages: z.array(z.string())
@@ -255,7 +268,7 @@ export type Employee = z.infer<typeof EmployeeSchema>;
  */
 export const MutationSchema = z.object({
   id: UuidSchema,
-  entityType: z.enum(['Customer', 'Vehicle', 'Subscription', 'Movement', 'Shift', 'Employee', 'Cochera', 'ShiftClose', 'PartialClose']),
+  entityType: z.enum(['Customer', 'Vehicle', 'Subscription', 'Movement', 'Shift', 'Employee', 'Cochera', 'ShiftClose', 'PartialClose', 'Incident']),
   entityId: UuidSchema,
   operation: z.enum(['CREATE', 'UPDATE', 'DELETE']),
   payload: z.any(),
@@ -274,3 +287,28 @@ export const SyncConflictSchema = z.object({
   resolved: z.boolean().default(false),
 });
 export type SyncConflict = z.infer<typeof SyncConflictSchema>;
+
+/**
+ * Configuration / Pricing
+ */
+export const TariffSchema = z.object({
+  id: UuidSchema,
+  garageId: UuidSchema.optional(),
+  ownerId: UuidSchema.optional(),
+  name: z.string(),
+  type: z.string(),
+  priority: z.number().default(0),
+});
+export type Tariff = z.infer<typeof TariffSchema>;
+
+export const PriceSchema = z.object({
+  id: UuidSchema,
+  garageId: UuidSchema.optional(),
+  ownerId: UuidSchema.optional(),
+  tariffId: UuidSchema,
+  vehicleTypeId: UuidSchema,
+  amount: z.number(),
+  method: z.string().optional(),
+  createdAt: TimestampSchema.default(() => new Date()),
+});
+export type Price = z.infer<typeof PriceSchema>;

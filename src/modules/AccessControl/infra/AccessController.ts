@@ -274,8 +274,7 @@ export class AccessController {
 
             // Note: Since we are in Mongoose migration, let's use VehicleModel directly for speed in this step
             // to avoid modifying VehicleRepository right now.
-            const { VehicleModel } = await import('../../Garage/infra/models.js').catch(() => ({ VehicleModel: null })) as any;
-            // Fallback to real path
+            // Import real path (Refactored to Source of Truth)
             const { VehicleModel: VM } = await import('../../../infrastructure/database/models.js');
 
             const populatedStays = await Promise.all(stays.map(async (stay) => {

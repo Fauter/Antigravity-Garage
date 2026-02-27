@@ -5,7 +5,7 @@ import {
     Vehicle,
     SubscriptionType
 } from '../../../shared/schemas';
-import { PricingEngine, TarifasConfig } from '../../Billing/domain/PricingEngine';
+import { PricingEngine, type TarifasConfig } from '../../Billing/domain/PricingEngine';
 
 export class SubscriptionManager {
     /**

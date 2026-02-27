@@ -1,0 +1,409 @@
+[
+  {
+    "id": "90243c4e-0638-410f-8210-b4ebc9a858fe",
+    "tipo": "Fija",
+    "numero": "34",
+    "vehiculos": [
+      "MS203CN"
+    ],
+    "clienteId": "2f0af489-10d5-4cc7-ad4e-2fbfaa23400e",
+    "precioBase": 165000
+  },
+  {
+    "id": "a89f4604-7571-48e8-8474-ec9c7611bddc",
+    "tipo": "Exclusiva",
+    "numero": "A12",
+    "vehiculos": [
+      "AQS204"
+    ],
+    "clienteId": "5caa166a-10b3-44ee-b473-4e185e8150d2",
+    "precioBase": 720000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "04c68370-f50c-4ad4-baa4-1a9c5c494451",
+    "tipo": "Fija",
+    "numero": "A123",
+    "vehiculos": [
+      "SMN204"
+    ],
+    "clienteId": "45826071-c02e-4c05-ae05-8fa755175dcc",
+    "precioBase": 410000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "af830c3d-cd6c-4e39-b654-e68cfbdd6073",
+    "tipo": "Exclusiva",
+    "numero": "Q345",
+    "vehiculos": [
+      "XCM230"
+    ],
+    "clienteId": "09025952-cbf1-4d01-b45a-a58b52be45fe",
+    "precioBase": 420000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "9d9d9968-a176-4667-839e-9b869c60e00f",
+    "tipo": "Fija",
+    "numero": "L2094",
+    "vehiculos": [
+      "QWX354"
+    ],
+    "clienteId": "bf2125aa-e03c-473e-aa4f-ed00ea75203d",
+    "precioBase": 671000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "1a7ef38a-1274-448b-9213-fcb3c131da51",
+    "tipo": "Fija",
+    "numero": "A164",
+    "vehiculos": [
+      "QKD293"
+    ],
+    "clienteId": "594bddba-419a-4676-bafd-4efd949093af",
+    "precioBase": 610000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "0b29ccdc-b3cf-405e-872e-6674f14bf9e7",
+    "tipo": "Fija",
+    "numero": "asda",
+    "vehiculos": [
+      "AQSX2039"
+    ],
+    "clienteId": "b18e8f4a-539c-4f50-8692-5941e084f533",
+    "precioBase": 210000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "bf212a7a-6f02-4042-929e-bb33b46aa84c",
+    "tipo": "Fija",
+    "numero": "123123",
+    "vehiculos": [
+      "ALC03948"
+    ],
+    "clienteId": "81880c70-96c0-4133-a0fd-0f07ee1ca330",
+    "precioBase": 410000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "67a77eae-26bd-400a-81ad-f40661847fff",
+    "tipo": "Exclusiva",
+    "numero": "394",
+    "vehiculos": [
+      "APW029"
+    ],
+    "clienteId": "732beecb-1039-4853-bb19-eed6121e8925",
+    "precioBase": 420000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "f4f59479-0434-4867-b8c9-3635447f8783",
+    "tipo": "Fija",
+    "numero": "33",
+    "vehiculos": [
+      "ASXEE0929"
+    ],
+    "clienteId": "e3037d81-bad7-4924-867b-8f7a3f60f8e6",
+    "precioBase": 410000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "21dfa8aa-d5b8-480a-8d1c-ba6c6fd6ce83",
+    "tipo": "Movil",
+    "vehiculos": [
+      "AXL204"
+    ],
+    "clienteId": "2816f960-1396-4595-9db2-3df959e58cd5",
+    "precioBase": 200000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "ba4da7e6-fd6e-45e5-a338-6978e8f5f292",
+    "tipo": "Movil",
+    "vehiculos": [
+      "AMX0294"
+    ],
+    "clienteId": "4c58d522-56cc-4207-aeab-5ea51992f13d",
+    "precioBase": 200000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "e963d5a9-be6b-4390-8a9e-37b084368e69",
+    "tipo": "Exclusiva",
+    "numero": "37",
+    "vehiculos": [
+      "ALR344",
+      "ZXE213"
+    ],
+    "clienteId": "9ebc9d83-9cc7-48b5-8734-64c234d8ebf8",
+    "precioBase": 420000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "ebad98b5-7504-4607-86bb-e547e41f065c",
+    "tipo": "Fija",
+    "numero": "13",
+    "vehiculos": [
+      "SMX445",
+      "SNC309"
+    ],
+    "clienteId": "76ee4dab-492c-484f-aeca-e344f2db54e0",
+    "precioBase": 710000,
+    "garageId": "bf23b678-d87d-43a5-8635-670fc383342a"
+  },
+  {
+    "id": "24e7b7b9-3c8b-475b-b2b7-62db1d55134a",
+    "tipo": "Fija",
+    "numero": "12",
+    "vehiculos": [
+      "AQT455CC",
+      "AQL309"
+    ],
+    "clienteId": "91ce074d-bbcf-4199-a4bd-ebf8e630cee0",
+    "precioBase": 710000,
+    "garageId": "bf23b678-d87d-43a5-8635-670fc383342a"
+  },
+  {
+    "id": "6b643572-5cad-4485-a09d-db90c624b7d2",
+    "tipo": "Movil",
+    "vehiculos": [
+      "ASLKDSO209"
+    ],
+    "clienteId": "b0d7cd02-ffef-4215-a425-ba551f5a5e17",
+    "precioBase": 770000,
+    "garageId": "bf23b678-d87d-43a5-8635-670fc383342a"
+  },
+  {
+    "id": "c8caf0a1-12e3-4366-9fe8-3aa3a5c790de",
+    "tipo": "Fija",
+    "numero": "A10",
+    "vehiculos": [
+      "MWC299",
+      "XNU341"
+    ],
+    "clienteId": "2aae4e18-020a-4147-870b-2a872d286cfc",
+    "precioBase": 610000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "078073d6-eef2-443b-a834-aaae5e9d8c2e",
+    "tipo": "Fija",
+    "numero": "54",
+    "vehiculos": [
+      "RCS233"
+    ],
+    "clienteId": "9ebc9d83-9cc7-48b5-8734-64c234d8ebf8",
+    "precioBase": 410000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "9bce6dcc-3e48-45fb-ba3f-5e822e471480",
+    "tipo": "Fija",
+    "numero": "756",
+    "vehiculos": [
+      "ZMXI2093",
+      "DC341CG"
+    ],
+    "clienteId": "014baa4d-c453-4dc6-8a97-418c785cdca4",
+    "precioBase": 710000,
+    "garageId": "bf23b678-d87d-43a5-8635-670fc383342a"
+  },
+  {
+    "id": "01d704e4-cf01-42ae-8fee-3a2dd795b76a",
+    "tipo": "Fija",
+    "numero": "117",
+    "vehiculos": [
+      "AWE2039",
+      "FDS739"
+    ],
+    "clienteId": "db94ea81-43f7-4d62-ac70-8999fe963e11",
+    "precioBase": 710000,
+    "garageId": "bf23b678-d87d-43a5-8635-670fc383342a"
+  },
+  {
+    "id": "61ba7a35-d4cf-4bb8-bc10-bd8e2817ea4e",
+    "tipo": "Fija",
+    "numero": "36",
+    "vehiculos": [
+      "CM931FF",
+      "WS209CC"
+    ],
+    "clienteId": "f430a50d-dc54-4c33-8407-f0b07d550608",
+    "precioBase": 610000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "89f02552-1ba7-45e1-9e42-7125b4108b9c",
+    "tipo": "Fija",
+    "numero": "77",
+    "vehiculos": [
+      "DMS202"
+    ],
+    "clienteId": "9d99a59f-23b4-40a9-a831-7506e2eeb91c",
+    "precioBase": 451000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "001c86c4-066e-49a9-86d1-b39b9f74ec96",
+    "tipo": "Exclusiva",
+    "numero": "314",
+    "vehiculos": [
+      "ZQ0294DCC"
+    ],
+    "clienteId": "d61c2429-3a0d-4b28-80fa-59c1e7426596",
+    "precioBase": 620000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "5b448748-d602-4430-88fe-4c79aad0c14b",
+    "tipo": "Fija",
+    "numero": "22",
+    "vehiculos": [],
+    "clienteId": "47789efd-257c-4184-9946-17c0ee51abef",
+    "precioBase": 451000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "551c2da4-1ae1-4374-83a4-a860deff25fc",
+    "tipo": "Fija",
+    "numero": "55",
+    "vehiculos": [],
+    "clienteId": null,
+    "precioBase": 671000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02",
+    "status": "Disponible"
+  },
+  {
+    "id": "6274fbdb-9d1c-4095-80b2-098d715f7268",
+    "tipo": "Fija",
+    "numero": "58",
+    "vehiculos": [],
+    "clienteId": null,
+    "precioBase": 410000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02",
+    "status": "Disponible"
+  },
+  {
+    "id": "7898727d-a81c-43e7-8bf2-08928964a679",
+    "tipo": "Fija",
+    "numero": "777",
+    "vehiculos": [],
+    "clienteId": null,
+    "precioBase": 451000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02",
+    "status": "Disponible"
+  },
+  {
+    "id": "78115828-d636-4c34-b1be-7c9c61274e0f",
+    "tipo": "Exclusiva",
+    "numero": "136",
+    "vehiculos": [
+      "AQXX222"
+    ],
+    "clienteId": "eeafd783-4a6f-4ecd-bf11-9203afbc1fa1",
+    "precioBase": 420000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "cb62cbb4-5970-4818-8366-63b15f2a6e41",
+    "tipo": "Exclusiva",
+    "numero": "139",
+    "vehiculos": [
+      "AQXX222"
+    ],
+    "clienteId": "eeafd783-4a6f-4ecd-bf11-9203afbc1fa1",
+    "precioBase": 420000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "bc4a371f-1c6d-404a-a3c3-282ed4b9f94a",
+    "tipo": "Fija",
+    "numero": "344",
+    "vehiculos": [
+      "AQT3333"
+    ],
+    "clienteId": "13f25fb8-ec21-4bc5-8f07-0f9a17fa9ea3",
+    "precioBase": 410000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "fdde486a-a3a2-48e5-a48a-95ffd9051988",
+    "tipo": "Exclusiva",
+    "numero": "245",
+    "vehiculos": [
+      "SDW55"
+    ],
+    "clienteId": "13f25fb8-ec21-4bc5-8f07-0f9a17fa9ea3",
+    "precioBase": 682000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "fac8c854-f7d4-4e24-97a1-9b05a941f8e3",
+    "tipo": "Exclusiva",
+    "numero": "11",
+    "vehiculos": [
+      "AQO203"
+    ],
+    "clienteId": "9ef1b9c6-606c-4378-b648-19b48596e61a",
+    "precioBase": 420000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "125080fc-ee67-4209-8c75-3558721db53d",
+    "tipo": "Fija",
+    "numero": "45",
+    "vehiculos": [
+      "DIU209"
+    ],
+    "clienteId": "c6a4194e-2842-4d49-8298-d4bd001841be",
+    "precioBase": 610000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "1a1263d4-f8a9-40c7-a526-6ed209f6c7e3",
+    "tipo": "Fija",
+    "numero": "781",
+    "vehiculos": [
+      "AAA222"
+    ],
+    "clienteId": "bbd393c5-32ed-46a3-a1dc-79e79af41d54",
+    "precioBase": 410000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "b15a4c4c-c555-45e9-b5f6-73777f69d27f",
+    "tipo": "Fija",
+    "numero": "167",
+    "vehiculos": [
+      "AQI2928"
+    ],
+    "clienteId": "ec8112d3-a107-4323-9129-a44aadcd883d",
+    "precioBase": 610000,
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "fd557c7c-fd49-43a7-b060-98c85c80a099",
+    "tipo": "Fija",
+    "numero": "33",
+    "vehiculos": [
+      "QSX233"
+    ],
+    "clienteId": "18ecda18-daf1-4cc7-8b57-e6a6b6581a93",
+    "precioBase": 108900,
+    "status": "Ocupada",
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  },
+  {
+    "id": "eeb75165-ea1d-4716-86e4-116cc65a6694",
+    "tipo": "Exclusiva",
+    "numero": "64",
+    "clienteId": "578f279a-5dd4-43b1-ae93-2792d3117e10",
+    "status": "Ocupada",
+    "precioBase": 430000,
+    "vehiculos": [
+      "AQRT444"
+    ],
+    "garageId": "1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02"
+  }
+]

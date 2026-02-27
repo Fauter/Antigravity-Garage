@@ -5,6 +5,19 @@ interface PriceRepo { getPrices(method: string): Promise<any> }
 
 interface Chunk { minutes: number; price: number; name: string }
 
+export interface TarifasConfig {
+    mensual: {
+        Exclusiva: { Efectivo: number; MercadoPago: number };
+        Fija: { Efectivo: number; MercadoPago: number };
+        Movil: { Efectivo: number; MercadoPago: number };
+    };
+    mora: {
+        nivel1: number;
+        nivel2: number;
+    };
+    [key: string]: any;
+}
+
 export class PricingEngine {
     private tariffRepo: TariffRepo;
     private paramRepo: ParamRepo;
@@ -238,8 +251,23 @@ export class PricingEngine {
     }
 
     // --- Legacy / Subscription Logic (Preserved but adaptable) ---
-    static calculateSubscriptionFee(monthlyPrice: number, startDate: Date = new Date()): number {
-        return 0; // Placeholder or use legacy logic if needed external to this class
+    static calculateSubscriptionFee(
+        type: string,
+        startDate: Date,
+        endDate: Date,
+        config: any,
+        paymentDate: Date = new Date(),
+        paymentMethod: string = 'Efectivo'
+    ): number {
+        // Simple logic: lookup monthly price and prorate if it's the first month
+        const monthlyPrice = config?.mensual?.[type]?.[paymentMethod] || config?.mensual?.[type]?.Efectivo || 0;
+
+        // If the period is roughly a month, return full price. 
+        // If it starts mid-month (detected via startDate), we calculate prorata.
+        const day = startDate.getDate();
+        if (day === 1) return monthlyPrice;
+
+        return this.calculateSubscriptionProrata(monthlyPrice, startDate);
     }
 
     static calculateSubscriptionProrata(monthlyPrice: number, startDate: Date = new Date()): number {

@@ -3,14 +3,19 @@ import { createClient } from '@supabase/supabase-js';
 
 // Helper to get env vars with fallback
 const getEnv = (key: string, fallback: string): string => {
-    // Priority: import.meta.env (Vite) -> process.env (Node) -> fallback
-    // @ts-ignore
-    if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env[key]) {
-        // @ts-ignore
-        return import.meta.env[key] as string;
-    }
+    // 1. Check process.env (Node / Electron Main)
     if (typeof process !== 'undefined' && process.env && process.env[key]) {
         return process.env[key] as string;
+    }
+    // 2. Check import.meta.env (Vite / Frontend)
+    // We use a dynamic check to bypass tsc errors in CommonJS target
+    try {
+        const meta = new Function('return import.meta')();
+        if (meta && meta.env && meta.env[key]) {
+            return meta.env[key] as string;
+        }
+    } catch (e) {
+        // Fallback for non-ESM environments
     }
     return fallback;
 };
