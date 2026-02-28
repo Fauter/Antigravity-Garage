@@ -42,7 +42,7 @@ export class SubscriptionManager {
         // 2. Calcular Precio Inicial (Prorrateo si aplica)
         const year = startDate.getFullYear();
         const month = startDate.getMonth();
-        const endDate = new Date(year, month + 1, 0); // Fin de mes local
+        const endDate = new Date(year, month + 1, 0, 23, 59, 59, 999); // Fin de mes local al ultimo segundo
 
         const price = PricingEngine.calculateSubscriptionFee(
             type,

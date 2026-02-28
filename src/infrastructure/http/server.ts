@@ -243,6 +243,20 @@ export const startServer = async () => {
             }
         });
 
+        // Promos (Read-Only from Sync)
+        app.get('/api/promos', async (req, res) => {
+            try {
+                const garageId = req.headers['x-garage-id'] as string;
+                if (!garageId) return res.status(400).json({ error: 'x-garage-id header required' });
+
+                const promos = await db.promos.find({ garageId, activo: true });
+                res.json(promos);
+            } catch (error) {
+                console.error('❌ Error fetching promos:', error);
+                res.status(500).json({ error: 'Error interno' });
+            }
+        });
+
         // Shift Management
         app.post('/api/caja/apertura', (req, res) => {
             if (garageController?.openShift) return garageController.openShift(req, res);

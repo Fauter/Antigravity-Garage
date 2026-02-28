@@ -42,6 +42,7 @@ export const db = {
     shiftCloses: createStore('shift_closes'),
     partialCloses: createStore('partial_closes'),
     incidents: createStore('incidents'),
+    promos: createStore('promos'),
 
     // Config Stores
     vehicleTypes: createStore('vehicle_types'),

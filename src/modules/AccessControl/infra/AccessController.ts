@@ -134,7 +134,7 @@ export class AccessController {
 
     registerExit = async (req: Request, res: Response) => {
         try {
-            const { plate, paymentMethod, operator, invoiceType } = req.body;
+            const { plate, paymentMethod, operator, invoiceType, promoPercentage } = req.body;
             const garageId = (req.headers['x-garage-id'] as string);
 
             if (!plate) return res.status(400).json({ error: 'Plate is required' });
@@ -189,7 +189,8 @@ export class AccessController {
                 invoiceType,
                 garageId,
                 ownerId,
-                ticketNumber
+                ticketNumber,
+                Number(promoPercentage) || 0
             );
 
             await this.stayRepository.save(closedStay as any);

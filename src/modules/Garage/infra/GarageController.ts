@@ -408,6 +408,9 @@ export class GarageController {
 
             const vehiclesToRelease = cochera.vehiculos || [];
 
+            // 1. Capture the explicit client BEFORE deleting it from cochera
+            const originalClienteId = cochera.clienteId;
+
             // Empty cochera vehicles and detach client
             cochera.vehiculos = [];
             cochera.clienteId = null as any; // REMOVE OWNER (explicitly null for serialization)
@@ -427,8 +430,8 @@ export class GarageController {
             }
 
             // Find an active subscription for this cochera/client and deactivate it
-            if (cochera.clienteId) {
-                const subs = await this.subscriptionRepo.findByCustomerId(cochera.clienteId);
+            if (originalClienteId) {
+                const subs = await this.subscriptionRepo.findByCustomerId(originalClienteId);
                 const activeSubs = subs.filter(s => s.active);
 
                 for (const sub of activeSubs) {
@@ -436,6 +439,15 @@ export class GarageController {
                         sub.active = false;
                         sub.endDate = new Date(); // Cut it today
                         await this.subscriptionRepo.save(sub);
+
+                        // Encontrar y Anular Deudas Pendientes
+                        const debts = await this.debtRepo.findBySubscriptionId(sub.id);
+                        for (const debt of debts) {
+                            if (debt.status === 'PENDING') {
+                                debt.status = 'CANCELLED';
+                                await this.debtRepo.save(debt);
+                            }
+                        }
                     }
                 }
             }
@@ -545,7 +557,14 @@ export class GarageController {
             }
 
             if (cochera) {
-                // Update existing cochera
+                // ── GUARD: Reject if cochera is already occupied ──
+                if (cochera.status === 'Ocupada') {
+                    return res.status(409).json({
+                        error: `La cochera N° ${cochera.numero || spotNumberStr} ya se encuentra ocupada. Libere la cochera antes de asignar un nuevo abono.`
+                    });
+                }
+
+                // Update existing cochera (only if available)
                 cochera.clienteId = customer!.id;
                 cochera.vehiculos = [vehicle.plate]; // Replace with new assigned plate
                 cochera.status = 'Ocupada';
@@ -824,7 +843,7 @@ export class GarageController {
                             processed++;
                         }
 
-                        subEndDate = new Date(subEndDate.getFullYear(), subEndDate.getMonth() + 2, 0);
+                        subEndDate = new Date(subEndDate.getFullYear(), subEndDate.getMonth() + 2, 0, 23, 59, 59, 999);
                     } catch (evalError) {
                         console.error(`Error en evaluación de deuda para sub ${sub.id}:`, evalError);
                         break;
@@ -934,6 +953,37 @@ export class GarageController {
             await this.customerRepo.save(newCustomer);
             res.json(newCustomer);
         } catch (error: any) {
+            res.status(500).json({ error: error.message });
+        }
+    }
+
+    updateCustomer = async (req: Request, res: Response) => {
+        try {
+            const { id } = req.params;
+            const updates = req.body;
+
+            const existing = await this.customerRepo.findById(String(id));
+            if (!existing) {
+                return res.status(404).json({ error: 'Cliente no encontrado' });
+            }
+
+            // Merge only accepted fields (prevent id/garageId overwrite)
+            const merged = {
+                ...existing,
+                name: updates.name ?? existing.name,
+                dni: updates.dni != null ? String(updates.dni) : existing.dni,
+                email: updates.email ?? existing.email,
+                phone: updates.phone != null ? String(updates.phone) : existing.phone,
+                address: updates.address ?? existing.address,
+                localidad: updates.localidad ?? (existing as any).localidad,
+                updatedAt: new Date()
+            };
+
+            await this.customerRepo.save(merged);
+            console.log(`✅ Customer updated: ${id}`);
+            res.json(merged);
+        } catch (error: any) {
+            console.error('Error updating customer:', error);
             res.status(500).json({ error: error.message });
         }
     }

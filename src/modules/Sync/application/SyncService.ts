@@ -158,6 +158,7 @@ export class SyncService {
             await db.shiftCloses.remove({}, { multi: true }); // Purge shift_closes
             await db.partialCloses.remove({}, { multi: true }); // Purge partial_closes
             await db.incidents.remove({}, { multi: true }); // Purge incidents
+            await db.promos.remove({}, { multi: true }); // Purge promos
 
             // ROBUST PURGE: Compaction to physically remove phantom records from filesystem
             console.log('🧹 Sync: Forcing NeDB Compaction across all collections...');
@@ -172,7 +173,7 @@ export class SyncService {
             const storesToCompact = [
                 db.stays, db.movements, db.tariffs, db.vehicleTypes, db.prices,
                 db.customers, db.vehicles, db.subscriptions, db.cocheras, db.debts, db.financialConfigs,
-                db.shiftCloses, db.partialCloses, db.incidents
+                db.shiftCloses, db.partialCloses, db.incidents, db.promos
             ];
 
             storesToCompact.forEach(forceCompact);
@@ -186,6 +187,7 @@ export class SyncService {
             await this.fetchTable('tariffs', garageId, 'Tariff');
             await this.fetchTable('prices', garageId, 'Price'); // New: Sync Prices
             await this.fetchTable('financial_configs', garageId, 'FinancialConfig');
+            await this.fetchTable('promos', garageId, 'Promo');
 
             // 2. Core Operational Entities
             await this.fetchTable('customers', garageId, 'Customer');
@@ -253,6 +255,7 @@ export class SyncService {
                     case 'ShiftClose': collection = db.shiftCloses; break;
                     case 'PartialClose': collection = db.partialCloses; break;
                     case 'Incident': collection = db.incidents; break;
+                    case 'Promo': collection = db.promos; break;
                 }
 
                 if (collection) {
@@ -365,6 +368,10 @@ export class SyncService {
             if (local.created_at) { local.createdAt = local.created_at; delete local.created_at; }
         }
 
+        if (type === 'Promo') {
+            if (local.porcentaje !== undefined) { local.porcentaje = Number(local.porcentaje); }
+        }
+
         return local;
     }
 
@@ -446,8 +453,10 @@ export class SyncService {
 
             // Ensure Plate
             if (!base.plate && item.plate) base.plate = item.plate;
-            // Map Subscriber Status
-            base.is_subscriber = item.isSubscriber || item.is_subscriber || false;
+            // Map Subscriber Status (Strict Boolean Check)
+            base.is_subscriber = item.isSubscriber !== undefined
+                ? item.isSubscriber
+                : (item.is_subscriber !== undefined ? item.is_subscriber : false);
             delete base.isSubscriber; // Prevent PGRST204 (Extra column)
 
             const allowedVehicleFields = ['id', 'garage_id', 'owner_id', 'plate', 'type', 'brand', 'model', 'color', 'year', 'insurance', 'is_subscriber', 'vehicle_type_id', 'customer_id', 'created_at', 'updated_at'];

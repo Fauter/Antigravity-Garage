@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, DollarSign, Wallet, CreditCard, QrCode, Camera, Printer, LogOut, Car, CheckCircle } from 'lucide-react';
+import { Search, DollarSign, Wallet, CreditCard, QrCode, Printer, LogOut, Car, CheckCircle, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../../services/api';
 
@@ -57,7 +57,7 @@ const useExitLogic = () => {
         }
     };
 
-    const processExit = async (plate: string, paymentMethod: string, invoiceType: string) => {
+    const processExit = async (plate: string, paymentMethod: string, invoiceType: string, promoPercentage: number) => {
         setLoading(true);
         try {
             // Include operator in the request
@@ -65,7 +65,8 @@ const useExitLogic = () => {
                 plate,
                 paymentMethod,
                 invoiceType,
-                operator: operatorName
+                operator: operatorName,
+                promoPercentage: promoPercentage || 0
             });
             return res.data;
         } catch (err: any) {
@@ -83,24 +84,47 @@ const useExitLogic = () => {
         setError(null);
     };
 
-    return { searchStay, stay, price, setPrice, basePrice, loading, error, isSubscriber, processExit, resetLogic };
+    return { searchStay, stay, price, setPrice, basePrice, loading, error, isSubscriber, processExit: processExit as (plate: string, paymentMethod: string, invoiceType: string, promoPercentage: number) => Promise<any>, resetLogic };
 };
 
 const PanelSalida: React.FC = () => {
     const [plate, setPlate] = useState('');
     const [paymentMethod, setPaymentMethod] = useState<string | null>(null);
-    const [invoiceType, setInvoiceType] = useState('Final');
-    const [promo, setPromo] = useState('NINGUNA');
+    const [invoiceType, setInvoiceType] = useState<string | null>(null);
+    const [promos, setPromos] = useState<any[]>([]);
+    const [selectedPromo, setSelectedPromo] = useState<any>(null);
     const [showSuccess, setShowSuccess] = useState(false);
 
-    const { searchStay, stay, price, setPrice, loading, error, isSubscriber, processExit, resetLogic } = useExitLogic();
+    const { searchStay, stay, price, setPrice, error, isSubscriber, processExit, resetLogic } = useExitLogic();
     const { isGlobalSyncing, operatorName } = useAuth();
+
+    const handleCancel = () => {
+        resetLogic(); // Limpia stay, price, error en el hook
+        setPlate('');
+        setPaymentMethod(null);
+        setSelectedPromo(null);
+        setInvoiceType(null);
+    };
 
     const handleSearch = (e: React.FormEvent) => {
         e.preventDefault();
         setPaymentMethod(null);
         if (plate.length > 2) searchStay(plate);
     };
+
+    // Load promos from local API on mount
+    useEffect(() => {
+        const fetchPromos = async () => {
+            try {
+                const res = await api.get('/promos');
+                setPromos(res.data || []);
+            } catch (err) {
+                console.warn('[PanelSalida] No se pudieron cargar promos:', err);
+                setPromos([]);
+            }
+        };
+        fetchPromos();
+    }, []);
 
     // Calculation Logic
     useEffect(() => {
@@ -126,9 +150,10 @@ const PanelSalida: React.FC = () => {
 
                 console.log(`[PanelSalida] Price Result: $${calculated}`);
 
-                // Promos apply AFTER base calculation
-                if (promo === 'VISITA') calculated = 0;
-                if (promo === 'LOCAL') calculated = Math.max(0, calculated - 1000);
+                // Apply dynamic promo discount (percentage-based)
+                if (selectedPromo && selectedPromo.porcentaje > 0) {
+                    calculated = Math.round(calculated * (1 - selectedPromo.porcentaje / 100));
+                }
 
                 setPrice(calculated);
             } catch (err) {
@@ -145,7 +170,7 @@ const PanelSalida: React.FC = () => {
                 setPrice(0);
             }
         }
-    }, [paymentMethod, stay, promo, isSubscriber]);
+    }, [paymentMethod, stay, selectedPromo, isSubscriber]);
 
 
 
@@ -158,7 +183,7 @@ const PanelSalida: React.FC = () => {
         const method = isSubscriber ? 'Efectivo' : (paymentMethod || 'Efectivo');
         const invoice = isSubscriber ? 'Final' : (invoiceType || 'Final');
 
-        const result = await processExit(stay.plate, method, invoice);
+        const result = await processExit(stay.plate, method, invoice, selectedPromo?.porcentaje || 0);
         if (result) {
             // TICKET (x2)
             // Even if subscriber, let's print the exit ticket (which has ABONADO title) as per the printer service support
@@ -181,8 +206,8 @@ const PanelSalida: React.FC = () => {
                 setShowSuccess(false);
                 setPlate('');
                 setPaymentMethod(null);
-                setPromo('NINGUNA');
-                setInvoiceType('Final');
+                setSelectedPromo(null);
+                setInvoiceType(null);
                 resetLogic();
             }, 2500);
 
@@ -195,11 +220,21 @@ const PanelSalida: React.FC = () => {
         <div className="flex flex-col h-full bg-gray-950 text-gray-100 overflow-hidden font-sans relative">
 
             {/* COMPACT HEADER */}
-            <div className="px-3 py-2 bg-gray-950 border-b border-gray-800 shrink-0">
+            <div className="px-3 py-2 bg-gray-950 border-b border-gray-800 shrink-0 flex justify-between items-center">
                 <div className="flex items-center gap-2 text-blue-500">
                     <LogOut className="w-4 h-4 rotate-180" />
                     <h2 className="text-sm font-bold tracking-wide uppercase">Salida & Cobro</h2>
                 </div>
+
+                {stay && (
+                    <button
+                        onClick={handleCancel}
+                        className="text-gray-500 hover:text-red-400 hover:bg-red-400/10 px-2 py-1 rounded-md transition-all flex items-center gap-1.5"
+                    >
+                        <X className="w-3.5 h-3.5" />
+                        <span className="text-[10px] font-bold uppercase">Cancelar</span>
+                    </button>
+                )}
             </div>
 
             {/* --- TOP SECTION (Compact Split) --- */}
@@ -363,21 +398,25 @@ const PanelSalida: React.FC = () => {
                             <div className="w-48">
                                 <span className="text-gray-600 text-[10px] font-bold uppercase tracking-widest block mb-1">Descuento / Promo</span>
                                 <select
-                                    value={promo}
-                                    onChange={(e) => setPromo(e.target.value)}
+                                    value={selectedPromo ? selectedPromo.id : ''}
+                                    onChange={(e) => {
+                                        const found = promos.find(p => p.id === e.target.value);
+                                        setSelectedPromo(found || null);
+                                    }}
                                     className="w-full h-12 bg-gray-900 border border-gray-700 text-white text-base rounded-lg px-3 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none cursor-pointer hover:border-gray-600 transition-colors"
                                 >
-                                    <option value="NINGUNA">Ninguna</option>
-                                    <option value="VISITA">Visita (100%)</option>
-                                    <option value="LOCAL">Local (-$1000)</option>
+                                    <option value="">Sin Descuento</option>
+                                    {promos.map(p => (
+                                        <option key={p.id} value={p.id}>{p.nombre} ({p.porcentaje}%)</option>
+                                    ))}
                                 </select>
                             </div>
                         </div>
 
                         <button
                             onClick={handleExit}
-                            disabled={!paymentMethod || isGlobalSyncing || showSuccess}
-                            className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(!paymentMethod || isGlobalSyncing || showSuccess)
+                            disabled={!paymentMethod || !invoiceType || isGlobalSyncing || showSuccess}
+                            className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(!paymentMethod || !invoiceType || isGlobalSyncing || showSuccess)
                                 ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
                                 : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/30 ring-1 ring-white/10'
                                 }`}

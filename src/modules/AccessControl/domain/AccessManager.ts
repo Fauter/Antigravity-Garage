@@ -50,7 +50,8 @@ export class AccessManager {
         invoiceType?: 'A' | 'B' | 'C' | 'CC' | 'Final',
         garageId?: string,
         ownerId?: string,
-        ticketNumber?: number
+        ticketNumber?: number,
+        promoPercentage?: number
     ): Promise<{ closedStay: Stay; exitMovement: Movement | null; price: number }> {
         if (!stay.active) {
             throw new Error('La estancia ya está cerrada.');
@@ -125,6 +126,13 @@ export class AccessManager {
             exitDate,
             paymentMethod
         );
+
+        // Apply Promo Discount (purely numeric, no notes impact)
+        if (promoPercentage && promoPercentage > 0) {
+            const originalPrice = price;
+            price = Math.round(price * (1 - promoPercentage / 100));
+            console.log(`🎟️ Promo discount applied: ${promoPercentage}% => $${originalPrice} -> $${price}`);
+        }
 
         // Calculate Duration for Notes
         const durationMs = exitDate.getTime() - new Date(stay.entryTime).getTime();

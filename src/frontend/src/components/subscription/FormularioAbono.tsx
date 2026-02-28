@@ -198,6 +198,29 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
             return;
         }
 
+        // ── GUARD: Cochera Occupation Check (Fija / Exclusiva) ──
+        if (formData.tipoCochera === 'Fija' && formData.numeroCochera) {
+            try {
+                const cocherasRes = await api.get('/cocheras');
+                const cocheras: any[] = cocherasRes.data || [];
+                const target = cocheras.find(
+                    (c: any) => String(c.numero) === String(formData.numeroCochera)
+                );
+                if (target && target.status === 'Ocupada') {
+                    const msg = `La cochera N° ${formData.numeroCochera} ya se encuentra ocupada por otro cliente. Libere la cochera antes de asignar un nuevo abono.`;
+                    toast.error(msg);
+                    setErrorMessage(msg);
+                    setLoading(false);
+                    return;
+                }
+            } catch (checkErr) {
+                console.error('[Abonos] Error verificando disponibilidad de cochera:', checkErr);
+                toast.error('No se pudo verificar la disponibilidad de la cochera. Intente nuevamente.');
+                setLoading(false);
+                return;
+            }
+        }
+
         try {
             const finalType = formData.exclusivaOverride ? 'Exclusiva' : formData.tipoCochera;
 
@@ -360,7 +383,13 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                                 ))}
                             </div>
                             <div className={`flex items-center gap-2 ${formData.tipoCochera !== 'Fija' ? 'opacity-30 pointer-events-none' : ''}`}>
-                                <input placeholder="N°" className={`${inputStyle} w-14 text-center h-7`} value={formData.numeroCochera} onChange={e => setFormData({ ...formData, numeroCochera: e.target.value })} disabled={formData.tipoCochera !== 'Fija'} />
+                                <input
+                                    placeholder="N°"
+                                    className={`${inputStyle} w-14 text-center h-7 bg-gray-800 border-gray-600 placeholder-gray-500`}
+                                    value={formData.numeroCochera}
+                                    onChange={e => setFormData({ ...formData, numeroCochera: e.target.value })}
+                                    disabled={formData.tipoCochera !== 'Fija'}
+                                />
                                 <label className={`flex items-center gap-1.5 cursor-pointer`}>
                                     <input type="checkbox" className="accent-purple-500 w-3.5 h-3.5" checked={formData.exclusivaOverride} onChange={e => setFormData({ ...formData, exclusivaOverride: e.target.checked })} disabled={formData.tipoCochera !== 'Fija'} />
                                     <span className="text-[10px] font-bold text-purple-400">EXCL</span>
@@ -473,7 +502,7 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                     </div>
 
                     {/* Summary Section (Conditional) */}
-                    {formData.tipoVehiculo && formData.metodoPago ? (
+                    {formData.tipoVehiculo && formData.metodoPago && formData.tipoCochera ? (
                         <div className="mt-auto animate-in fade-in slide-in-from-bottom-2 duration-300">
                             <div className="space-y-1.5 bg-gray-900/40 p-3 rounded border border-gray-800/50">
                                 <div className="flex justify-between border-b border-gray-800 pb-1">
@@ -512,7 +541,7 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                     ) : (
                         <div className="mt-auto items-center justify-center text-center p-4 border border-dashed border-gray-800/50 rounded flex flex-col gap-2">
                             <Car className="w-5 h-5 text-gray-700 mx-auto" />
-                            <span className="text-[10px] text-gray-600 uppercase font-bold">Seleccione Vehículo y Método de Pago para continuar</span>
+                            <span className="text-[10px] text-gray-600 uppercase font-bold">Seleccione Vehículo, Cochera y Método de Pago para continuar</span>
                         </div>
                     )}
                 </div>

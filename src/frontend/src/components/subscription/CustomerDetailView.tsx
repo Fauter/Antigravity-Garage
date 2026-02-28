@@ -10,7 +10,10 @@ import {
     Check,
     ChevronDown,
     Trash2,
-    Unlink
+    Unlink,
+    AlertCircle,
+    Edit2,
+    X
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { toast } from 'sonner';
@@ -24,6 +27,15 @@ interface CustomerDetailViewProps {
 
 const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onBack }) => {
     const { operatorName } = useAuth();
+
+    // --- Terminal Config: Dynamic garageId resolution ---
+    const getGarageId = (): string => {
+        try {
+            const stored = localStorage.getItem('ag_terminal_config');
+            if (stored) return JSON.parse(stored).garage_id || '';
+        } catch (e) { console.error('Error reading terminal config', e); }
+        return '';
+    };
     const [cocheras, setCocheras] = useState<any[]>([]);
     const [subscriptions, setSubscriptions] = useState<any[]>([]); // To enrich vehicle data
     const [realVehicles, setRealVehicles] = useState<any[]>([]); // Real vehicle table datastore
@@ -102,6 +114,47 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         targetDebts: [] as any[],
         surchargeStep: null as any
     });
+    const [confirmModal, setConfirmModal] = useState<{
+        isOpen: boolean;
+        title: string;
+        message: React.ReactNode;
+        onConfirm: () => Promise<void>;
+        type: 'danger' | 'warning';
+    }>({
+        isOpen: false,
+        title: '',
+        message: '',
+        onConfirm: async () => { },
+        type: 'warning'
+    });
+    const [isConfirmLoading, setIsConfirmLoading] = useState(false);
+
+    // --- Edit Customer Modal State ---
+    const [isEditCustomerOpen, setIsEditCustomerOpen] = useState(false);
+    const [editCustomerData, setEditCustomerData] = useState({
+        name: '',
+        dni: '',
+        phone: '',
+        email: '',
+        address: '',
+        localidad: ''
+    });
+    const [isEditSaving, setIsEditSaving] = useState(false);
+
+    const handleCloseConfirm = () => {
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        setIsConfirmLoading(false);
+        // We delay clearing functional data to avoid flicker during close animation
+        setTimeout(() => {
+            setConfirmModal({
+                isOpen: false,
+                title: '',
+                message: '',
+                onConfirm: async () => { },
+                type: 'warning'
+            });
+        }, 200);
+    };
 
     // --- Expanded Vehicles State (Accordion) ---
     const [expandedVehicles, setExpandedVehicles] = useState<Set<string>>(new Set());
@@ -292,9 +345,9 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             const rawAddress = subscriber.customerData?.address || subscriber.domicilio || subscriber.localidad || '';
 
             const payload = {
-                garageId: '1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02', // User explicit requested inclusion
+                garageId: getGarageId(),
                 customerData: {
-                    garageId: '1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02',
+                    garageId: getGarageId(),
                     nombreApellido: clientName,
                     dni: String(rawDni),
                     email: rawEmail,
@@ -354,30 +407,38 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     };
 
     // --- ENPOINTS DESVINCULACION ---
-    const handleReleaseCochera = async (cocheraId: string) => {
-        if (!confirm("¿Seguro que deseas liberar esta cochera? Se desvincularán todos los vehículos y se cortará el abono.")) return;
-        try {
-            await api.post('/cocheras/liberar', { cocheraId });
-            toast.success("Cochera liberada con éxito");
-            // FULL GLOBAL REFRESH TO PREVENT VISUAL ARTIFACTS
-            refreshCustomerAssets();
-        } catch (error) {
-            console.error(error);
-            toast.error("Error al liberar cochera");
-        }
+    const handleReleaseCochera = (cocheraId: string) => {
+        setConfirmModal({
+            isOpen: true,
+            title: 'Liberar Cochera',
+            type: 'danger',
+            message: '¿Seguro que deseas liberar esta cochera? Se desvincularán todos los vehículos y se cortará el abono.',
+            onConfirm: async () => {
+                await api.post('/cocheras/liberar', { cocheraId });
+                toast.success("Cochera liberada con éxito");
+                refreshCustomerAssets();
+                handleCloseConfirm();
+            }
+        });
     };
 
-    const handleUnlinkVehicle = async (cocheraId: string, plate: string) => {
-        if (!confirm(`¿Seguro que deseas remover la patente ${plate} de esta cochera?`)) return;
-        try {
-            await api.post('/cocheras/desvincular-vehiculo', { cocheraId, plate });
-            toast.success("Vehículo desvinculado");
-            // FULL GLOBAL REFRESH TO PREVENT VISUAL ARTIFACTS
-            refreshCustomerAssets();
-        } catch (error) {
-            console.error(error);
-            toast.error("Error al desvincular vehículo");
-        }
+    const handleUnlinkVehicle = (cocheraId: string, plate: string) => {
+        setConfirmModal({
+            isOpen: true,
+            title: 'Desvincular Vehículo',
+            type: 'warning',
+            message: (
+                <span>
+                    ¿Seguro que deseas remover la patente <span className="font-mono font-bold text-white bg-gray-800 px-1.5 py-0.5 rounded mx-1">{plate}</span> de esta cochera?
+                </span>
+            ),
+            onConfirm: async () => {
+                await api.post('/cocheras/desvincular-vehiculo', { cocheraId, plate });
+                toast.success("Vehículo desvinculado");
+                refreshCustomerAssets();
+                handleCloseConfirm();
+            }
+        });
     };
 
 
@@ -433,7 +494,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                     invoiceType: newVehicleData.tipoFactura,
                     plate: vehicleToAdd.plate,
                     relatedEntityId: selectedCochera.id,
-                    garageId: selectedCochera.garageId, // <--- User request: add garageId explicitly
+                    garageId: getGarageId(), // Dynamic: from terminal config (ag_terminal_config)
                     operator: operatorName,
                     notes: `Upgrade de vehículo: ${vehicleToAdd.plate} (Lista: ${newVehicleData.metodoPago === 'Efectivo' ? 'Standard' : 'Electronic'})`,
                     timestamp: new Date().toISOString()
@@ -457,6 +518,45 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         } catch (error) {
             console.error("Error saving vehicle:", error);
             toast.error("Error al guardar vehículo", { id: btnSpinner });
+        }
+    };
+
+    // --- Edit Customer Handler ---
+    const handleOpenEditCustomer = () => {
+        setEditCustomerData({
+            name: subscriber.customerData?.firstName || subscriber.customerData?.name || subscriber.nombreApellido || '',
+            dni: String(subscriber.customerData?.dni || subscriber.dni || ''),
+            phone: String(subscriber.customerData?.phone || subscriber.phone || ''),
+            email: subscriber.customerData?.email || subscriber.email || '',
+            address: subscriber.customerData?.address || subscriber.domicilio || '',
+            localidad: subscriber.customerData?.localidad || subscriber.localidad || ''
+        });
+        setIsEditCustomerOpen(true);
+    };
+
+    const handleUpdateCustomer = async () => {
+        if (!clientId) { toast.error('ID de cliente no disponible'); return; }
+        if (!editCustomerData.name.trim()) { toast.error('El nombre es obligatorio'); return; }
+
+        setIsEditSaving(true);
+        try {
+            await api.patch(`/clientes/${clientId}`, {
+                name: editCustomerData.name.trim(),
+                dni: editCustomerData.dni.trim(),
+                phone: editCustomerData.phone.trim(),
+                email: editCustomerData.email.trim(),
+                address: editCustomerData.address.trim(),
+                localidad: editCustomerData.localidad.trim()
+            });
+
+            toast.success('Datos del cliente actualizados');
+            setIsEditCustomerOpen(false);
+            refreshCustomerAssets();
+        } catch (error: any) {
+            console.error('Error updating customer:', error);
+            toast.error('Error al actualizar: ' + (error.response?.data?.error || error.message));
+        } finally {
+            setIsEditSaving(false);
         }
     };
 
@@ -707,9 +807,18 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                         </button>
 
                         <div className="space-y-4">
-                            <h2 className="text-4xl font-bold text-white tracking-tight">
-                                {clientName}
-                            </h2>
+                            <div className="flex items-center gap-3">
+                                <h2 className="text-4xl font-bold text-white tracking-tight">
+                                    {clientName}
+                                </h2>
+                                <button
+                                    onClick={handleOpenEditCustomer}
+                                    className="p-2 text-gray-500 hover:text-indigo-400 transition-colors rounded-lg hover:bg-gray-800/50"
+                                    title="Editar datos del cliente"
+                                >
+                                    <Edit2 className="w-4 h-4" />
+                                </button>
+                            </div>
 
                             <div className="flex flex-wrap items-center gap-3">
                                 <div className="flex items-center gap-2 px-4 py-1.5 bg-gray-800/50 border border-gray-700 rounded-full">
@@ -842,15 +951,11 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                         rawD = new Date(associatedSub.endDate);
                                     } else if (associatedSub.startDate) {
                                         const sDate = new Date(associatedSub.startDate);
-                                        rawD = new Date(sDate.getFullYear(), sDate.getMonth() + 1, 0); // Fin de mes local extrapolado
+                                        rawD = new Date(sDate.getFullYear(), sDate.getMonth() + 1, 0, 23, 59, 59, 999); // Fin de mes local extrapolado
                                     }
 
                                     if (rawD) {
-                                        // Normalizar para ignorar desfases horarios / milisegundos
-                                        const todayNorm = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                                        const expNorm = new Date(rawD.getFullYear(), rawD.getMonth(), rawD.getDate());
-
-                                        isExpired = todayNorm > expNorm;
+                                        isExpired = now > rawD;
                                         expirationDate = rawD.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
                                     }
 
@@ -1378,6 +1483,113 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                 <button onClick={() => setIsRenewalModalOpen(false)} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-bold uppercase transition-colors">Cancelar</button>
                                 <button onClick={handleRenewSubscription} className="flex-1 py-3 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold uppercase transition-colors shadow-lg shadow-red-900/20 flex items-center justify-center gap-2">
                                     <Check className="w-4 h-4" /> Confirmar Pago
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* --- CUSTOM CONFIRMATION MODAL (GLOBAL) --- */}
+                {confirmModal.isOpen && (
+                    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+                        <div className={`bg-gray-900 border ${confirmModal.type === 'danger' ? 'border-red-500/30 shadow-red-900/20' : 'border-amber-500/30 shadow-amber-900/20'} rounded-2xl w-full max-w-md p-6 shadow-2xl relative`}>
+                            <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                                {confirmModal.type === 'danger' ? (
+                                    <AlertTriangle className="w-5 h-5 text-red-500" />
+                                ) : (
+                                    <AlertCircle className="w-5 h-5 text-amber-500" />
+                                )}
+                                {confirmModal.title}
+                            </h3>
+
+                            <div className="text-gray-300 text-sm leading-relaxed mb-8">
+                                {confirmModal.message}
+                            </div>
+
+                            <div className="flex gap-3">
+                                <button
+                                    disabled={isConfirmLoading}
+                                    onClick={handleCloseConfirm}
+                                    className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-xs font-bold uppercase transition-colors disabled:opacity-50"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    disabled={isConfirmLoading}
+                                    onClick={async () => {
+                                        setIsConfirmLoading(true);
+                                        try {
+                                            await confirmModal.onConfirm();
+                                        } catch (error: any) {
+                                            console.error("Confirmation Action Error:", error);
+                                            const msg = error.response?.data?.error || error.message || "Error desconocido";
+                                            toast.error(`Error: ${msg}`);
+                                        } finally {
+                                            setIsConfirmLoading(false);
+                                        }
+                                    }}
+                                    className={`flex-1 py-2.5 ${confirmModal.type === 'danger' ? 'bg-red-600 hover:bg-red-500 shadow-red-900/20' : 'bg-amber-600 hover:bg-amber-500 shadow-amber-900/20'} text-white rounded-lg text-xs font-bold uppercase transition-all shadow-lg flex items-center justify-center gap-2 disabled:opacity-70`}
+                                >
+                                    {isConfirmLoading ? (
+                                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                    ) : null}
+                                    {isConfirmLoading ? 'Procesando...' : 'Confirmar'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* === EDIT CUSTOMER MODAL === */}
+                {isEditCustomerOpen && (
+                    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+                        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setIsEditCustomerOpen(false)} />
+                        <div className="relative bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+                            <div className="flex items-center justify-between p-6 border-b border-gray-800">
+                                <h3 className="text-lg font-bold text-white">Editar datos del cliente</h3>
+                                <button onClick={() => setIsEditCustomerOpen(false)} className="p-1.5 text-gray-500 hover:text-white hover:bg-gray-800 rounded-lg transition-colors">
+                                    <X className="w-4 h-4" />
+                                </button>
+                            </div>
+                            <div className="p-6 space-y-4">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="col-span-2">
+                                        <label className={labelStyle}>Nombre completo</label>
+                                        <input className={inputStyle} value={editCustomerData.name} onChange={e => setEditCustomerData(p => ({ ...p, name: e.target.value }))} placeholder="Nombre y Apellido" />
+                                    </div>
+                                    <div>
+                                        <label className={labelStyle}>DNI</label>
+                                        <input className={inputStyle} value={editCustomerData.dni} onChange={e => setEditCustomerData(p => ({ ...p, dni: e.target.value }))} placeholder="12345678" />
+                                    </div>
+                                    <div>
+                                        <label className={labelStyle}>Teléfono</label>
+                                        <input className={inputStyle} value={editCustomerData.phone} onChange={e => setEditCustomerData(p => ({ ...p, phone: e.target.value }))} placeholder="1122334455" />
+                                    </div>
+                                    <div className="col-span-2">
+                                        <label className={labelStyle}>Email</label>
+                                        <input className={inputStyle} type="email" value={editCustomerData.email} onChange={e => setEditCustomerData(p => ({ ...p, email: e.target.value }))} placeholder="ejemplo@mail.com" />
+                                    </div>
+                                    <div>
+                                        <label className={labelStyle}>Dirección</label>
+                                        <input className={inputStyle} value={editCustomerData.address} onChange={e => setEditCustomerData(p => ({ ...p, address: e.target.value }))} placeholder="Calle 123" />
+                                    </div>
+                                    <div>
+                                        <label className={labelStyle}>Localidad</label>
+                                        <input className={inputStyle} value={editCustomerData.localidad} onChange={e => setEditCustomerData(p => ({ ...p, localidad: e.target.value }))} placeholder="Ciudad" />
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex justify-end gap-3 p-6 border-t border-gray-800">
+                                <button onClick={() => setIsEditCustomerOpen(false)} className="px-4 py-2 text-sm text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors">
+                                    Cancelar
+                                </button>
+                                <button
+                                    onClick={handleUpdateCustomer}
+                                    disabled={isEditSaving}
+                                    className="flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-all shadow-lg shadow-indigo-900/40"
+                                >
+                                    {isEditSaving && <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+                                    {isEditSaving ? 'Guardando...' : 'Guardar cambios'}
                                 </button>
                             </div>
                         </div>

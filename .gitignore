@@ -1,1 +1,22 @@
-node_modules
+# Bases de datos locales
+.data/
+*.db
+
+# Carpetas de distribución y compilación
+dist_electron/
+dist_main/
+dist/
+bin/
+obj/
+
+# Dependencias
+node_modules/
+
+# Logs y temporales
+*.log
+.eslintcache
+.DS_Store
+
+# Variables de entorno
+.env
+.env.local
