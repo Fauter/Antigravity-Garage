@@ -10,7 +10,8 @@ const configRepo = new ConfigRepository();
 // 0. PARAMETERS (First to avoid shadowing)
 router.get('/parametros', async (req, res) => {
     try {
-        const params = await configRepo.getParams();
+        const garageId = (req.query.garageId as string) || (req.headers['x-garage-id'] as string);
+        const params = await configRepo.getParams(garageId);
         res.json(params);
     } catch (e) {
         res.status(500).json({ error: e });

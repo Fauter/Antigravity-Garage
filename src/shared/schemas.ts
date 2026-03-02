@@ -312,3 +312,16 @@ export const PriceSchema = z.object({
   createdAt: TimestampSchema.default(() => new Date()),
 });
 export type Price = z.infer<typeof PriceSchema>;
+
+export const FinancialConfigSchema = z.object({
+  id: UuidSchema,
+  garageId: UuidSchema.optional(),
+  ownerId: UuidSchema.optional(),
+  initialTolerance: z.number().default(15),
+  fractionateAfter: z.number().default(0),
+  surchargeConfig: z.any().optional(),
+  createdAt: TimestampSchema.default(() => new Date()),
+  updatedAt: TimestampSchema.default(() => new Date()),
+});
+export type FinancialConfig = z.infer<typeof FinancialConfigSchema>;
+

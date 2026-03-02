@@ -79,8 +79,11 @@ export class StayRepository {
     async findActiveByPlate(plate: string, garageId?: string): Promise<Stay | null> {
         // Local Only (Offline First)
         try {
+            // Create a regex to match the plate ignoring spaces, dashes, and casing
+            // e.g. "ABC123" -> /A[\s\-_]*B[\s\-_]*C[\s\-_]*1[\s\-_]*2[\s\-_]*3/i
+            const plateRegex = new RegExp([...plate].join('[\\\\s\\\\-_]*'), 'i');
             const query: any = {
-                plate: plate,
+                plate: { $regex: plateRegex }
             };
 
             // NeDB Logic for "Active" (exitTime is null or missing)

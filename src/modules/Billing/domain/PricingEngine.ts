@@ -38,7 +38,8 @@ export class PricingEngine {
     async calculateParkingFee(
         stay: { entryTime: Date | string; exitTime?: Date | string | null; plate: string; vehicleType?: string },
         exitTime: Date | string,
-        paymentMethod: string = 'Efectivo'
+        paymentMethod: string = 'Efectivo',
+        overrideParams?: any
     ): Promise<number> {
         // 1. Validation & Setup
         console.log("--- INICIO CÁLCULO ---");
@@ -59,13 +60,13 @@ export class PricingEngine {
         const repoMethod = paymentMethod === 'Efectivo' ? 'EFECTIVO' : 'ELECTRONIC';
 
         let tariffs: any[] = [];
-        let params: any = { toleranciaInicial: 15, fraccionarDesde: 0 };
+        let params: any = overrideParams || { toleranciaInicial: 15, fraccionarDesde: 0, initial_tolerance: 0, fractionate_after: 0 };
         let matrix: any = {};
 
         // Robust Loading: Fail individually, not collectively
         const [tariffsResult, paramsResult, matrixResult] = await Promise.allSettled([
             this.tariffRepo.getAll(),
-            this.paramRepo.getParams(),
+            overrideParams ? Promise.resolve(overrideParams) : this.paramRepo.getParams(),
             this.priceRepo.getPrices(repoMethod)
         ]);
 
@@ -90,11 +91,13 @@ export class PricingEngine {
         }
 
         // 3. Tolerance Logic:
-        // User requested to IGNORE tolerance if we are here (calculating payment).
-        // If minutesTotal > 0, we must charge at least the minimum unit.
-        // if (params.toleranciaInicial > 0 && minutesTotal <= params.toleranciaInicial) {
-        //     console.log(`[PricingEngine] Within tolerance (${params.toleranciaInicial}m), but enforcing minimum payment as requested.`);
-        // }
+        const tolerance = params?.initial_tolerance ?? params?.toleranciaInicial ?? 0;
+        if (tolerance > 0 && minutesTotal <= tolerance) {
+            console.log(`[PricingEngine] Within initial_tolerance (${tolerance}m). Charge is $0.`);
+            return 0;
+        }
+
+        const fractionateFloor = params?.fractionate_after ?? params?.fraccionarDesde ?? 0;
 
         // 4. Resolve Prices for Vehicle
 
@@ -152,6 +155,15 @@ export class PricingEngine {
             if (isNaN(blockMinutes) || blockMinutes <= 0) {
                 console.warn(`[PricingEngine] Invalid duration for tariff ${t.name}: ${blockMinutes}m`);
                 continue;
+            }
+
+            // --- FRACTIONATION FLOOR LOGIC ---
+            // If the total stay is less than the fractionateFloor, we ignore any chunks that are smaller than the floor.
+            if (fractionateFloor > 0 && minutesTotal < fractionateFloor) {
+                if (blockMinutes < fractionateFloor) {
+                    console.log(`[PricingEngine] Ignoring fraction '${t.name}' (${blockMinutes}m) because stay (${minutesTotal}m) is below fractionate_after floor (${fractionateFloor}m).`);
+                    continue;
+                }
             }
 
             // Find price for this tariff name with robust matching

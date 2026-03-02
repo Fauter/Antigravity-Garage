@@ -169,13 +169,35 @@ export class ConfigRepository {
             return [];
         }
     }
-    async getParams(): Promise<any> {
-        // 1. Local DB (Future: params.db)
-        // For now, return default hardcoded params or read from a specific doc if we had one.
-        // We will assume defaults for this "Rescue Phase" to guarantee stability.
+    async getParams(garageId?: string): Promise<any> {
+        try {
+            // Read from local synced db
+            if (garageId) {
+                const configs: any[] = await db.financialConfigs.find({ garageId });
+                if (configs && configs.length > 0) {
+                    const config = configs[0];
+                    return {
+                        initial_tolerance: config.initialTolerance ?? 15,
+                        fractionate_after: config.fractionateAfter ?? 0,
+                        // Legacy support
+                        toleranciaInicial: config.initialTolerance ?? 15,
+                        fraccionarDesde: config.fractionateAfter ?? 0,
+                        recargoDia11: 10,
+                        recargoDia22: 20,
+                        permitirCobroAnticipado: false
+                    };
+                }
+            }
+        } catch (err) {
+            console.error('Local Config Error', err);
+        }
+
+        // Fallback to defaults
         return {
-            fraccionarDesde: 0,
+            initial_tolerance: 15,
+            fractionate_after: 0,
             toleranciaInicial: 15,
+            fraccionarDesde: 0,
             recargoDia11: 10,
             recargoDia22: 20,
             permitirCobroAnticipado: false

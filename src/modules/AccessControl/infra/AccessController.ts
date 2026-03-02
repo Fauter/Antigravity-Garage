@@ -36,10 +36,15 @@ export class AccessController {
 
     registerEntry = async (req: Request, res: Response) => {
         try {
-            const { plate, vehicleTypeId } = req.body;
+            const rawPlate = req.body.plate;
+            const vehicleTypeId = req.body.vehicleTypeId;
             const garageId = (req.headers['x-garage-id'] as string);
 
-            if (!plate) return res.status(400).json({ error: 'Plate is required' });
+            if (!rawPlate) return res.status(400).json({ error: 'Plate is required' });
+
+            // Normalize plate: uppercase, remove spaces, dashes, and underscores
+            const plate = rawPlate.toUpperCase().replace(/[\s\-_]/g, '');
+
             if (!garageId) {
                 console.warn('⚠️ AccessController: Missing x-garage-id header on entry');
             }
@@ -86,12 +91,17 @@ export class AccessController {
             if (existingVehicle) {
                 // REUSE & UPDATE
                 vehicleId = existingVehicle.id!;
-                // Update is_subscriber status if changed
-                if ((existingVehicle as any).is_subscriber !== isSubscriber || existingVehicle.isSubscriber !== isSubscriber) {
-                    (existingVehicle as any).is_subscriber = isSubscriber;
-                    existingVehicle.isSubscriber = isSubscriber; // Keep obj sync
+                // Update is_subscriber status ONLY if we are granting a new subscription (false -> true)
+                const currentlySubscribed = existingVehicle.isSubscriber || (existingVehicle as any).is_subscriber;
+
+                if (!currentlySubscribed && isSubscriber) {
+                    (existingVehicle as any).is_subscriber = true;
+                    existingVehicle.isSubscriber = true; // Keep obj sync
                     await this.vehicleRepository.save(existingVehicle);
-                    console.log(`🚗 Entry: Updated Vehicle ${vehicleId} subscriber status to ${isSubscriber}`);
+                    console.log(`🚗 Entry: Updated Vehicle ${vehicleId} subscriber status to true`);
+                } else if (currentlySubscribed && !isSubscriber) {
+                    // Protegemos el estado: nunca pasamos de true a false aquí al registrar entrada
+                    console.log(`🚗 Entry: Vehicle ${vehicleId} kept subscriber status true despite no active sub found`);
                 }
             } else {
                 // CREATE NEW
@@ -134,10 +144,13 @@ export class AccessController {
 
     registerExit = async (req: Request, res: Response) => {
         try {
-            const { plate, paymentMethod, operator, invoiceType, promoPercentage } = req.body;
+            const rawPlate = req.body.plate;
+            const { paymentMethod, operator, invoiceType, promoPercentage } = req.body;
             const garageId = (req.headers['x-garage-id'] as string);
 
-            if (!plate) return res.status(400).json({ error: 'Plate is required' });
+            if (!rawPlate) return res.status(400).json({ error: 'Plate is required' });
+
+            const plate = rawPlate.toUpperCase().replace(/[\s\-_]/g, '');
 
             const stay = await this.stayRepository.findActiveByPlate(plate, garageId);
             if (!stay) {
@@ -242,12 +255,13 @@ export class AccessController {
 
     getActiveStay = async (req: Request, res: Response) => {
         try {
-            const { plate } = req.params;
-            const stay = await this.stayRepository.findActiveByPlate(String(plate));
+            const rawPlate = req.params.plate;
+            const plate = String(rawPlate).toUpperCase().replace(/[\s\-_]/g, '');
+            const stay = await this.stayRepository.findActiveByPlate(plate);
             if (!stay) return res.status(404).json({ error: 'Stay not found' });
 
             // CRÍTICO: Garantía de datos directos de la tabla Vehicle
-            const vehicle = await this.vehicleRepository.findByPlate(String(plate));
+            const vehicle = await this.vehicleRepository.findByPlate(plate);
             if (vehicle) {
                 const subStatus = vehicle.isSubscriber || (vehicle as any).is_subscriber;
                 stay.isSubscriber = subStatus;

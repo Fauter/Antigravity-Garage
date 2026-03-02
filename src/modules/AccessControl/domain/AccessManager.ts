@@ -94,7 +94,21 @@ export class AccessManager {
 
         // Mock Repos (Engine only needs getAll/getParams)
         const tariffRepo = { getAll: () => db.tariffs.find({ garageId: finalGarageId }) };
-        const paramRepo = { getParams: async () => ({ toleranciaInicial: 15, fraccionarDesde: 0 }) }; // Default for now, or fetch from db.params if exists
+        const paramRepo = {
+            getParams: async () => {
+                const configs: any[] = await db.financialConfigs.find({ garageId: finalGarageId });
+                if (configs && configs.length > 0) {
+                    const config = configs[0];
+                    return {
+                        initial_tolerance: config.initialTolerance ?? 15,
+                        fractionate_after: config.fractionateAfter ?? 0,
+                        toleranciaInicial: config.initialTolerance ?? 15,
+                        fraccionarDesde: config.fractionateAfter ?? 0
+                    };
+                }
+                return { toleranciaInicial: 15, fraccionarDesde: 0, initial_tolerance: 15, fractionate_after: 0 };
+            }
+        };
 
         const engine = new PricingEngine(tariffRepo as any, paramRepo as any, priceRepo);
 
@@ -121,10 +135,12 @@ export class AccessManager {
         }
 
         // NON-SUBSCRIBER LOGIC:
+        const params = await paramRepo.getParams();
         price = await engine.calculateParkingFee(
             stay,
             exitDate,
-            paymentMethod
+            paymentMethod,
+            params
         );
 
         // Apply Promo Discount (purely numeric, no notes impact)

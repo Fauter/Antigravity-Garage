@@ -342,6 +342,9 @@ export class SyncService {
         }
 
         if (type === 'FinancialConfig') {
+            if (local.initial_tolerance !== undefined) { local.initialTolerance = Number(local.initial_tolerance); delete local.initial_tolerance; }
+            if (local.fractionate_after !== undefined) { local.fractionateAfter = Number(local.fractionate_after); delete local.fractionate_after; }
+
             if (local.surcharge_config && typeof local.surcharge_config === 'string') {
                 try {
                     local.surchargeConfig = JSON.parse(local.surcharge_config);
@@ -570,6 +573,13 @@ export class SyncService {
             Object.keys(base).forEach(key => {
                 if (!allowedBLFields.includes(key)) delete base[key];
             });
+        }
+
+        if (type === 'FinancialConfig') {
+            if (base.initialTolerance !== undefined) { base.initial_tolerance = base.initialTolerance; delete base.initialTolerance; }
+            if (base.fractionateAfter !== undefined) { base.fractionate_after = base.fractionateAfter; delete base.fractionateAfter; }
+            if (base.surchargeConfig !== undefined) { base.surcharge_config = base.surchargeConfig; delete base.surchargeConfig; }
+            if (base.garageId !== undefined) { base.garage_id = base.garageId; delete base.garageId; }
         }
 
         // SANITIZE FKs

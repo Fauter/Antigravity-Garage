@@ -50,10 +50,9 @@ export class SubscriptionRepository {
     }
 
     async findActiveByPlate(plate: string): Promise<any | null> {
-        // NeDB doesn't strictly support computed fields in find easily without operator,
-        // but 'active' or 'status' should be stored.
-        // Assuming 'active' boolean is used by Schema, or 'status' by interface.
-        return await db.subscriptions.findOne({ plate, active: true });
+        // Create a regex to match the plate ignoring spaces, dashes, and casing
+        const plateRegex = new RegExp([...plate].join('[\\\\s\\\\-_]*'), 'i');
+        return await db.subscriptions.findOne({ plate: { $regex: plateRegex }, active: true });
     }
 
     async reset(): Promise<void> {

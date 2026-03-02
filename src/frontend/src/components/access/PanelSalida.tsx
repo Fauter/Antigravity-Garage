@@ -23,7 +23,20 @@ const useExitLogic = () => {
     const [price, setPrice] = useState<number>(0);
     const [basePrice, setBasePrice] = useState<number>(0);
     const [error, setError] = useState<string | null>(null);
+    const [params, setParams] = useState<any>(null);
     const { operatorName } = useAuth();
+
+    useEffect(() => {
+        const fetchParams = async () => {
+            try {
+                const p = await paramRepo.getParams();
+                setParams(p);
+            } catch (err) {
+                console.warn('[useExitLogic] Fallo al cargar params:', err);
+            }
+        };
+        fetchParams();
+    }, []);
 
     const isSubscriber = Boolean(stay?.is_subscriber);
 
@@ -84,7 +97,7 @@ const useExitLogic = () => {
         setError(null);
     };
 
-    return { searchStay, stay, price, setPrice, basePrice, loading, error, isSubscriber, processExit: processExit as (plate: string, paymentMethod: string, invoiceType: string, promoPercentage: number) => Promise<any>, resetLogic };
+    return { searchStay, stay, price, setPrice, basePrice, loading, error, isSubscriber, processExit: processExit as (plate: string, paymentMethod: string, invoiceType: string, promoPercentage: number) => Promise<any>, resetLogic, params };
 };
 
 const PanelSalida: React.FC = () => {
@@ -95,8 +108,11 @@ const PanelSalida: React.FC = () => {
     const [selectedPromo, setSelectedPromo] = useState<any>(null);
     const [showSuccess, setShowSuccess] = useState(false);
 
-    const { searchStay, stay, price, setPrice, error, isSubscriber, processExit, resetLogic } = useExitLogic();
+    const { searchStay, stay, price, setPrice, error, isSubscriber, processExit, resetLogic, params } = useExitLogic();
     const { isGlobalSyncing, operatorName } = useAuth();
+    const [isCalculating, setIsCalculating] = useState(false);
+
+    const isGracePeriod = Boolean(stay && !isSubscriber && price === 0 && !isCalculating);
 
     const handleCancel = () => {
         resetLogic(); // Limpia stay, price, error en el hook
@@ -131,21 +147,23 @@ const PanelSalida: React.FC = () => {
         if (isSubscriber) return;
 
         const calculate = async () => {
-            if (!stay || isSubscriber || !paymentMethod) return;
+            if (!stay || isSubscriber) return;
 
+            setIsCalculating(true);
             const entryDate = new Date(stay.entryTime);
             const exitDate = new Date();
 
             // Log for debugging
             const durationMinutes = Math.ceil((exitDate.getTime() - entryDate.getTime()) / 60000);
-            console.log(`[PanelSalida] Calculating for ${stay.plate} (${stay.vehicleType}) - Method: ${paymentMethod} - Duration: ${durationMinutes} min`);
+            console.log(`[PanelSalida] Calculating for ${stay.plate} (${stay.vehicleType}) - Method: ${paymentMethod || 'Efectivo'} - Duration: ${durationMinutes} min`);
 
             try {
-                console.log("[PanelSalida] Llamando a PricingEngine con:", stay.plate, paymentMethod);
+                console.log("[PanelSalida] Llamando a PricingEngine con:", stay.plate, paymentMethod || 'Efectivo', params);
                 let calculated = await pricingEngine.calculateParkingFee(
                     { ...stay, vehicleType: stay.vehicleType || 'Auto' },
                     exitDate,
-                    paymentMethod
+                    paymentMethod || 'Efectivo',
+                    params
                 );
 
                 console.log(`[PanelSalida] Price Result: $${calculated}`);
@@ -159,18 +177,16 @@ const PanelSalida: React.FC = () => {
             } catch (err) {
                 console.error("[PanelSalida] Calculation error:", err);
                 setPrice(0);
+            } finally {
+                setIsCalculating(false);
             }
         };
 
         // Only run if we have a stay and it's not a subscriber 
         if (stay && !isSubscriber) {
-            if (paymentMethod) {
-                calculate();
-            } else {
-                setPrice(0);
-            }
+            calculate();
         }
-    }, [paymentMethod, stay, selectedPromo, isSubscriber]);
+    }, [paymentMethod, stay, selectedPromo, isSubscriber, params]);
 
 
 
@@ -180,24 +196,38 @@ const PanelSalida: React.FC = () => {
     const handleExit = async () => {
         if (!stay) return;
 
-        const method = isSubscriber ? 'Efectivo' : (paymentMethod || 'Efectivo');
-        const invoice = isSubscriber ? 'Final' : (invoiceType || 'Final');
+        let method = paymentMethod || 'Efectivo';
+        let invoice = invoiceType || 'Final';
+
+        if (isSubscriber) {
+            method = 'Efectivo';
+            invoice = 'Final';
+        } else if (isGracePeriod) {
+            method = 'Efectivo';
+            invoice = 'Final';
+        }
 
         const result = await processExit(stay.plate, method, invoice, selectedPromo?.porcentaje || 0);
         if (result) {
-            // TICKET (x2)
-            // Even if subscriber, let's print the exit ticket (which has ABONADO title) as per the printer service support
+            // FIX: Trust backend recalculation as Source of Truth
+            const finalAmount = result.movement?.amount !== undefined ? result.movement.amount : price;
+            setPrice(finalAmount); // Updates the UI for the Success Overlay instantly
+
+            // TICKET LOGIC
             const exitStay = result.stay || { ...stay, exitTime: new Date() };
             const exitMovement = result.movement || {
-                amount: price,
+                amount: finalAmount,
                 paymentMethod: method,
                 operator: operatorName,
-                notes: isSubscriber ? 'Abonado' : 'Salida Registrada'
+                notes: isGracePeriod ? 'Tiempo de Gracia' : (isSubscriber ? 'Abonado' : 'Salida Registrada')
             };
-            PrinterService.printExitTicket(exitStay, exitMovement);
+
+            if (!isSubscriber) {
+                PrinterService.printExitTicket(exitStay, exitMovement);
+            }
 
             toast.success(`Salida ok: ${stay.plate}`, {
-                description: isSubscriber ? 'Abonado (Sin Cargo)' : `Cobro: ${paymentMethod || 'Aut.'}`
+                description: isGracePeriod ? 'Tiempo de Gracia (Sin Cargo)' : (isSubscriber ? 'Abonado (Sin Cargo)' : `Cobro: ${paymentMethod || 'Aut.'}`)
             });
 
             setShowSuccess(true);
@@ -333,6 +363,29 @@ const PanelSalida: React.FC = () => {
                         </button>
                     </div>
                 </>
+            ) : stay && isGracePeriod ? (
+                <>
+                    <div className="flex-1 p-3 bg-gray-950 flex flex-col justify-center gap-3 overflow-y-auto">
+                        <div className="flex-1 flex items-center justify-center bg-cyan-900/20 rounded-xl border border-dashed border-cyan-800/50 p-4">
+                            <div className="text-center">
+                                <h4 className="text-cyan-500 font-black text-3xl mb-2 tracking-widest">TIEMPO DE GRACIA</h4>
+                                <p className="text-cyan-400/80 text-base">Estadía sin cargo por salida temprana.</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div className="px-4 py-3 bg-gray-900/50 border-t border-gray-800 shrink-0">
+                        <button
+                            onClick={handleExit}
+                            disabled={isGlobalSyncing || showSuccess}
+                            className={`w-full h-14 rounded-xl font-bold text-2xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(isGlobalSyncing || showSuccess)
+                                ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
+                                : 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-cyan-900/30 ring-1 ring-white/10'
+                                }`}
+                        >
+                            {isGlobalSyncing ? 'Sincronizando...' : showSuccess ? 'Confirmando...' : 'Confirmar Salida Gratis'}
+                        </button>
+                    </div>
+                </>
             ) : stay ? (
                 <>
                     <div className="flex-1 p-3 bg-gray-950 flex flex-col justify-center gap-3 overflow-y-auto">
@@ -388,8 +441,14 @@ const PanelSalida: React.FC = () => {
                         <div className="bg-gray-950 border border-gray-800 rounded-xl p-3 flex justify-center items-center gap-8 mb-3 shadow-inner">
                             <div className="text-center">
                                 <span className="text-gray-600 text-[10px] font-bold uppercase tracking-widest block mb-1">Total a Pagar</span>
-                                <span className={`text-5xl font-black tracking-tighter block ${price > 0 ? 'text-white drop-shadow-md' : 'text-gray-700'}`}>
-                                    ${price.toLocaleString()}
+                                <span className={`text-5xl font-black tracking-tighter block ${paymentMethod && price > 0 ? 'text-white drop-shadow-md' : 'text-gray-700'}`}>
+                                    {isCalculating ? (
+                                        <span className="animate-pulse opacity-50 block mt-1">...</span>
+                                    ) : paymentMethod ? (
+                                        `$${price.toLocaleString()}`
+                                    ) : (
+                                        <span className="opacity-30">$ -</span>
+                                    )}
                                 </span>
                             </div>
 
@@ -415,13 +474,13 @@ const PanelSalida: React.FC = () => {
 
                         <button
                             onClick={handleExit}
-                            disabled={!paymentMethod || !invoiceType || isGlobalSyncing || showSuccess}
-                            className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(!paymentMethod || !invoiceType || isGlobalSyncing || showSuccess)
+                            disabled={!paymentMethod || !invoiceType || isGlobalSyncing || showSuccess || isCalculating}
+                            className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(!paymentMethod || !invoiceType || isGlobalSyncing || showSuccess || isCalculating)
                                 ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
                                 : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/30 ring-1 ring-white/10'
                                 }`}
                         >
-                            {isGlobalSyncing ? 'Sincronizando...' : showSuccess ? 'Confirmando...' : 'Registrar Salida'}
+                            {isGlobalSyncing ? 'Sincronizando...' : showSuccess ? 'Confirmando...' : isCalculating ? 'Calculando...' : 'Registrar Salida'}
                         </button>
                     </div>
                 </>
@@ -430,18 +489,18 @@ const PanelSalida: React.FC = () => {
             {/* SUCCESS OVERLAY */}
             {showSuccess && stay && (
                 <div className="absolute inset-0 z-50 bg-gray-950/95 backdrop-blur-md flex flex-col items-center justify-center animate-in fade-in duration-300">
-                    <div className={`w-28 h-28 mb-6 rounded-full flex items-center justify-center shadow-2xl ${isSubscriber ? 'bg-emerald-500/20 shadow-emerald-500/20' : 'bg-blue-500/20 shadow-blue-500/20'}`}>
-                        <CheckCircle className={`w-16 h-16 animate-[pulse_1s_ease-in-out_infinite] ${isSubscriber ? 'text-emerald-500' : 'text-blue-500'}`} />
+                    <div className={`w-28 h-28 mb-6 rounded-full flex items-center justify-center shadow-2xl ${isSubscriber ? 'bg-emerald-500/20 shadow-emerald-500/20' : (isGracePeriod ? 'bg-cyan-500/20 shadow-cyan-500/20' : 'bg-blue-500/20 shadow-blue-500/20')}`}>
+                        <CheckCircle className={`w-16 h-16 animate-[pulse_1s_ease-in-out_infinite] ${isSubscriber ? 'text-emerald-500' : (isGracePeriod ? 'text-cyan-500' : 'text-blue-500')}`} />
                     </div>
                     <div className="text-center font-bold">
-                        <h2 className={`text-4xl font-black tracking-widest uppercase mb-3 ${isSubscriber ? 'text-emerald-400' : 'text-blue-400'}`}>
+                        <h2 className={`text-4xl font-black tracking-widest uppercase mb-3 ${isSubscriber ? 'text-emerald-400' : (isGracePeriod ? 'text-cyan-400' : 'text-blue-400')}`}>
                             SALIDA REGISTRADA
                         </h2>
                         <div className="text-white font-mono text-5xl tracking-widest bg-black/60 px-6 py-3 rounded-lg border border-gray-800 inline-block mb-4 mt-2">
                             {stay.plate}
                         </div>
                         <p className="text-gray-400 uppercase tracking-widest text-sm font-bold">
-                            {isSubscriber ? 'Vehículo Abonado' : `Cobro Efectuado - ${paymentMethod || 'Efectivo'}`}
+                            {isGracePeriod ? 'Salida sin Cargo (Tolerancia)' : (isSubscriber ? 'Vehículo Abonado' : `Cobro Efectuado - ${paymentMethod || 'Efectivo'}`)}
                         </p>
                     </div>
                 </div>

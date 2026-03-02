@@ -1,7 +1,7 @@
 import mongoose, { Schema } from 'mongoose';
 import {
     Vehicle, Customer, Subscription, Movement, Shift, Employee, Debt, Cochera, ShiftClose, PartialClose, Incident,
-    Mutation, SyncConflict, VehicleType, Tariff, Price
+    Mutation, SyncConflict, VehicleType, Tariff, Price, FinancialConfig
 } from '../../shared/schemas';
 
 // --- Cochera ---
@@ -264,3 +264,17 @@ const PriceSchema = new Schema<Price>({
     createdAt: { type: Date, default: Date.now }
 });
 export const PriceModel = mongoose.model<Price>('Price', PriceSchema);
+
+// Financial Configs
+const FinancialConfigSchema = new Schema<FinancialConfig>({
+    id: { type: String, required: true, unique: true },
+    garageId: { type: String },
+    ownerId: { type: String },
+    initialTolerance: { type: Number, default: 15 },
+    fractionateAfter: { type: Number, default: 0 },
+    surchargeConfig: { type: Schema.Types.Mixed },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now }
+});
+export const FinancialConfigModel = mongoose.model<FinancialConfig>('FinancialConfig', FinancialConfigSchema);
+
