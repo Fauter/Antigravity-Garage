@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../../services/api';
 import { toast } from 'sonner';
 import { Camera, Car, Check, User, Phone, AlertTriangle, Wallet } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { WebcamModal } from '../common/WebcamModal';
 import { PrinterService } from '../../services/PrinterService';
+import { useVehiclePriceValidation } from '../../hooks/useVehiclePriceValidation';
 
 interface FormularioAbonoProps {
     onCancel?: () => void;
@@ -20,6 +21,9 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
     const [showSuccessScreen, setShowSuccessScreen] = useState(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const { operatorName } = useAuth();
+
+    // Price integrity validation + smart sorting for 'abono' tariffs
+    const { getSortedVehicleTypes } = useVehiclePriceValidation('abono');
 
     // Load Vehicle Types once on mount
     useEffect(() => {
@@ -42,10 +46,17 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
     const [standardPricesMatrix, setStandardPricesMatrix] = useState<any>({});
     const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
 
+    // Sorted + enriched vehicle types (valid first → price asc → alpha)
+    const sortedVehicleTypes = useMemo(() =>
+        getSortedVehicleTypes(vehicleTypes.map((v: any) => ({ id: v.id || v.name, name: v.name }))),
+        [vehicleTypes, getSortedVehicleTypes]
+    );
+
     const [formData, setFormData] = useState({
         // Cochera
         tipoCochera: '',
         numeroCochera: '',
+        piso: '',
         exclusivaOverride: false,
 
         // Personales
@@ -76,6 +87,39 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
     useEffect(() => { loadConfig(); }, [formData.metodoPago]);
     useEffect(() => { calculatePrice(); }, [formData.tipoCochera, formData.exclusivaOverride, formData.tipoVehiculo, pricesMatrix, standardPricesMatrix]);
     useEffect(() => { setErrorMessage(null); }, [formData.numeroCochera, formData.tipoCochera, formData.tipoVehiculo, formData.patente]);
+
+    // --- Building Levels ---
+    const [buildingLevels, setBuildingLevels] = useState<any[]>([]);
+    useEffect(() => {
+        api.get('/building-levels')
+            .then(res => {
+                const sorted = (res.data || []).sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+                setBuildingLevels(sorted);
+            })
+            .catch(e => console.error('Building Levels Load Error:', e));
+    }, []);
+
+    // --- DNI Duplicate Validation ---
+    const [existingDnis, setExistingDnis] = useState<string[]>([]);
+    const [isDniDuplicate, setIsDniDuplicate] = useState(false);
+
+    useEffect(() => {
+        api.get('/clientes')
+            .then(res => {
+                const dnis = (res.data || []).map((c: any) => String(c.dni || '').replace(/\D/g, '')).filter(Boolean);
+                setExistingDnis(dnis);
+            })
+            .catch(e => console.error('DNI list load error:', e));
+    }, []);
+
+    useEffect(() => {
+        const cleanDni = formData.dni.replace(/\D/g, '');
+        if (cleanDni.length > 0 && existingDnis.includes(cleanDni)) {
+            setIsDniDuplicate(true);
+        } else {
+            setIsDniDuplicate(false);
+        }
+    }, [formData.dni, existingDnis]);
 
     const loadConfig = async () => {
         // Fetch prices based on current payment method
@@ -156,12 +200,10 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
         const currentDay = now.getDate();
         const ultimoDiaMes = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
         const diasRestantes = (ultimoDiaMes - currentDay) + 1;
-        // Nuevo código con redondeo a la centena (hacia abajo)
+        // Nuevo código con redondeo exacto
         const exactCalc = (currentPrice / ultimoDiaMes) * diasRestantes;
-        // Math.floor(valor / 100) * 100 elimina las decenas y unidades
-        const roundedDown = Math.floor(exactCalc / 100) * 100;
 
-        setProratedPrice(roundedDown);
+        setProratedPrice(Math.round(exactCalc));
     };
 
     const openCamera = (field: string) => { setActivePhotoField(field); setShowCameraModal(true); };
@@ -194,6 +236,18 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
         // Validate basic vehicle data to prevent junk
         if (!formData.tipoVehiculo || !formData.patente) {
             toast.error('Faltan datos del vehículo (Tipo o Patente)');
+            setLoading(false);
+            return;
+        }
+
+        if (!formData.piso) {
+            toast.error('Debe seleccionar un Piso');
+            setLoading(false);
+            return;
+        }
+
+        if (isDniDuplicate) {
+            toast.error('El DNI ingresado ya pertenece a un cliente registrado.');
             setLoading(false);
             return;
         }
@@ -232,17 +286,15 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
             // SUBSCRIPTION CREATION (Full Payload)
             const payload = {
                 customerData: {
-                    nombreApellido: formData.nombre,
+                    name: formData.nombre,
                     dni: formData.dni,
                     email: formData.email,
                     address: formData.domicilio,
                     localidad: formData.localidad,
-                    workAddress: formData.domicilioTrabajo,
-                    phones: {
-                        particular: formData.telParticular,
-                        emergency: formData.telEmergencia,
-                        work: formData.telTrabajo
-                    }
+                    work_address: formData.domicilioTrabajo,
+                    phone: formData.telParticular,
+                    emergency_phone: formData.telEmergencia,
+                    work_phone: formData.telTrabajo
                 },
                 vehicleData: {
                     plate: formData.patente,
@@ -255,6 +307,7 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                 },
                 subscriptionType: finalType,
                 spotNumber: finalType === 'Movil' ? '' : formData.numeroCochera,
+                piso: formData.piso,
                 paymentMethod: formData.metodoPago,
                 basePrice: basePriceDisplay,
                 amount: proratedPrice,
@@ -304,6 +357,7 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                 setFormData({
                     tipoCochera: '',
                     numeroCochera: '',
+                    piso: '',
                     exclusivaOverride: false,
 
                     nombre: '',
@@ -395,6 +449,17 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                                     <span className="text-[10px] font-bold text-purple-400">EXCL</span>
                                 </label>
                             </div>
+                            <select
+                                className={`${inputStyle} w-32 h-7 text-[10px] bg-gray-800 border-gray-600`}
+                                value={formData.piso}
+                                onChange={e => setFormData({ ...formData, piso: e.target.value })}
+                                required
+                            >
+                                <option value="" disabled>Piso...</option>
+                                {buildingLevels.map((level: any) => (
+                                    <option key={level.id} value={level.displayName || level.display_name}>{level.displayName || level.display_name}</option>
+                                ))}
+                            </select>
                         </div>
 
                         {/* 2. DATOS PERSONALES (GRID 3 EQUAL) */}
@@ -405,7 +470,16 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                             <div className="grid grid-cols-3 gap-2">
                                 {/* Row 1 */}
                                 <div><label className={labelStyle}>Nombre Completo</label><input className={inputStyle} value={formData.nombre} onChange={e => setFormData({ ...formData, nombre: e.target.value })} required /></div>
-                                <div><label className={labelStyle}>DNI / CUIT</label><input className={inputStyle} value={formData.dni} onChange={e => setFormData({ ...formData, dni: e.target.value })} required /></div>
+                                <div>
+                                    <label className={labelStyle}>DNI / CUIT</label>
+                                    <input className={`${inputStyle} ${isDniDuplicate ? 'border-red-500 ring-1 ring-red-500/30' : ''}`} value={formData.dni} onChange={e => setFormData({ ...formData, dni: e.target.value })} required />
+                                    {isDniDuplicate && (
+                                        <div className="flex items-center gap-1 mt-1">
+                                            <AlertTriangle className="w-3 h-3 text-red-500 shrink-0" />
+                                            <span className="text-[10px] text-red-500 font-medium">Este DNI ya pertenece a un cliente registrado</span>
+                                        </div>
+                                    )}
+                                </div>
                                 <div><label className={labelStyle}>Email</label><input className={inputStyle} value={formData.email} onChange={e => setFormData({ ...formData, email: e.target.value })} /></div>
 
                                 {/* Row 2 */}
@@ -448,9 +522,9 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                                     <label className={labelStyle}>Tipo</label>
                                     <select className={`${inputStyle} appearance-none`} value={formData.tipoVehiculo} onChange={e => setFormData({ ...formData, tipoVehiculo: e.target.value })}>
                                         <option value="" disabled hidden>Seleccione el tipo...</option>
-                                        {vehicleTypes.length > 0 ? (
-                                            vehicleTypes.map((v: any) => (
-                                                <option key={v.name} value={v.name}>{v.name}</option>
+                                        {sortedVehicleTypes.length > 0 ? (
+                                            sortedVehicleTypes.map((v: any) => (
+                                                <option key={v.name} value={v.name} disabled={v.disabled}>{v.label}</option>
                                             ))
                                         ) : (
                                             <option>Cargando vehículos...</option>
@@ -533,8 +607,8 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                                 </div>
                             )}
 
-                            <button form="abono-form" type="submit" disabled={loading}
-                                className="w-full py-3 bg-white hover:bg-gray-200 text-black text-xs font-black uppercase tracking-widest rounded shadow-lg flex items-center justify-center gap-2 mt-3 transition-all active:scale-95">
+                            <button form="abono-form" type="submit" disabled={loading || isDniDuplicate}
+                                className={`w-full py-3 text-xs font-black uppercase tracking-widest rounded shadow-lg flex items-center justify-center gap-2 mt-3 transition-all active:scale-95 ${isDniDuplicate ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-white hover:bg-gray-200 text-black'}`}>
                                 {loading ? '...' : <><Check className="w-3.5 h-3.5" /> Confirmar</>}
                             </button>
                         </div>

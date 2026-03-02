@@ -15,6 +15,7 @@ interface Cochera {
     id: string;
     tipo: 'Fija' | 'Exclusiva' | 'Movil';
     numero?: string;
+    piso?: string;
     vehiculos: string[]; // Vehicle IDs
     clienteId?: string;
     precioBase: number;
@@ -215,6 +216,7 @@ export class GarageController {
                 id: uuidv4(),
                 tipo, // 'Fija', 'Exclusiva', 'Movil'
                 numero: tipo === 'Movil' ? undefined : numero,
+                piso: req.body.piso || undefined,
                 vehiculos: vehiculos || [],
                 clienteId,
                 precioBase: precioBase || 0,
@@ -415,6 +417,7 @@ export class GarageController {
             cochera.vehiculos = [];
             cochera.clienteId = null as any; // REMOVE OWNER (explicitly null for serialization)
             cochera.status = 'Disponible'; // MAKE AVAILABLE
+            cochera.piso = null as any; // CLEAR PISO on release
 
             await cocherasDB.updateOne({ id: cocheraId } as any, cochera);
 
@@ -474,7 +477,7 @@ export class GarageController {
             }
 
             // PRE-SAVE VALIDATION (BLINDAJE DE TRANSACCION)
-            if (!customerData || !customerData.dni || !customerData.nombreApellido) {
+            if (!customerData || !customerData.dni || !(customerData.nombreApellido || customerData.name)) {
                 return res.status(400).json({ error: "Datos de cliente incompletos o ausentes." });
             }
             if (!vehicleData || !vehicleData.plate || !vehicleData.type) {
@@ -494,10 +497,15 @@ export class GarageController {
                     id: uuidv4(),
                     ...customerData,
                     garageId: garageIdFromHeader, // <--- ESTA LÍNEA ES VITAL
-                    name: customerData.nombreApellido || 'Cliente',
+                    name: customerData.name || customerData.nombreApellido || 'Cliente',
                     dni: customerData.dni,
                     email: customerData.email,
-                    phone: customerData.telefono,
+                    phone: customerData.phone || customerData.telefono,
+                    address: customerData.address,
+                    localidad: customerData.localidad,
+                    work_address: customerData.work_address || customerData.workAddress,
+                    emergency_phone: customerData.emergency_phone,
+                    work_phone: customerData.work_phone,
                     createdAt: new Date(),
                     updatedAt: new Date()
                 };
@@ -570,6 +578,7 @@ export class GarageController {
                 cochera.status = 'Ocupada';
                 cochera.precioBase = Number(req.body.basePrice) || cochera.precioBase || 0;
                 cochera.tipo = subscriptionType;
+                cochera.piso = req.body.piso || cochera.piso || null;
                 (cochera as any).garageId = garageId;
 
                 await cocherasDB.updateOne({ id: cochera.id } as any, cochera);
@@ -579,6 +588,7 @@ export class GarageController {
                     id: uuidv4(),
                     tipo: subscriptionType,
                     numero: subscriptionType === 'Movil' ? undefined : String(spotNumberStr),
+                    piso: req.body.piso || null,
                     clienteId: customer!.id,
                     status: 'Ocupada',
                     precioBase: Number(req.body.basePrice) || 0,
@@ -959,7 +969,7 @@ export class GarageController {
 
     updateCustomer = async (req: Request, res: Response) => {
         try {
-            const { id } = req.params;
+            const { id } = req.params as { id: string };
             const updates = req.body;
 
             const existing = await this.customerRepo.findById(String(id));
@@ -967,7 +977,7 @@ export class GarageController {
                 return res.status(404).json({ error: 'Cliente no encontrado' });
             }
 
-            // Merge only accepted fields (prevent id/garageId overwrite)
+            // Merge robusto adaptado al cliente y base de datos con campos de form (Address / localidad explícita)
             const merged = {
                 ...existing,
                 name: updates.name ?? existing.name,
@@ -976,11 +986,13 @@ export class GarageController {
                 phone: updates.phone != null ? String(updates.phone) : existing.phone,
                 address: updates.address ?? existing.address,
                 localidad: updates.localidad ?? (existing as any).localidad,
+                work_address: updates.work_address ?? (existing as any).work_address,
+                work_phone: updates.work_phone ?? (existing as any).work_phone,
+                emergency_phone: updates.emergency_phone ?? (existing as any).emergency_phone,
                 updatedAt: new Date()
             };
 
             await this.customerRepo.save(merged);
-            console.log(`✅ Customer updated: ${id}`);
             res.json(merged);
         } catch (error: any) {
             console.error('Error updating customer:', error);
@@ -1155,20 +1167,7 @@ export class GarageController {
         }
     }
 
-    updateCustomer = async (req: Request, res: Response) => {
-        try {
-            const { id } = req.params as { id: string };
-            const updates = req.body;
-            const customer = await this.customerRepo.findById(id);
-            if (!customer) return res.status(404).json({ error: 'Customer not found' });
 
-            const updated = { ...customer, ...updates, updatedAt: new Date() };
-            await this.customerRepo.save(updated);
-            res.json(updated);
-        } catch (e: any) {
-            res.status(500).json({ error: e.message });
-        }
-    }
 
     getMovements = async (req: Request, res: Response) => {
         try {

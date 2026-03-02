@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '../services/api';
 import { PrinterService } from '../services/PrinterService';
+import { useVehiclePriceValidation } from './useVehiclePriceValidation';
 
 export interface EntryFormData {
     plate: string;
@@ -15,7 +16,7 @@ export const useEntryLogic = () => {
     const queryClient = useQueryClient();
 
     // Fetch Vehicle Types
-    const { data: vehicleTypes = [] } = useQuery({
+    const { data: rawVehicleTypes = [] } = useQuery({
         queryKey: ['vehicleTypes'],
         queryFn: async () => {
             const res = await api.get('/tipos-vehiculo');
@@ -27,10 +28,20 @@ export const useEntryLogic = () => {
         }
     });
 
-    // Auto-select first type if available and none selected
+    // Price integrity validation + smart sorting for 'hora' tariffs
+    const { getSortedVehicleTypes } = useVehiclePriceValidation('hora');
+
+    // Enrich and sort vehicle types: valid first → price asc → alpha
+    const vehicleTypes = useMemo(() =>
+        getSortedVehicleTypes(rawVehicleTypes.map((v: any) => ({ id: v.id, name: v.label }))),
+        [rawVehicleTypes, getSortedVehicleTypes]
+    );
+
+    // Auto-select first valid type if available and none selected
     useEffect(() => {
         if (!vehicleType && vehicleTypes.length > 0) {
-            setVehicleType(vehicleTypes[0].id);
+            const firstValid = vehicleTypes.find((v: any) => !v.disabled);
+            if (firstValid) setVehicleType(firstValid.id);
         }
     }, [vehicleTypes, vehicleType]);
 

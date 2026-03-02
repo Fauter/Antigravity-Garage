@@ -43,6 +43,7 @@ export const db = {
     partialCloses: createStore('partial_closes'),
     incidents: createStore('incidents'),
     promos: createStore('promos'),
+    buildingLevels: createStore('building_levels'),
 
     // Config Stores
     vehicleTypes: createStore('vehicle_types'),

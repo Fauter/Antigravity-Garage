@@ -420,6 +420,107 @@ export const PrinterService = {
 
         printHtml(original + duplicado);
         toast.info(`🖨️ Imprimiendo Comprobante Renovación (x2): ${data.titular}`);
+    },
+
+    printUpgradeTicket: (data: any) => {
+        const config = getGarageConfig();
+        const formattedDate = new Date().toLocaleString('es-AR', {
+            day: '2-digit', month: '2-digit', year: 'numeric',
+            hour: '2-digit', minute: '2-digit'
+        });
+
+        const generateUpgradeHtml = (typeLabel: string) => `
+            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center;">
+                
+                <div style="margin-bottom: 10px; margin-top: 10px;">
+                    <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
+                        [X]
+                    </div>
+                    <div style="font-size: 10px; font-weight: bold;">DOCUMENTO NO VÁLIDO COMO FACTURA</div>
+                </div>
+
+                <div style="margin-bottom: 5px;">
+                    <h2 style="margin: 0; font-size: 16px; font-weight: 900; text-transform: uppercase;">${config.name}</h2>
+                    <div style="font-size: 11px;">${config.address}</div>
+                </div>
+
+                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+
+                <div style="margin-bottom: 10px;">
+                    <div style="font-size: 13px; font-weight: bold; letter-spacing: 0.5px;">DIFERENCIA POR CAMBIO</div>
+                    <div style="font-size: 13px; font-weight: bold; letter-spacing: 0.5px;">DE CATEGORÍA</div>
+                    <div style="font-size: 12px; font-weight: bold; margin-top: 3px;">${typeLabel}</div>
+                </div>
+
+                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+
+                <!-- SECCIÓN 1: IDENTIFICACIÓN -->
+                <div style="text-align: left; font-size: 12px; margin: 10px 0; line-height: 1.4;">
+                    <div style="margin-bottom: 3px;">
+                        <span style="font-weight: bold;">TITULAR:</span> ${String(data.titular).toUpperCase()}
+                    </div>
+                    <div style="margin-bottom: 3px;">
+                        <span style="font-weight: bold;">VEHÍCULO:</span> ${data.tipoVehiculo}
+                    </div>
+                </div>
+
+                <div style="margin: 15px 0; text-align: center;">
+                    <div style="font-size: 11px; margin-bottom: 2px;">PATENTE</div>
+                    <div style="font-size: 28px; font-weight: 900; letter-spacing: 1px;">${data.patente}</div>
+                </div>
+
+                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+
+                <!-- SECCIÓN 2: ECONÓMICA -->
+                <div style="text-align: left; font-size: 12px; margin: 10px 0; line-height: 1.4;">
+                    <div style="margin-bottom: 5px;">
+                        <span style="font-size: 10px;">Precio Anterior:</span><br/>
+                        <span style="font-weight: bold; margin-left: 10px;">$${Number(data.precioAnterior).toLocaleString('es-AR')}</span>
+                    </div>
+                    <div style="margin-bottom: 5px;">
+                        <span style="font-size: 10px;">Nuevo Precio Base:</span><br/>
+                        <span style="font-weight: bold; margin-left: 10px;">$${Number(data.precioNuevo).toLocaleString('es-AR')}</span>
+                    </div>
+                    <div style="margin-bottom: 5px; background: #000; color: #fff; padding: 3px;">
+                        <span style="font-size: 11px;">DIFERENCIA COBRADA:</span>
+                        <span style="font-weight: bold; font-size: 16px; float: right;">$${Number(data.montoCobrado).toLocaleString('es-AR')}</span>
+                        <div style="clear: both;"></div>
+                    </div>
+                    <div>
+                        <span style="font-size: 10px;">Medio de Pago:</span><br/>
+                        <span style="font-weight: bold; margin-left: 10px;">${data.metodoPago}</span>
+                    </div>
+                </div>
+
+                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+
+                <div style="text-align: left; font-size: 11px; margin: 10px 0; line-height: 1.3;">
+                    <div><span style="font-weight: bold;">FECHA:</span> ${formattedDate}</div>
+                    <div><span style="font-weight: bold;">OPERADOR:</span> ${data.operador}</div>
+                </div>
+
+                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+
+                <div style="font-size: 10px; line-height: 1.3; margin-top: 10px;">
+                    <div style="font-weight: bold; text-transform: uppercase;">Comprobante de Upgrade</div>
+                    <div style="margin-top: 2px;">CONSERVE ESTE TICKET</div>
+                </div>
+                
+                ${PrinterService.getLegalFooter()}
+
+                <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
+                    XXXXXXXXXXXXXXXXX
+                </div>
+                <!-- Spacing for printer cut -->
+                <div style="height: 30px;"></div>
+            </div>
+        `;
+
+        const original = generateUpgradeHtml('ORIGINAL');
+        const duplicado = generateUpgradeHtml('DUPLICADO (CONTROL)');
+
+        printHtml(original + duplicado);
+        toast.info(`🖨️ Imprimiendo Comprobante Upgrade (x2): ${data.patente}`);
     }
 };
 

@@ -66,8 +66,8 @@ const EntryPanel: React.FC = () => {
                                     className="w-full h-12 bg-gray-800 border border-gray-700 rounded-xl px-4 text-white text-lg appearance-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none"
                                 >
                                     <option value="" disabled>Seleccione el tipo...</option>
-                                    {vehicleTypes.map((type) => (
-                                        <option key={type.id} value={type.id}>{type.label}</option>
+                                    {vehicleTypes.map((type: any) => (
+                                        <option key={type.id} value={type.id} disabled={type.disabled}>{type.label}</option>
                                     ))}
                                 </select>
                                 <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-gray-400">

@@ -113,7 +113,8 @@ export class SyncService {
             'Debt': 'debts',
             'ShiftClose': 'shift_closes',
             'PartialClose': 'partial_closes',
-            'Incident': 'incidents'
+            'Incident': 'incidents',
+            'BuildingLevel': 'building_levels'
         };
 
         const tableName = tableMap[entityType];
@@ -159,6 +160,7 @@ export class SyncService {
             await db.partialCloses.remove({}, { multi: true }); // Purge partial_closes
             await db.incidents.remove({}, { multi: true }); // Purge incidents
             await db.promos.remove({}, { multi: true }); // Purge promos
+            await db.buildingLevels.remove({}, { multi: true }); // Purge building_levels
 
             // ROBUST PURGE: Compaction to physically remove phantom records from filesystem
             console.log('🧹 Sync: Forcing NeDB Compaction across all collections...');
@@ -173,7 +175,7 @@ export class SyncService {
             const storesToCompact = [
                 db.stays, db.movements, db.tariffs, db.vehicleTypes, db.prices,
                 db.customers, db.vehicles, db.subscriptions, db.cocheras, db.debts, db.financialConfigs,
-                db.shiftCloses, db.partialCloses, db.incidents, db.promos
+                db.shiftCloses, db.partialCloses, db.incidents, db.promos, db.buildingLevels
             ];
 
             storesToCompact.forEach(forceCompact);
@@ -188,6 +190,7 @@ export class SyncService {
             await this.fetchTable('prices', garageId, 'Price'); // New: Sync Prices
             await this.fetchTable('financial_configs', garageId, 'FinancialConfig');
             await this.fetchTable('promos', garageId, 'Promo');
+            await this.fetchTable('building_levels', garageId, 'BuildingLevel');
 
             // 2. Core Operational Entities
             await this.fetchTable('customers', garageId, 'Customer');
@@ -256,6 +259,7 @@ export class SyncService {
                     case 'PartialClose': collection = db.partialCloses; break;
                     case 'Incident': collection = db.incidents; break;
                     case 'Promo': collection = db.promos; break;
+                    case 'BuildingLevel': collection = db.buildingLevels; break;
                 }
 
                 if (collection) {
@@ -372,6 +376,11 @@ export class SyncService {
             if (local.porcentaje !== undefined) { local.porcentaje = Number(local.porcentaje); }
         }
 
+        if (type === 'BuildingLevel') {
+            if (local.display_name !== undefined) { local.displayName = local.display_name; delete local.display_name; }
+            if (local.sort_order !== undefined) { local.sortOrder = Number(local.sort_order); delete local.sort_order; }
+        }
+
         return local;
     }
 
@@ -435,7 +444,7 @@ export class SyncService {
             console.log('📡 DEBUG SYNC: Objeto tras mapeo (antes de whitelist):', JSON.stringify(base));
 
             // Strip unauthorized fields from Customer to prevent PGRST204
-            const allowedCustomerFields = ['id', 'garage_id', 'owner_id', 'name', 'email', 'phone', 'dni', 'address', 'localidad', 'created_at', 'updated_at'];
+            const allowedCustomerFields = ['id', 'garage_id', 'owner_id', 'name', 'email', 'phone', 'dni', 'address', 'localidad', 'work_address', 'emergency_phone', 'work_phone', 'created_at', 'updated_at'];
             Object.keys(base).forEach(key => {
                 if (!allowedCustomerFields.includes(key)) {
                     delete base[key];
@@ -488,7 +497,7 @@ export class SyncService {
             if (base.garageId !== undefined) { base.garage_id = base.garageId; delete base.garageId; }
             if (base.ownerId !== undefined) { base.owner_id = base.ownerId; delete base.ownerId; }
 
-            const allowedCocheraFields = ['id', 'garage_id', 'owner_id', 'tipo', 'numero', 'vehiculos', 'cliente_id', 'precio_base', 'status', 'created_at', 'updated_at'];
+            const allowedCocheraFields = ['id', 'garage_id', 'owner_id', 'tipo', 'numero', 'vehiculos', 'cliente_id', 'precio_base', 'piso', 'status', 'created_at', 'updated_at'];
             Object.keys(base).forEach(key => {
                 if (!allowedCocheraFields.includes(key)) {
                     delete base[key];
@@ -549,6 +558,17 @@ export class SyncService {
                 if (!allowedFields.includes(key)) {
                     delete base[key];
                 }
+            });
+        }
+
+        if (type === 'BuildingLevel') {
+            if (base.displayName !== undefined) { base.display_name = base.displayName; delete base.displayName; }
+            if (base.sortOrder !== undefined) { base.sort_order = base.sortOrder; delete base.sortOrder; }
+            if (base.garageId !== undefined) { base.garage_id = base.garageId; delete base.garageId; }
+
+            const allowedBLFields = ['id', 'garage_id', 'display_name', 'sort_order', 'created_at', 'updated_at'];
+            Object.keys(base).forEach(key => {
+                if (!allowedBLFields.includes(key)) delete base[key];
             });
         }
 

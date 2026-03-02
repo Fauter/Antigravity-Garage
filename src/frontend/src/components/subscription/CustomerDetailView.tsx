@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
     ArrowLeft,
     Car,
@@ -19,6 +19,7 @@ import { api } from '../../services/api';
 import { toast } from 'sonner';
 import { useAuth } from '../../context/AuthContext';
 import { PrinterService } from '../../services/PrinterService';
+import { useVehiclePriceValidation } from '../../hooks/useVehiclePriceValidation';
 
 interface CustomerDetailViewProps {
     subscriber: any;
@@ -27,6 +28,9 @@ interface CustomerDetailViewProps {
 
 const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onBack }) => {
     const { operatorName } = useAuth();
+
+    // Price integrity validation + smart sorting for 'abono' tariffs
+    const { getSortedVehicleTypes } = useVehiclePriceValidation('abono');
 
     // --- Terminal Config: Dynamic garageId resolution ---
     const getGarageId = (): string => {
@@ -45,6 +49,12 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
     // --- Configuration State ---
     const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
+
+    // Sorted + enriched vehicle types (valid first → price asc → alpha)
+    const sortedVehicleTypes = useMemo(() =>
+        getSortedVehicleTypes(vehicleTypes.map((v: any) => ({ id: v.id || v.name, name: v.name }))),
+        [vehicleTypes, getSortedVehicleTypes]
+    );
     const [pricesMatrix, setPricesMatrix] = useState<any>({});
     const [standardPricesMatrix, setStandardPricesMatrix] = useState<any>({});
     const [electronicPricesMatrix, setElectronicPricesMatrix] = useState<any>({});
@@ -80,6 +90,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         // Config
         tipo: 'Movil',
         numero: '',
+        piso: '',
         exclusiva: false,
         // Vehicle
         patente: '',
@@ -140,6 +151,9 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         localidad: ''
     });
     const [isEditSaving, setIsEditSaving] = useState(false);
+
+    // --- Building Levels State ---
+    const [buildingLevels, setBuildingLevels] = useState<any[]>([]);
 
     const handleCloseConfirm = () => {
         setConfirmModal(prev => ({ ...prev, isOpen: false }));
@@ -208,6 +222,16 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         }
     }, [isNewCocheraOpen]);
 
+    // --- Fetch Building Levels ---
+    useEffect(() => {
+        api.get('/building-levels')
+            .then(res => {
+                const sorted = (res.data || []).sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+                setBuildingLevels(sorted);
+            })
+            .catch(err => console.error('Error loading building levels:', err));
+    }, []);
+
     // --- Business Logic: Price Calculation ---
     useEffect(() => {
         const activeMatrix = newVehicleData.metodoPago === 'Efectivo' ? standardPricesMatrix : electronicPricesMatrix;
@@ -247,7 +271,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             const today = new Date().getDate();
             // Assuming current month calculation (days remaining in hypothetical 30-day billing cycle or simply till end of month)
             // The formula provided by user is (31 - today), effectively days remaining.
-            const proratedCharge = diff > 0 ? Math.floor((diff / 30) * (31 - today)) : 0;
+            const proratedCharge = diff > 0 ? (diff / 30) * (31 - today) : 0;
 
             setUpgradeInfo({
                 isUpgrade: true,
@@ -299,11 +323,10 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         const ultimoDiaMes = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
         const diasRestantes = (ultimoDiaMes - currentDay) + 1;
         const exactCalc = (priceForMovement / ultimoDiaMes) * diasRestantes;
-        const roundedDown = Math.floor(exactCalc / 100) * 100;
 
         setNewCocheraFinancials({
             basePrice: priceStandard,
-            proratedPrice: roundedDown
+            proratedPrice: Math.round(exactCalc)
         });
 
     }, [newCocheraData.tipo, newCocheraData.exclusiva, newCocheraData.tipoVehiculo, newCocheraData.metodoPago, electronicPricesMatrix, standardPricesMatrix, isNewCocheraOpen]);
@@ -324,6 +347,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         if (!clientId) { toast.error("Error: Cliente no identificado"); return; }
         if (!newCocheraData.patente || !newCocheraData.tipoVehiculo) { toast.error("Patente y Tipo de Vehículo obligatorios"); return; }
         if ((newCocheraData.tipo === 'Fija' || newCocheraData.exclusiva) && !newCocheraData.numero) { toast.error("Número de cochera obligatorio"); return; }
+        if (!newCocheraData.piso) { toast.error("Debe seleccionar un Piso"); return; }
 
         if ((newCocheraData.tipo === 'Fija' || newCocheraData.exclusiva) && newCocheraData.numero) {
             const isOccupied = allGarageCocheras.some(c =>
@@ -348,11 +372,11 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 garageId: getGarageId(),
                 customerData: {
                     garageId: getGarageId(),
-                    nombreApellido: clientName,
+                    name: clientName,
                     dni: String(rawDni),
                     email: rawEmail,
                     address: rawAddress,
-                    telefono: String(rawPhone)
+                    phone: String(rawPhone)
                 },
                 vehicleData: {
                     plate: newCocheraData.patente.toUpperCase(),
@@ -365,6 +389,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 },
                 subscriptionType: finalType,
                 spotNumber: newCocheraData.numero,
+                piso: newCocheraData.piso,
                 paymentMethod: newCocheraData.metodoPago,
                 basePrice: newCocheraFinancials.basePrice,
                 amount: newCocheraFinancials.proratedPrice,
@@ -396,7 +421,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             await refreshCustomerAssets();
 
             // Reset Form (Optional but good UX)
-            setNewCocheraData(prev => ({ ...prev, patente: '', marca: '', modelo: '', numero: '' }));
+            setNewCocheraData(prev => ({ ...prev, patente: '', marca: '', modelo: '', numero: '', piso: '' }));
 
         } catch (error: any) {
             console.error("Error creating cochera:", error);
@@ -498,6 +523,18 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                     operator: operatorName,
                     notes: `Upgrade de vehículo: ${vehicleToAdd.plate} (Lista: ${newVehicleData.metodoPago === 'Efectivo' ? 'Standard' : 'Electronic'})`,
                     timestamp: new Date().toISOString()
+                });
+
+                // Print upgrade ticket (Original + Duplicado)
+                PrinterService.printUpgradeTicket({
+                    titular: clientName,
+                    patente: vehicleToAdd.plate,
+                    precioAnterior: selectedCochera.precioBase || 0,
+                    precioNuevo: upgradeInfo.newBasePrice,
+                    montoCobrado: upgradeInfo.diffToPay,
+                    metodoPago: newVehicleData.metodoPago,
+                    operador: operatorName,
+                    tipoVehiculo: newVehicleData.tipoVehiculo
                 });
             }
 
@@ -996,6 +1033,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                 <div className="flex flex-col">
                                                     <span className="text-xs uppercase text-gray-500 font-bold tracking-widest mb-1">
                                                         #{cochera.numero || 'S/N'}
+                                                        {cochera.piso && <span className="ml-1.5 text-indigo-400/70">· {cochera.piso}</span>}
                                                         {isExpired && <span className="ml-2 inline-flex items-center gap-1 bg-red-500 text-white text-[10px] px-2 py-0.5 rounded shadow-sm shadow-red-500/20 drop-shadow-md tracking-wider"><AlertTriangle className="w-3 h-3" />VENCIDO</span>}
                                                     </span>
                                                     <span className={`text-2xl font-bold tracking-tight ${cochera.tipo === 'Exclusiva' ? 'text-amber-400' : 'text-white'}`}>
@@ -1140,8 +1178,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                             onChange={e => setNewVehicleData({ ...newVehicleData, tipoVehiculo: e.target.value })}
                                         >
                                             <option value="" disabled>Seleccione...</option>
-                                            {vehicleTypes.map((v: any) => (
-                                                <option key={v.id} value={v.name}>{v.name}</option>
+                                            {sortedVehicleTypes.map((v: any) => (
+                                                <option key={v.id} value={v.name} disabled={v.disabled}>{v.label}</option>
                                             ))}
                                         </select>
                                     </div>
@@ -1290,6 +1328,21 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                 <span className="text-xs font-bold text-amber-500 uppercase tracking-wide cursor-pointer" onClick={() => { if (newCocheraData.tipo !== 'Movil') setNewCocheraData({ ...newCocheraData, exclusiva: !newCocheraData.exclusiva }) }}>Exclusiva</span>
                                             </div>
                                         </div>
+                                        {/* PISO SELECTOR */}
+                                        <div>
+                                            <label className={labelStyle}>Piso</label>
+                                            <select
+                                                className={`${inputStyle} appearance-none bg-gray-900`}
+                                                value={newCocheraData.piso}
+                                                onChange={e => setNewCocheraData({ ...newCocheraData, piso: e.target.value })}
+                                                required
+                                            >
+                                                <option value="" disabled>Seleccione piso...</option>
+                                                {buildingLevels.map((level: any) => (
+                                                    <option key={level.id} value={level.displayName || level.display_name}>{level.displayName || level.display_name}</option>
+                                                ))}
+                                            </select>
+                                        </div>
                                     </div>
 
                                     {/* 3. FACTURACION */}
@@ -1353,8 +1406,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                 onChange={e => setNewCocheraData({ ...newCocheraData, tipoVehiculo: e.target.value })}
                                             >
                                                 <option value="" disabled>Seleccione...</option>
-                                                {vehicleTypes.map((v: any) => (
-                                                    <option key={v.id} value={v.name}>{v.name}</option>
+                                                {sortedVehicleTypes.map((v: any) => (
+                                                    <option key={v.id} value={v.name} disabled={v.disabled}>{v.label}</option>
                                                 ))}
                                             </select>
                                         </div>

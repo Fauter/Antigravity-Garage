@@ -20,6 +20,8 @@ interface AggregatedValues {
     isActive: boolean;
     balance: number;
     plates: string[];
+    email: string;
+    phone: string;
 }
 
 interface AggregatedSubscriber {
@@ -127,6 +129,8 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
             if (!map.has(customerId)) {
                 const name = sub.customerData?.firstName || sub.customerData?.name || sub.nombreApellido || 'Cliente Desconocido';
                 const rawDni = sub.customerData?.dni || sub.dni || '';
+                const email = sub.customerData?.email || sub.email || '';
+                const phone = sub.customerData?.phone || sub.phone || '';
 
                 // --- Balance Calculation ---
                 const customerDebts = debts.filter(d => d.customerId === customerId && d.status === 'PENDING');
@@ -158,6 +162,8 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                         isActive: sub.status === 'active' || sub.active === true,
                         balance,
                         plates,
+                        email,
+                        phone,
                     }
                 });
             } else {
@@ -186,9 +192,11 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
         if (!term) return uniqueSubscribers;
 
         return uniqueSubscribers.filter(sub => {
-            const { name, dni, plates } = sub.aggregatedValues;
+            const { name, dni, plates, email, phone } = sub.aggregatedValues;
             if (name.toLowerCase().includes(term)) return true;
             if (dni && dni.toLowerCase().includes(term)) return true;
+            if (email && email.toLowerCase().includes(term)) return true;
+            if (phone && phone.toLowerCase().includes(term)) return true;
             if (plates.some(p => p.toLowerCase().includes(term))) return true;
             return false;
         });
@@ -215,7 +223,7 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                     className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-all shadow-lg shadow-indigo-900/40 hover:shadow-indigo-900/60 active:scale-95 whitespace-nowrap"
                 >
                     <Plus className="w-4 h-4" />
-                    Nuevo Suscriptor
+                    Nuevo Cliente
                 </button>
             </div>
 
@@ -225,6 +233,7 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                     <thead>
                         <tr className="bg-gray-800/60 text-gray-400 text-xs uppercase tracking-wider">
                             <th className="py-4 px-4 font-medium border-b border-gray-700">Cliente</th>
+                            <th className="py-4 px-4 font-medium border-b border-gray-700">Contacto</th>
                             <th className="py-4 px-4 font-medium border-b border-gray-700">Patentes</th>
                             <th className="py-4 px-4 font-medium border-b border-gray-700">Estado</th>
                             <th className="py-4 px-4 font-medium text-right border-b border-gray-700">Balance</th>
@@ -233,7 +242,7 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                     <tbody className="divide-y divide-gray-800/60">
                         {filteredSubscribers.map((sub) => {
                             const isActive = sub.aggregatedValues.isActive;
-                            const { name, dni, avatar, balance, plates } = sub.aggregatedValues;
+                            const { name, dni, avatar, balance, plates, email, phone } = sub.aggregatedValues;
 
                             return (
                                 <tr key={sub.id || sub._id}
@@ -250,6 +259,18 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                                                     <span className="text-gray-500 text-xs">DNI {dni}</span>
                                                 )}
                                             </div>
+                                        </div>
+                                    </td>
+                                    <td className="py-5 px-4">
+                                        <div className="flex flex-col">
+                                            {phone ? (
+                                                <span className="text-gray-200 text-sm">{phone}</span>
+                                            ) : (
+                                                <span className="text-gray-600 text-sm italic">Sin teléfono</span>
+                                            )}
+                                            {email && (
+                                                <span className="text-gray-500 text-xs">{email}</span>
+                                            )}
                                         </div>
                                     </td>
                                     <td className="py-5 px-4">

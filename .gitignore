@@ -1,5 +1,5 @@
 # Bases de datos locales
-.data/
+
 *.db
 
 # Carpetas de distribución y compilación
