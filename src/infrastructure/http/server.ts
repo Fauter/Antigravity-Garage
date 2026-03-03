@@ -25,7 +25,7 @@ export const startServer = async () => {
             allowedHeaders: ['Content-Type', 'Authorization', 'x-garage-id']
         }));
 
-        app.use(express.json());
+        app.use(express.json({ limit: '10mb' }));
 
         const httpServer = createServer(app);
         const io = new Server(httpServer, {
@@ -302,6 +302,25 @@ export const startServer = async () => {
             }
 
             res.json({ message: 'Sync started' });
+        });
+
+        // Background Sync Endpoint (Silent)
+        app.post('/api/sync/background', async (req, res) => {
+            const { garageId } = req.body;
+            if (!garageId) return res.status(400).json({ error: 'garageId required' });
+
+            console.log(`🤫 Background Sync Triggered for ${garageId}`);
+            if (syncService?.pullAllData) {
+                // Pass true for isSilent
+                try {
+                    await syncService.pullAllData(garageId, true);
+                } catch (err) {
+                    console.error('Background Sync Error', err);
+                    return res.status(500).json({ error: 'Background sync failed' });
+                }
+            }
+
+            res.json({ message: 'Background sync finished' });
         });
 
         // Check Sync Status Endpoint

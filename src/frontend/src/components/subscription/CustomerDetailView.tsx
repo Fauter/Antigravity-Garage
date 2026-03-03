@@ -13,13 +13,16 @@ import {
     Unlink,
     AlertCircle,
     Edit2,
-    X
+    X,
+    Camera
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { toast } from 'sonner';
 import { useAuth } from '../../context/AuthContext';
 import { PrinterService } from '../../services/PrinterService';
 import { useVehiclePriceValidation } from '../../hooks/useVehiclePriceValidation';
+import { WebcamModal } from '../common/WebcamModal';
+import { compressPhotos } from '../../utils/imageCompression';
 
 interface CustomerDetailViewProps {
     subscriber: any;
@@ -151,6 +154,20 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         localidad: ''
     });
     const [isEditSaving, setIsEditSaving] = useState(false);
+
+    // --- Photo Capture State ---
+    const [photos, setPhotos] = useState<{ [key: string]: string }>({});
+    const [showCameraModal, setShowCameraModal] = useState(false);
+    const [activePhotoField, setActivePhotoField] = useState<string | null>(null);
+
+    const openCamera = (field: string) => { setActivePhotoField(field); setShowCameraModal(true); };
+    const handleCapture = (img: string) => {
+        if (activePhotoField) {
+            setPhotos(prev => ({ ...prev, [activePhotoField]: img }));
+            setShowCameraModal(false);
+            setActivePhotoField(null);
+        }
+    };
 
     // --- Building Levels State ---
     const [buildingLevels, setBuildingLevels] = useState<any[]>([]);
@@ -347,7 +364,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         if (!clientId) { toast.error("Error: Cliente no identificado"); return; }
         if (!newCocheraData.patente || !newCocheraData.tipoVehiculo) { toast.error("Patente y Tipo de Vehículo obligatorios"); return; }
         if ((newCocheraData.tipo === 'Fija' || newCocheraData.exclusiva) && !newCocheraData.numero) { toast.error("Número de cochera obligatorio"); return; }
-        if (!newCocheraData.piso) { toast.error("Debe seleccionar un Piso"); return; }
+        if (newCocheraData.tipo !== 'Movil' && !newCocheraData.piso) { toast.error("Debe seleccionar un Piso para cocheras fijas o exclusivas"); return; }
 
         if ((newCocheraData.tipo === 'Fija' || newCocheraData.exclusiva) && newCocheraData.numero) {
             const isOccupied = allGarageCocheras.some(c =>
@@ -368,6 +385,10 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             const rawEmail = subscriber.customerData?.email || subscriber.email || '';
             const rawAddress = subscriber.customerData?.address || subscriber.domicilio || subscriber.localidad || '';
 
+            // Compress photos client-side (800px max, q=0.7)
+            const hasPhotos = Object.values(photos).some(v => v && v.length > 0);
+            const compressedPhotos = hasPhotos ? await compressPhotos(photos) : {};
+
             const payload = {
                 garageId: getGarageId(),
                 customerData: {
@@ -385,7 +406,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                     color: newCocheraData.color,
                     year: newCocheraData.anio,
                     insurance: newCocheraData.seguro,
-                    type: newCocheraData.tipoVehiculo
+                    type: newCocheraData.tipoVehiculo,
+                    photos: compressedPhotos
                 },
                 subscriptionType: finalType,
                 spotNumber: newCocheraData.numero,
@@ -422,6 +444,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
             // Reset Form (Optional but good UX)
             setNewCocheraData(prev => ({ ...prev, patente: '', marca: '', modelo: '', numero: '', piso: '' }));
+            setPhotos({});
 
         } catch (error: any) {
             console.error("Error creating cochera:", error);
@@ -458,8 +481,12 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 </span>
             ),
             onConfirm: async () => {
-                await api.post('/cocheras/desvincular-vehiculo', { cocheraId, plate });
+                const res = await api.post('/cocheras/desvincular-vehiculo', { cocheraId, plate });
                 toast.success("Vehículo desvinculado");
+                // If backend auto-released (empty cochera), notify the operator
+                if (res.data?.cochera?.status === 'Disponible') {
+                    toast.info("Cochera liberada automáticamente (sin vehículos restantes)");
+                }
                 refreshCustomerAssets();
                 handleCloseConfirm();
             }
@@ -497,6 +524,10 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             // Fallback to vehicleDetails only if vehiculos is missing (unlikely if fetched from API).
             const currentVehicles = selectedCochera.vehiculos || [];
 
+            // Compress photos client-side (800px max, q=0.7)
+            const hasPhotos = Object.values(photos).some(v => v && v.length > 0);
+            const compressedPhotos = hasPhotos ? await compressPhotos(photos) : {};
+
             // Construct new vehicle object
             const vehicleToAdd = {
                 plate: newVehicleData.patente.toUpperCase(),
@@ -505,7 +536,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 color: newVehicleData.color,
                 year: newVehicleData.anio,
                 insurance: newVehicleData.companiaSeguro,
-                type: newVehicleData.tipoVehiculo
+                type: newVehicleData.tipoVehiculo,
+                photos: compressedPhotos
             };
 
             const updatedVehicles = [...currentVehicles, vehicleToAdd];
@@ -548,6 +580,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
             toast.success("Vehículo agregado correctamente", { id: btnSpinner });
             setIsModalOpen(false);
+            setPhotos({});
 
             // Refresh globally
             await refreshCustomerAssets();
@@ -831,6 +864,11 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     const inputStyle = "bg-gray-950/40 border border-gray-800/60 rounded-lg px-2.5 py-1.5 text-sm text-white outline-none focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/5 transition-all w-full placeholder-gray-700/50 font-medium h-9";
     const labelStyle = "block text-[10px] uppercase text-gray-500 font-bold mb-0.5 tracking-wider";
 
+    const canonDebts = debts.filter((d: any) => d.type === 'CANON');
+    const otherDebts = debts.filter((d: any) => d.type !== 'CANON');
+    const totalCanon = canonDebts.reduce((sum: number, d: any) => sum + (d.amount || 0), 0);
+    const totalOther = otherDebts.reduce((sum: number, d: any) => sum + (d.amount || 0), 0);
+
     return (
         <div className="flex-1 min-h-full border-none bg-[#050505] w-full flex flex-col">
             <div className="max-w-7xl mx-auto w-full p-8 space-y-12 animate-in fade-in duration-500 flex-1 pb-32">
@@ -884,7 +922,13 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                             </div>
                             <div>
                                 <h4 className="text-red-400 font-bold uppercase tracking-widest text-sm mb-1">Deuda Acumulada</h4>
-                                <p className="text-gray-300 text-sm">Este cliente tiene {debts.length} abonos no pagados identificados. Puede pagar la totalidad desde aquí.</p>
+                                <p className="text-gray-300 text-sm">
+                                    {canonDebts.length > 0 && otherDebts.length === 0
+                                        ? `Este cliente tiene ${canonDebts.length} abono(s) pendiente(s). Puede pagar la totalidad desde aquí.`
+                                        : canonDebts.length === 0 && otherDebts.length > 0
+                                            ? `Este cliente tiene ${otherDebts.length} cargo(s) manuales/migrados pendientes. Puede pagar la totalidad desde aquí.`
+                                            : `Este cliente tiene ${canonDebts.length} abono(s) y ${otherDebts.length} cargo(s) manuales pendientes. Puede pagar la totalidad desde aquí.`}
+                                </p>
                             </div>
                         </div>
                         <div className="text-right flex flex-col items-end gap-3 text-red-400 font-bold">
@@ -892,6 +936,13 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                 <span className="block text-2xl font-mono text-red-400 font-bold">
                                     ${debts.reduce((sum, d) => sum + (d.amount || 0), 0).toLocaleString()}
                                 </span>
+                                {(totalCanon > 0 && totalOther > 0) && (
+                                    <div className="text-xs text-gray-400/90 font-medium mb-1.5 flex items-center justify-end gap-2">
+                                        <span>ABONOS: ${totalCanon.toLocaleString()}</span>
+                                        <span className="text-gray-600">|</span>
+                                        <span>MANUAL: ${totalOther.toLocaleString()}</span>
+                                    </div>
+                                )}
                                 <span className="text-xs text-red-500/80 font-bold uppercase">Monto Base Pendiente (Los recargos se calcularán al pagar)</span>
                             </div>
                             <button
@@ -1221,6 +1272,16 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                     </div>
                                 </div>
 
+                                {/* DOCUMENTACIÓN */}
+                                <div className="flex gap-2 mt-2">
+                                    {['Seguro', 'DNI', 'Cédula'].map(doc => (
+                                        <button key={doc} type="button" onClick={() => openCamera(doc)}
+                                            className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded border border-dashed text-[10px] font-bold uppercase transition-all ${photos[doc] ? 'border-emerald-500/50 bg-emerald-900/10 text-emerald-400' : 'border-gray-800 bg-gray-950/20 text-gray-500 hover:bg-white/5'}`}>
+                                            {photos[doc] ? <Check className="w-3 h-3" /> : <Camera className="w-3 h-3" />} {doc}
+                                        </button>
+                                    ))}
+                                </div>
+
                                 {upgradeInfo.isUpgrade && (
                                     <div className="grid grid-cols-2 gap-3 mt-4">
                                         <div>
@@ -1300,7 +1361,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                     {['Movil', 'Fija'].map(t => (
                                                         <button
                                                             key={t}
-                                                            onClick={() => setNewCocheraData({ ...newCocheraData, tipo: t, exclusiva: false, numero: t === 'Movil' ? '' : newCocheraData.numero })}
+                                                            onClick={() => setNewCocheraData({ ...newCocheraData, tipo: t, exclusiva: false, numero: t === 'Movil' ? '' : newCocheraData.numero, piso: t === 'Movil' ? '' : newCocheraData.piso })}
                                                             className={`flex-1 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${newCocheraData.tipo === t ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-500 hover:text-gray-300'}`}
                                                         >
                                                             {t === 'Movil' ? 'Móvil' : t}
@@ -1332,10 +1393,11 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                         <div>
                                             <label className={labelStyle}>Piso</label>
                                             <select
-                                                className={`${inputStyle} appearance-none bg-gray-900`}
+                                                className={`${inputStyle} appearance-none bg-gray-900 ${newCocheraData.tipo === 'Movil' ? 'opacity-50' : (newCocheraData.tipo !== 'Movil' && !newCocheraData.piso ? 'border-amber-500/50' : '')}`}
                                                 value={newCocheraData.piso}
                                                 onChange={e => setNewCocheraData({ ...newCocheraData, piso: e.target.value })}
-                                                required
+                                                disabled={newCocheraData.tipo === 'Movil'}
+                                                required={newCocheraData.tipo !== 'Movil'}
                                             >
                                                 <option value="" disabled>Seleccione piso...</option>
                                                 {buildingLevels.map((level: any) => (
@@ -1435,6 +1497,16 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                             <label className={labelStyle}>Seguro</label>
                                             <input className={inputStyle} value={newCocheraData.seguro} onChange={e => setNewCocheraData({ ...newCocheraData, seguro: e.target.value })} />
                                         </div>
+                                    </div>
+
+                                    {/* DOCUMENTACIÓN */}
+                                    <div className="flex gap-2 mt-2">
+                                        {['Seguro', 'DNI', 'Cédula'].map(doc => (
+                                            <button key={doc} type="button" onClick={() => openCamera(doc)}
+                                                className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded border border-dashed text-[10px] font-bold uppercase transition-all ${photos[doc] ? 'border-emerald-500/50 bg-emerald-900/10 text-emerald-400' : 'border-gray-800 bg-gray-950/20 text-gray-500 hover:bg-white/5'}`}>
+                                                {photos[doc] ? <Check className="w-3 h-3" /> : <Camera className="w-3 h-3" />} {doc}
+                                            </button>
+                                        ))}
                                     </div>
                                 </div>
                             </div>
@@ -1649,6 +1721,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                     </div>
                 )}
             </div>
+            <WebcamModal isOpen={showCameraModal} onClose={() => setShowCameraModal(false)} onCapture={handleCapture} label={activePhotoField || 'Doc'} />
         </div>
     );
 };

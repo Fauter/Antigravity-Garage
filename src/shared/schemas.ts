@@ -110,6 +110,9 @@ export type Subscription = z.infer<typeof SubscriptionSchema>;
 export const DebtStatusEnum = z.enum(['PENDING', 'PAID', 'CANCELLED']);
 export type DebtStatus = z.infer<typeof DebtStatusEnum>;
 
+export const DebtTypeEnum = z.enum(['SISTEMA', 'CANON', 'MANUAL_MIGRATION']);
+export type DebtType = z.infer<typeof DebtTypeEnum>;
+
 export const DebtSchema = z.object({
   id: UuidSchema,
   subscriptionId: UuidSchema,
@@ -117,6 +120,7 @@ export const DebtSchema = z.object({
   amount: z.number().min(0),
   surchargeApplied: z.number().min(0).default(0),
   status: DebtStatusEnum.default('PENDING'),
+  type: DebtTypeEnum.default('CANON'),
   dueDate: TimestampSchema,
   createdAt: TimestampSchema.default(() => new Date()),
   updatedAt: TimestampSchema.default(() => new Date()),

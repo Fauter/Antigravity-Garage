@@ -179,9 +179,9 @@ router.get('/validacion-precios', async (req, res) => {
             let stdSum = 0;
             let stdCount = 0;
 
-            for (const tariff of contextTariffs) {
-                const tId = (tariff.id || '').trim();
-                const tName = tariff.name || tariff.id;
+            for (const tariff of contextTariffs as any[]) {
+                const tId = (tariff.id || tariff._id || '').trim();
+                const tName = tariff.name || tariff.id || tariff._id;
 
                 // Check standard price
                 const stdKey = `${vId}|${tId}|standard`;

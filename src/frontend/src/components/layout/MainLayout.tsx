@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Ticket, Wallet, LogOut, User as UserIcon, Eye, Database, Loader2, AlertTriangle } from 'lucide-react';
+import { LayoutDashboard, Ticket, Wallet, LogOut, User as UserIcon, Eye, Database, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { api } from '../../services/api';
@@ -49,6 +49,8 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     const [isIncidentModalOpen, setIsIncidentModalOpen] = useState(false);
     const [incidentDescription, setIncidentDescription] = useState('');
     const [isSavingIncident, setIsSavingIncident] = useState(false);
+    const [lastSyncTime, setLastSyncTime] = useState<Date>(new Date());
+    const [isBackgroundSyncing, setIsBackgroundSyncing] = useState(false);
 
     const location = useLocation();
     const { user, logout, isGlobalSyncing } = useAuth();
@@ -114,6 +116,59 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
         if (user.first_name && user.last_name) return `${user.first_name} ${user.last_name}`;
         return user.username;
     };
+
+    const handleBackgroundSync = async () => {
+        if (isBackgroundSyncing || isGlobalSyncing) return;
+
+        const gId = user?.garage_id || garageConfig?.garage_id;
+        if (!gId) return;
+
+        setIsBackgroundSyncing(true);
+        try {
+            await api.post('/sync/background', { garageId: gId });
+            setLastSyncTime(new Date());
+            setRefreshKey(prev => prev + 1); // Forzar repintado de componentes activos
+            toast.success('Datos actualizados en segundo plano', {
+                duration: 2500,
+                style: { background: '#022c22', border: '1px solid rgba(16, 185, 129, 0.4)', color: '#34d399' },
+                icon: <RefreshCw className="w-4 h-4 text-emerald-500 animate-spin" style={{ animationDuration: '3s' }} />
+            });
+        } catch (error) {
+            console.error('❌ Error en background sync:', error);
+            toast.error('Error al sincronizar datos');
+        } finally {
+            setIsBackgroundSyncing(false);
+        }
+    };
+
+    // Auto Background Sync cada 5 min
+    const syncIntervalRef = useRef<(() => void) | undefined>(undefined);
+    useEffect(() => {
+        syncIntervalRef.current = handleBackgroundSync;
+    });
+
+    useEffect(() => {
+        if (!user) return;
+        const intervalId = setInterval(() => {
+            if (syncIntervalRef.current) syncIntervalRef.current();
+        }, 5 * 60 * 1000);
+        return () => clearInterval(intervalId);
+    }, [user]);
+
+    // Timer local para "Hace X min"
+    const [syncTimeStr, setSyncTimeStr] = useState('Recién');
+    useEffect(() => {
+        const updateStr = () => {
+            const diffMs = Date.now() - lastSyncTime.getTime();
+            const diffMins = Math.floor(diffMs / 60000);
+            if (diffMins === 0) setSyncTimeStr('Recién');
+            else if (diffMins < 60) setSyncTimeStr(`${diffMins}m`);
+            else setSyncTimeStr(`${Math.floor(diffMins / 60)}h ${diffMins % 60}m`);
+        };
+        updateStr();
+        const interval = setInterval(updateStr, 60000); // Act. cada minuto
+        return () => clearInterval(interval);
+    }, [lastSyncTime]);
 
     const handleSaveIncident = async () => {
         console.log('🚀 [Incident] INICIO handleSaveIncident');
@@ -193,10 +248,24 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                         </span>
                     </div>
 
-                    {isGlobalSyncing && (
+                    {isGlobalSyncing ? (
                         <div className="flex items-center gap-1.5 px-2 py-0.5 bg-emerald-900/20 border border-emerald-500/30 rounded text-emerald-500 font-mono shadow-sm shadow-emerald-900/20 animate-pulse">
                             <span className="animate-spin text-[10px]">🔄</span>
-                            <span className="text-[9px] font-bold uppercase tracking-widest pt-0.5">Sincronizando datos...</span>
+                            <span className="text-[9px] font-bold uppercase tracking-widest pt-0.5">Sinc. Inicial...</span>
+                        </div>
+                    ) : (
+                        <div className="flex items-center gap-2 px-2 py-0.5 bg-gray-900/40 border border-emerald-500/20 rounded shadow-sm shadow-emerald-900/10">
+                            <span className="text-[10px] hidden sm:inline text-emerald-500/70 font-mono tracking-widest">
+                                {syncTimeStr}
+                            </span>
+                            <button
+                                onClick={handleBackgroundSync}
+                                disabled={isBackgroundSyncing}
+                                className={`p-0.5 rounded transition-all ${isBackgroundSyncing ? 'text-emerald-400' : 'text-emerald-500/50 hover:text-emerald-400 hover:bg-emerald-500/10'}`}
+                                title="Forzar sincronización rápida"
+                            >
+                                <RefreshCw className={`w-3.5 h-3.5 ${isBackgroundSyncing ? 'animate-spin' : ''}`} />
+                            </button>
                         </div>
                     )}
                 </div>

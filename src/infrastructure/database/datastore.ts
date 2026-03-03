@@ -18,6 +18,23 @@ try {
 
 if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
+} else {
+    // 6. Limpieza de Archivos Temporales (.db~) para evitar Database Locks (Zombies)
+    try {
+        const files = fs.readdirSync(DATA_DIR);
+        let cleaned = 0;
+        for (const file of files) {
+            if (file.endsWith('.db~')) {
+                fs.unlinkSync(path.join(DATA_DIR, file));
+                cleaned++;
+            }
+        }
+        if (cleaned > 0) {
+            console.log(`🧹 Local Datastore: Se limpiaron ${cleaned} archivos temporales (.db~) bloqueados.`);
+        }
+    } catch (err) {
+        console.error('❌ Local Datastore: Error limpiando archivos temporales:', err);
+    }
 }
 
 const createStore = (name: string) => {

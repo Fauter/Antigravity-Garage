@@ -6,6 +6,7 @@ import { useAuth } from '../../context/AuthContext';
 import { WebcamModal } from '../common/WebcamModal';
 import { PrinterService } from '../../services/PrinterService';
 import { useVehiclePriceValidation } from '../../hooks/useVehiclePriceValidation';
+import { compressPhotos } from '../../utils/imageCompression';
 
 interface FormularioAbonoProps {
     onCancel?: () => void;
@@ -240,14 +241,21 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
             return;
         }
 
-        if (!formData.piso) {
-            toast.error('Debe seleccionar un Piso');
+        if (formData.tipoCochera !== 'Movil' && !formData.piso) {
+            toast.error('Debe seleccionar un Piso para cocheras fijas o exclusivas');
             setLoading(false);
             return;
         }
 
         if (isDniDuplicate) {
             toast.error('El DNI ingresado ya pertenece a un cliente registrado.');
+            setLoading(false);
+            return;
+        }
+
+        // Validate billing type (hard block)
+        if (!formData.tipoFactura) {
+            toast.error('Seleccione el tipo de factura antes de confirmar.');
             setLoading(false);
             return;
         }
@@ -283,6 +291,10 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                 throw new Error("Cochera number required for Fixed/Exclusive");
             }
 
+            // Compress photos client-side (800px max, q=0.7) before sending
+            const hasPhotos = Object.values(photos).some(v => v && v.length > 0);
+            const compressedPhotos = hasPhotos ? await compressPhotos(photos) : {};
+
             // SUBSCRIPTION CREATION (Full Payload)
             const payload = {
                 customerData: {
@@ -303,7 +315,8 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                     color: formData.color,
                     year: formData.anio,
                     insurance: formData.companiaSeguro,
-                    type: formData.tipoVehiculo
+                    type: formData.tipoVehiculo,
+                    photos: compressedPhotos
                 },
                 subscriptionType: finalType,
                 spotNumber: finalType === 'Movil' ? '' : formData.numeroCochera,
@@ -314,7 +327,6 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                 totalInicial: proratedPrice,
                 billingType: formData.tipoFactura,
                 operator: operatorName,
-                photos: photos,
                 startDate: new Date().toISOString()
             };
 
@@ -426,7 +438,7 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                                     <button type="button" key={type}
                                         onClick={() => {
                                             if (type === 'Movil') {
-                                                setFormData({ ...formData, tipoCochera: 'Movil', exclusivaOverride: false, numeroCochera: '' });
+                                                setFormData({ ...formData, tipoCochera: 'Movil', exclusivaOverride: false, numeroCochera: '', piso: '' });
                                             } else {
                                                 setFormData({ ...formData, tipoCochera: 'Fija' });
                                             }
@@ -450,10 +462,11 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                                 </label>
                             </div>
                             <select
-                                className={`${inputStyle} w-32 h-7 text-[10px] bg-gray-800 border-gray-600`}
+                                className={`${inputStyle} w-32 h-7 text-[10px] bg-gray-800 ${formData.tipoCochera === 'Movil' ? 'opacity-50' : (formData.tipoCochera !== 'Movil' && !formData.piso ? 'border-amber-500/50' : 'border-gray-600')}`}
                                 value={formData.piso}
                                 onChange={e => setFormData({ ...formData, piso: e.target.value })}
-                                required
+                                disabled={formData.tipoCochera === 'Movil'}
+                                required={formData.tipoCochera !== 'Movil'}
                             >
                                 <option value="" disabled>Piso...</option>
                                 {buildingLevels.map((level: any) => (
@@ -607,8 +620,8 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                                 </div>
                             )}
 
-                            <button form="abono-form" type="submit" disabled={loading || isDniDuplicate}
-                                className={`w-full py-3 text-xs font-black uppercase tracking-widest rounded shadow-lg flex items-center justify-center gap-2 mt-3 transition-all active:scale-95 ${isDniDuplicate ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-white hover:bg-gray-200 text-black'}`}>
+                            <button form="abono-form" type="submit" disabled={loading || isDniDuplicate || !formData.tipoFactura}
+                                className={`w-full py-3 text-xs font-black uppercase tracking-widest rounded shadow-lg flex items-center justify-center gap-2 mt-3 transition-all active:scale-95 ${(isDniDuplicate || !formData.tipoFactura) ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-white hover:bg-gray-200 text-black'}`}>
                                 {loading ? '...' : <><Check className="w-3.5 h-3.5" /> Confirmar</>}
                             </button>
                         </div>

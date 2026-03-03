@@ -137,90 +137,72 @@ export class SyncService {
         }
     }
 
-    async pullAllData(garageId: string) {
-        console.log(`📥 Sync: Pulling all data for Garage ${garageId}...`);
+    async pullAllData(garageId: string, isSilent: boolean = false) {
+        // Detección Crítica de Entorno
+        const projectPath = process.cwd().toLowerCase();
+        if (projectPath.includes('onedrive')) {
+            console.warn('⚠️ WARNING: Ejecutando en OneDrive. Esto causará bloqueos extremos de lectura/escritura en la base de datos local (NeDB) debido a la Sincronización Continua de Windows.');
+        }
+
+        console.log(`📥 Sync: Pulling all data for Garage ${garageId}... (Silent: ${isSilent})`);
         this.garageId = garageId;
-        this.isGlobalSyncing = true;
+
+        if (!isSilent) {
+            this.isGlobalSyncing = true;
+        }
 
         try {
-            // 0. Clean Local State (Avoid Ghost Records)
-            console.log('🧹 Sync: Purging local transactional data...');
-            await db.stays.remove({}, { multi: true });
-            await db.movements.remove({}, { multi: true });
-            await db.tariffs.remove({}, { multi: true });
-            await db.vehicleTypes.remove({}, { multi: true });
-            await db.prices.remove({}, { multi: true }); // Clean Prices to avoid duplicates
-            await db.customers.remove({}, { multi: true }); // Required Purge for Ghost syncs
-            await db.vehicles.remove({}, { multi: true }); // Required Purge for Ghost syncs
-            await db.subscriptions.remove({}, { multi: true }); // Required Purge for Ghost syncs
-            await db.cocheras.remove({}, { multi: true }); // Purge cocheras
-            await db.debts.remove({}, { multi: true }); // Purge debts
-            await db.financialConfigs.remove({}, { multi: true }); // Purge configs
-            await db.shiftCloses.remove({}, { multi: true }); // Purge shift_closes
-            await db.partialCloses.remove({}, { multi: true }); // Purge partial_closes
-            await db.incidents.remove({}, { multi: true }); // Purge incidents
-            await db.promos.remove({}, { multi: true }); // Purge promos
-            await db.buildingLevels.remove({}, { multi: true }); // Purge building_levels
+            // Se eliminó la Purga Global y los Timeouts forzados de NeDB. 
+            // Las operaciones se manejan ahora por Wipe & Load Atómico por Colección.
 
-            // ROBUST PURGE: Compaction to physically remove phantom records from filesystem
-            console.log('🧹 Sync: Forcing NeDB Compaction across all collections...');
-            const forceCompact = (store: any) => {
-                if (store && typeof store.compactDatafile === 'function') {
-                    store.compactDatafile();
-                } else if (store && store.nedb && typeof store.nedb.compactDatafile === 'function') {
-                    store.nedb.compactDatafile();
+            const fetchSafe = async (table: string, gId: string, entity: string) => {
+                try {
+                    await this.fetchTable(table, gId, entity);
+                } catch (e: any) {
+                    console.error(`❌ Sync: Error cargando tabla ${table}: ${e.message || e}`);
                 }
             };
 
-            const storesToCompact = [
-                db.stays, db.movements, db.tariffs, db.vehicleTypes, db.prices,
-                db.customers, db.vehicles, db.subscriptions, db.cocheras, db.debts, db.financialConfigs,
-                db.shiftCloses, db.partialCloses, db.incidents, db.promos, db.buildingLevels
-            ];
-
-            storesToCompact.forEach(forceCompact);
-
-            // DELAY TO ALLOW OS/ANTIVIRUS TO RELEASE FILE LOCKS AND COMPACTION TO FINISH
-            console.log('⏳ Sync: Pausing for 1500ms to allow OS to release DB locks and compact...');
-            await new Promise(resolve => setTimeout(resolve, 1500));
-
             // 1. Config (CRITICAL: Fetch first to populate UI dropdowns)
-            await this.fetchTable('vehicle_types', garageId, 'VehicleType');
-            await this.fetchTable('tariffs', garageId, 'Tariff');
-            await this.fetchTable('prices', garageId, 'Price'); // New: Sync Prices
-            await this.fetchTable('financial_configs', garageId, 'FinancialConfig');
-            await this.fetchTable('promos', garageId, 'Promo');
-            await this.fetchTable('building_levels', garageId, 'BuildingLevel');
+            await fetchSafe('vehicle_types', garageId, 'VehicleType');
+            await fetchSafe('tariffs', garageId, 'Tariff');
+            await fetchSafe('prices', garageId, 'Price'); // New: Sync Prices
+            await fetchSafe('financial_configs', garageId, 'FinancialConfig');
+            await fetchSafe('promos', garageId, 'Promo');
+            await fetchSafe('building_levels', garageId, 'BuildingLevel');
 
             // 2. Core Operational Entities
-            await this.fetchTable('customers', garageId, 'Customer');
-            await this.fetchTable('vehicles', garageId, 'Vehicle');
-            await this.fetchTable('cocheras', garageId, 'Cochera');
+            await fetchSafe('customers', garageId, 'Customer');
+            await fetchSafe('vehicles', garageId, 'Vehicle');
+            await fetchSafe('cocheras', garageId, 'Cochera');
 
             // 3. Transactional
-            await this.fetchTable('stays', garageId, 'Stay');
-            await this.fetchTable('movements', garageId, 'Movement');
-            await this.fetchTable('subscriptions', garageId, 'Subscription');
-            await this.fetchTable('debts', garageId, 'Debt');
-            await this.fetchTable('shift_closes', garageId, 'ShiftClose');
-            await this.fetchTable('partial_closes', garageId, 'PartialClose');
-            await this.fetchTable('incidents', garageId, 'Incident');
+            await fetchSafe('stays', garageId, 'Stay');
+            await fetchSafe('movements', garageId, 'Movement');
+            await fetchSafe('subscriptions', garageId, 'Subscription');
+            await fetchSafe('debts', garageId, 'Debt');
+            await fetchSafe('shift_closes', garageId, 'ShiftClose');
+            await fetchSafe('partial_closes', garageId, 'PartialClose');
+            await fetchSafe('incidents', garageId, 'Incident');
 
             console.log('✅ Sync: Bootstrap Complete.');
-            this.isGlobalSyncing = false;
+            if (!isSilent) {
+                this.isGlobalSyncing = false;
+            }
         } catch (error) {
             console.error('❌ Sync: Bootstrap Failed', error);
-            this.isGlobalSyncing = false;
+            if (!isSilent) {
+                this.isGlobalSyncing = false;
+            }
             throw error;
         }
     }
 
     private async fetchTable(tableName: string, garageId: string, entityType: string) {
         try {
-            console.log(`🔍 Sync: Fetching table [${tableName}] for garage [${garageId}]...`);
-            // Basic query filtering by nature
-            let query = supabase.from(tableName).select('*');
+            console.log(`🔍 Sync: Fetching table [${tableName}] para [${garageId}]...`);
 
+            let query = supabase.from(tableName).select('*');
             if (tableName === 'garages') {
                 query = query.eq('id', garageId);
             } else {
@@ -231,45 +213,88 @@ export class SyncService {
             if (error) throw error;
 
             if (!data || data.length === 0) {
-                console.warn(`⚠️ Sync: No records found for ${entityType} in Supabase.`);
+                console.log(`⚠️ Sync: No records found for ${entityType} in Supabase.`);
             }
 
-            if (data && data.length > 0) {
-                console.log(`📥 Sync: Fetched ${data.length} records for ${entityType}, preparing bulk insert...`);
+            // Mapeo Local (Descartar _id interno para inserción masiva)
+            const localItems = (data || []).map(item => {
+                const localItem = this.mapRemoteToLocalImport(item, entityType);
+                if (localItem._id) delete localItem._id;
+                return localItem;
+            });
 
-                // Map all data exactly as before
-                const localItems = data.map(item => this.mapRemoteToLocalImport(item, entityType));
-
-                // Determine collection
-                let collection: any;
-                switch (entityType) {
-                    case 'VehicleType': collection = db.vehicleTypes; break;
-                    case 'Tariff': collection = db.tariffs; break;
-                    case 'Price': collection = db.prices; break; // New: Prices
-                    case 'Customer': collection = db.customers; break;
-                    case 'Vehicle': collection = db.vehicles; break;
-                    case 'Stay': collection = db.stays; break;
-                    case 'Movement': collection = db.movements; break;
-                    case 'Subscription': collection = db.subscriptions; break;
-                    case 'Garage': collection = db.garages; break;
-                    case 'Cochera': collection = db.cocheras; break;
-                    case 'Debt': collection = db.debts; break;
-                    case 'FinancialConfig': collection = db.financialConfigs; break;
-                    case 'ShiftClose': collection = db.shiftCloses; break;
-                    case 'PartialClose': collection = db.partialCloses; break;
-                    case 'Incident': collection = db.incidents; break;
-                    case 'Promo': collection = db.promos; break;
-                    case 'BuildingLevel': collection = db.buildingLevels; break;
-                }
-
-                if (collection) {
-                    // Bulk insert to prevent rapid file rewrites and EPERM errors
-                    await collection.insert(localItems);
-                    console.log(`✅ Sync: Bulk inserted ${localItems.length} records into ${entityType}`);
-                }
+            // Determinar colección
+            let collection: any;
+            switch (entityType) {
+                case 'VehicleType': collection = db.vehicleTypes; break;
+                case 'Tariff': collection = db.tariffs; break;
+                case 'Price': collection = db.prices; break;
+                case 'Customer': collection = db.customers; break;
+                case 'Vehicle': collection = db.vehicles; break;
+                case 'Stay': collection = db.stays; break;
+                case 'Movement': collection = db.movements; break;
+                case 'Subscription': collection = db.subscriptions; break;
+                case 'Garage': collection = db.garages; break;
+                case 'Cochera': collection = db.cocheras; break;
+                case 'Debt': collection = db.debts; break;
+                case 'FinancialConfig': collection = db.financialConfigs; break;
+                case 'ShiftClose': collection = db.shiftCloses; break;
+                case 'PartialClose': collection = db.partialCloses; break;
+                case 'Incident': collection = db.incidents; break;
+                case 'Promo': collection = db.promos; break;
+                case 'BuildingLevel': collection = db.buildingLevels; break;
             }
-        } catch (err) {
-            console.error(`❌ Sync: Error fetching ${tableName}`, err);
+
+            if (collection) {
+                // Validación Estricta de estado NeDB (No colgar la cola si base no inicializada)
+                if (typeof collection.loadDatabase === 'function') {
+                    // 1. Forzar/Esperar la carga explícita de la DB para evitar encolamientos infinitos
+                    await collection.loadDatabase();
+                    console.log(`✅ Datastore [${entityType}] loaded successfully.`);
+                } else if (collection.executor && collection.executor.ready === false) {
+                    throw new Error(`NeDB Store for [${entityType}] is NOT LOADED, operation rejected.`);
+                }
+
+                console.log(`📥 Sync: Wipe & Load iniciado para [${entityType}] (${localItems.length} registros)...`);
+
+                // --- Watchdog General ---
+                const withTimeout = (op: Promise<any>, timeoutMs: number = 8000, context: string = '') => {
+                    let timeoutId: NodeJS.Timeout;
+                    const timeoutPromise = new Promise((_, reject) => {
+                        timeoutId = setTimeout(() => {
+                            const executor = collection.executor || (collection.nedb && collection.nedb.executor);
+                            const queueLen = executor && executor.queue ? (typeof executor.queue.length === 'number' ? executor.queue.length : executor.queue.length()) : 'desconocido';
+                            reject(new Error(`Local DB Timeout en ${context} (${timeoutMs}ms). Ops en cola: ${queueLen}`));
+                        }, timeoutMs);
+                    });
+
+                    return Promise.race([
+                        op.then((res: any) => { clearTimeout(timeoutId); return res; }).catch((err: any) => { clearTimeout(timeoutId); throw err; }),
+                        timeoutPromise
+                    ]);
+                };
+
+                // --- 1. WIPE LOCAL (Destrucción atómica Segura) ---
+                // Importante: No envolver en new Promise con Callbacks porque estamos usando nedb-promises
+                // Solo ejecutamos remove si la base no está vacía, para ganar velocidad.
+                const count = await withTimeout(collection.count({}), 5000, `Count ${entityType}`);
+                let numRemoved = 0;
+
+                if (count > 0) {
+                    numRemoved = await withTimeout(collection.remove({}, { multi: true }), 10000, `Wipe ${entityType}`);
+                }
+
+                // --- 2. LOAD NEW BATCH (Inserción Masiva) ---
+                if (localItems.length > 0) {
+                    await withTimeout(collection.insert(localItems), 15000, `Load ${entityType}`);
+                }
+
+                console.log(`✅ Sync: [${entityType}] Sincronizado OK. (Borrados: ${numRemoved} | Insertados: ${localItems.length})`);
+            }
+
+        } catch (err: any) {
+            console.error(`❌ Sync: Error crítico sincronizando [${tableName} -> ${entityType}]:`, err.message || err);
+            throw err; // El Error sube al fetchSafe en PullAllData y detiene SU tabla, no toda la APP.
         }
     }
 
@@ -486,7 +511,7 @@ export class SyncService {
             if (base.customerId !== undefined) { base.customer_id = base.customerId; delete base.customerId; }
             if (base.garageId !== undefined) { base.garage_id = base.garageId; delete base.garageId; }
 
-            const allowedSubFields = ['id', 'garage_id', 'owner_id', 'customer_id', 'vehicle_id', 'type', 'price', 'start_date', 'end_date', 'active', 'created_at', 'updated_at'];
+            const allowedSubFields = ['id', 'garage_id', 'owner_id', 'customer_id', 'vehicle_id', 'type', 'price', 'start_date', 'end_date', 'active', 'documents_metadata', 'created_at', 'updated_at'];
             Object.keys(base).forEach(key => {
                 if (!allowedSubFields.includes(key)) {
                     delete base[key];
@@ -516,7 +541,7 @@ export class SyncService {
             if (base.amount !== undefined) { base.amount = Number(base.amount); }
             if (base.garageId !== undefined) { base.garage_id = base.garageId; delete base.garageId; }
 
-            const allowedDebtFields = ['id', 'subscription_id', 'customer_id', 'amount', 'surcharge_applied', 'status', 'due_date', 'garage_id', 'created_at', 'updated_at'];
+            const allowedDebtFields = ['id', 'subscription_id', 'customer_id', 'amount', 'surcharge_applied', 'status', 'type', 'due_date', 'garage_id', 'created_at', 'updated_at'];
             Object.keys(base).forEach(key => {
                 if (!allowedDebtFields.includes(key)) {
                     delete base[key];

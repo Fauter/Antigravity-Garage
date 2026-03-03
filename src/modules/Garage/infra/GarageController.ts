@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { SubscriptionManager } from '../domain/SubscriptionManager';
 import { SubscriptionRepository } from './SubscriptionRepository';
 import { CustomerRepository } from './CustomerRepository';
+import { DocumentService } from '../application/DocumentService.js';
 import { VehicleRepository } from './VehicleRepository';
 import { MovementRepository } from '../../Billing/infra/MovementRepository';
 import { DebtRepository } from './DebtRepository';
@@ -9,6 +10,9 @@ import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
 import { db } from '../../../infrastructure/database/datastore.js';
 import { PricingEngine } from '../../Billing/domain/PricingEngine.js';
 import { QueueService } from '../../Sync/application/QueueService.js';
+
+// Debt types eligible for automatic cancellation during cochera release
+const AUTO_CANCELLABLE_DEBT_TYPES: string[] = ['SISTEMA', 'CANON'];
 
 // --- Cochera Model ---
 interface Cochera {
@@ -395,6 +399,35 @@ export class GarageController {
                 await this.vehicleRepo.save(vehicle);
             }
 
+            // AUTO-RELEASE: If no vehicles remain, fully release the cochera
+            if (cochera.vehiculos.length === 0) {
+                const originalClienteId = cochera.clienteId;
+                cochera.clienteId = null as any;
+                cochera.status = 'Disponible';
+                cochera.piso = null as any;
+                await cocherasDB.updateOne({ id: cocheraId } as any, cochera);
+
+                // Deactivate matching subscriptions + cancel eligible debts
+                if (originalClienteId) {
+                    const subs = await this.subscriptionRepo.findByCustomerId(originalClienteId);
+                    for (const sub of subs.filter(s => s.active)) {
+                        if ((sub as any).spotNumber === cochera.numero || (sub as any).type === cochera.tipo) {
+                            sub.active = false;
+                            sub.endDate = new Date();
+                            await this.subscriptionRepo.save(sub);
+
+                            const debts = await this.debtRepo.findBySubscriptionId(sub.id);
+                            for (const debt of debts) {
+                                if (debt.status === 'PENDING' && AUTO_CANCELLABLE_DEBT_TYPES.includes((debt as any).type || 'CANON')) {
+                                    debt.status = 'CANCELLED';
+                                    await this.debtRepo.save(debt);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             res.json({ message: 'Vehículo desvinculado correctamente', cochera });
         } catch (error: any) {
             res.status(500).json({ error: error.message });
@@ -446,7 +479,7 @@ export class GarageController {
                         // Encontrar y Anular Deudas Pendientes
                         const debts = await this.debtRepo.findBySubscriptionId(sub.id);
                         for (const debt of debts) {
-                            if (debt.status === 'PENDING') {
+                            if (debt.status === 'PENDING' && AUTO_CANCELLABLE_DEBT_TYPES.includes((debt as any).type || 'CANON')) {
                                 debt.status = 'CANCELLED';
                                 await this.debtRepo.save(debt);
                             }
@@ -470,7 +503,7 @@ export class GarageController {
         let createdSubscriptionId: string | null = null;
 
         try {
-            const { customerData, vehicleData, subscriptionType, paymentMethod, amount, operator, billingType } = req.body;
+            const { customerData, vehicleData, subscriptionType, paymentMethod, amount, operator, billingType, photos } = req.body;
             const garageId = req.headers['x-garage-id'] as string || req.body.garageId;
             if (!garageId) {
                 return res.status(400).json({ error: 'x-garage-id header or body.garageId is required' });
@@ -627,6 +660,20 @@ export class GarageController {
             const savedSub = await this.subscriptionRepo.save(newSubscription);
             createdSubscriptionId = savedSub.id; // Track for rollback
 
+            // 4.5. Process Document Photos (Optional — Never blocks transaction)
+            const hasPhotos = photos && typeof photos === 'object' && Object.values(photos).some((v: any) => v && String(v).length > 0);
+            if (hasPhotos) {
+                try {
+                    const docsMeta = await DocumentService.processPhotos(savedSub.id, garageId, photos);
+                    (savedSub as any).documents_metadata = docsMeta;
+                    await this.subscriptionRepo.save(savedSub);
+                    console.log(`📸 [Abonos] Documentación procesada: ${docsMeta.documents.length} archivo(s)`);
+                } catch (photoErr: any) {
+                    console.warn(`⚠️ [Abonos] Error procesando fotos (no se aborta la transacción):`, photoErr?.message || photoErr);
+                    // Photos are optional — subscription proceeds without them
+                }
+            }
+
             // 5. Financial Movement (CRITICAL - TODO O NADA)
             try {
                 // Validación para evitar montos nulos/ceros en altas de abono
@@ -651,14 +698,13 @@ export class GarageController {
 
             } catch (movementError: any) {
                 console.error('Fallo al crear Movimiento de Caja. Iniciando Rollback...', movementError);
-                // ROLLBACK MANUALL (Compensatorio)
+                // ROLLBACK MANUAL (Compensatorio)
                 if (createdSubscriptionId) {
                     await this.subscriptionRepo.delete(createdSubscriptionId);
+                    // Cleanup orphaned document files from Storage (best-effort)
+                    DocumentService.cleanupOrphanedDocs(garageId, createdSubscriptionId).catch(() => { });
                 }
                 if (createdVehicleId) {
-                    // Assuming vehicleRepo.delete exists, else bypass. It might leave orphan vehicle data if not.
-                    // If not exposed, you might need to add it to JsonDB wrapper. 
-                    // Most NeDB/JsonDB standard wrappers have a delete/remove.
                     try { await (this.vehicleRepo as any).db.delete(createdVehicleId); } catch (e) { }
                 }
                 if (createdCustomerId) {
@@ -846,6 +892,7 @@ export class GarageController {
                                 amount: finalPrice,
                                 surchargeApplied: 0,
                                 status: existingDebt ? existingDebt.status : 'PENDING',
+                                type: 'CANON',
                                 dueDate: new Date(subEndDate.getTime()),
                                 createdAt: existingDebt ? existingDebt.createdAt : new Date(),
                                 updatedAt: new Date()
