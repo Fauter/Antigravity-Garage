@@ -143,6 +143,7 @@ export const StaySchema = z.object({
   active: z.boolean().default(true),
   isSubscriber: z.boolean().default(false),
   subscriptionId: UuidSchema.optional().nullable(),
+  ticket_code: z.string().optional(),
   createdAt: TimestampSchema.default(() => new Date()),
 });
 export type Stay = z.infer<typeof StaySchema>;

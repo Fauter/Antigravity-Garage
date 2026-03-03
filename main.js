@@ -1,5 +1,6 @@
-const { app, BrowserWindow, Menu } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain } = require('electron');
 const path = require('path');
+const { initPrintManager } = require('./PrintManager');
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
 // Start the backend server
@@ -39,7 +40,11 @@ const startServer = () => {
     }
 };
 
-startServer();
+if (isDev) {
+    console.log('🛠️ [DEV] Saltando orquestación interna del Backend (ya manejada por concurrently)');
+} else {
+    startServer(); // Solo arranca el servidor interno si NO estamos en desarrollo
+}
 
 let mainWindow;
 
@@ -54,8 +59,9 @@ function createWindow() {
         icon: iconPath,
         webPreferences: {
             nodeIntegration: true,
-            contextIsolation: false,
-            enableRemoteModule: true
+            contextIsolation: true,
+            enableRemoteModule: true,
+            preload: path.join(__dirname, 'preload.js')
         }
     });
 
@@ -71,14 +77,8 @@ function createWindow() {
         mainWindow.loadURL('http://localhost:3000');
     }
 
-    // Force Logout Quirúrgico: Solo borra ag_user (sesión operador).
-    // Preserva ag_terminal_config (vínculo PC ↔ Garaje, permanente).
-    mainWindow.webContents.on('did-finish-load', () => {
-        mainWindow.webContents.executeJavaScript(`
-            localStorage.removeItem('ag_user');
-            console.log('🧹 Force Logout: ag_user eliminado. ag_terminal_config preservado.');
-        `).catch(err => console.warn('⚠️ Force Logout script error:', err));
-    });
+    // Force Logout Quirúrgico: Ahora manejado sincrónicamente en preload.js
+    // para evitar race conditions con React y Supabase.
 
     // Atajos de teclado globales (F11 = fullscreen, Esc = salir de fullscreen)
     mainWindow.webContents.on('before-input-event', (event, input) => {
@@ -108,6 +108,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
     createWindow();
+    initPrintManager();
 
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();

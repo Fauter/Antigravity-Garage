@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import { toast } from 'sonner';
-import { Wallet, TrendingUp, Calendar, User, ArrowDownRight, LogOut, FileText, CheckCircle } from 'lucide-react';
+import { Wallet, TrendingUp, Calendar, User, ArrowDownRight, LogOut, FileText, CheckCircle, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 interface Movement {
     id?: string;
@@ -44,6 +44,7 @@ const CajaPage: React.FC = () => {
     const [totalInCash, setTotalInCash] = useState<number | ''>('');
     const [stayingInCash, setStayingInCash] = useState<number | ''>('');
     const renderedAmount = (Number(totalInCash) || 0) - (Number(stayingInCash) || 0);
+    const difference = totalInCash !== '' ? Number(totalInCash) - total : null;
 
     // Partial close form state
     const [partialCloseStep, setPartialCloseStep] = useState<1 | 2>(1);
@@ -193,7 +194,7 @@ const CajaPage: React.FC = () => {
                             <TrendingUp className="w-8 h-8" />
                         </div>
                         <div>
-                            <span className="block text-emerald-500/80 text-xs font-bold uppercase tracking-widest">Cálculo de Caja</span>
+                            <span className="block text-emerald-500/80 text-xs font-bold uppercase tracking-widest">Efectivo en Caja</span>
                             <span className="text-4xl font-black text-white tracking-tighter">${total.toLocaleString()}</span>
                         </div>
                     </div>
@@ -317,6 +318,13 @@ const CajaPage: React.FC = () => {
                                                 placeholder="0.00"
                                             />
                                         </div>
+                                        {difference !== null && (
+                                            <div className="mt-2 flex items-center gap-1.5 font-mono text-sm font-bold">
+                                                {difference === 0 && <span className="text-emerald-500 flex items-center gap-1"><CheckCircle2 className="w-4 h-4" /> Caja Cuadrada</span>}
+                                                {difference < 0 && <span className="text-amber-500 flex items-center gap-1"><AlertCircle className="w-4 h-4" /> Faltante: -${Math.abs(difference).toLocaleString()}</span>}
+                                                {difference > 0 && <span className="text-emerald-400 flex items-center gap-1"><TrendingUp className="w-4 h-4" /> Sobrante: +${difference.toLocaleString()}</span>}
+                                            </div>
+                                        )}
                                     </div>
                                     <div>
                                         <label className="block text-slate-400 text-sm font-bold mb-2">Queda en Caja (Fondo)</label>
@@ -363,9 +371,18 @@ const CajaPage: React.FC = () => {
                                 </h3>
 
                                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-4 mb-6 relative overflow-hidden">
-                                    <div className="flex justify-between items-center text-slate-300">
-                                        <span>Total en Caja:</span>
-                                        <span className="font-mono text-lg">${Number(totalInCash).toLocaleString()}</span>
+                                    <div className="flex justify-between items-start text-slate-300">
+                                        <span className="pt-1">Total en Caja:</span>
+                                        <div className="flex flex-col items-end">
+                                            <span className="font-mono text-lg">${Number(totalInCash).toLocaleString()}</span>
+                                            {difference !== null && (
+                                                <div className="flex items-center gap-1 font-mono text-xs font-bold mt-0.5">
+                                                    {difference === 0 && <span className="text-emerald-500 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Caja Cuadrada</span>}
+                                                    {difference < 0 && <span className="text-amber-500 flex items-center gap-1"><AlertCircle className="w-3 h-3" /> Faltante: -${Math.abs(difference).toLocaleString()}</span>}
+                                                    {difference > 0 && <span className="text-emerald-400 flex items-center gap-1"><TrendingUp className="w-3 h-3" /> Sobrante: +${difference.toLocaleString()}</span>}
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                     <div className="flex justify-between items-center text-slate-300">
                                         <span>Queda en Caja:</span>

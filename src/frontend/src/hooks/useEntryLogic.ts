@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '../services/api';
@@ -37,14 +37,6 @@ export const useEntryLogic = () => {
         [rawVehicleTypes, getSortedVehicleTypes]
     );
 
-    // Auto-select first valid type if available and none selected
-    useEffect(() => {
-        if (!vehicleType && vehicleTypes.length > 0) {
-            const firstValid = vehicleTypes.find((v: any) => !v.disabled);
-            if (firstValid) setVehicleType(firstValid.id);
-        }
-    }, [vehicleTypes, vehicleType]);
-
     // Mutation para registrar entrada
     const entryMutation = useMutation({
         mutationFn: async (data: EntryFormData) => {
@@ -72,8 +64,7 @@ export const useEntryLogic = () => {
 
     const resetForm = () => {
         setPlate('');
-        // Keep vehicle type selected or reset to first? User preference usually to keep last.
-        // But for safety let's keep current.
+        setVehicleType('');
     };
 
     const handleSubmit = async (e: React.FormEvent) => {

@@ -22,6 +22,8 @@ export class AccessManager {
         isSubscriber: boolean = false,
         subscriptionId?: string | null
     ): Stay {
+        const ticket_code = uuidv4().slice(0, 8).toUpperCase();
+
         const entryStay: Stay = {
             id: uuidv4(),
             plate: plate.toUpperCase(),
@@ -30,11 +32,14 @@ export class AccessManager {
             active: true,
             isSubscriber,
             subscriptionId: subscriptionId || null,
-
+            ticket_code,
             createdAt: new Date(),
         };
 
-        return StaySchema.parse(entryStay);
+        const parsedStay = StaySchema.parse(entryStay);
+        // FORCE the property even if Zod strips unknowns due to cache/build mismatch
+        parsedStay.ticket_code = ticket_code;
+        return parsedStay;
     }
 
     /**

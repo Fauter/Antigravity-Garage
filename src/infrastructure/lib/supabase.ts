@@ -29,6 +29,9 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     auth: {
         persistSession: true,
         autoRefreshToken: true,
+        storage: typeof globalThis !== 'undefined' && (globalThis as any).sessionStorage
+            ? (globalThis as any).sessionStorage
+            : undefined,
     },
     // Customize fetch to be robust for offline usage if needed, 
     // but supabase-js handles basic retries.

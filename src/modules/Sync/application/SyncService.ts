@@ -434,6 +434,7 @@ export class SyncService {
                 active: item.active,
                 is_subscriber: item.isSubscriber || false,
                 subscription_id: item.subscriptionId || item.subscription_id || null,
+                ticket_code: item.ticket_code || null,
                 entry_time: item.entryTime ? new Date(item.entryTime).toISOString() : (item.entry_time || null),
                 exit_time: item.exitTime ? new Date(item.exitTime).toISOString() : (item.exit_time || null)
             };

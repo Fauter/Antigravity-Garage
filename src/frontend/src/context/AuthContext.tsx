@@ -33,8 +33,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const [isGlobalSyncing, setIsGlobalSyncing] = useState(false);
 
     useEffect(() => {
-        // Check local storage for persisted session
-        const storedUser = localStorage.getItem('ag_user');
+        // Check session storage for persisted session
+        const storedUser = sessionStorage.getItem('ag_user');
         if (storedUser) {
             try {
                 const parsed = JSON.parse(storedUser);
@@ -43,7 +43,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 }
             } catch (e) {
                 console.error('Failed to parse stored user', e);
-                localStorage.removeItem('ag_user');
+                sessionStorage.removeItem('ag_user');
             }
         }
         setIsLoading(false);
@@ -57,7 +57,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             const userData: User = res.data;
 
             setUser(userData);
-            localStorage.setItem('ag_user', JSON.stringify(userData));
+            sessionStorage.setItem('ag_user', JSON.stringify(userData));
             setIsGlobalSyncing(true); // Assuming sync started on backend
             return true;
         } catch (error) {
@@ -69,7 +69,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const logout = () => {
         setUser(null);
         setIsGlobalSyncing(false);
-        localStorage.removeItem('ag_user');
+        sessionStorage.removeItem('ag_user');
+        localStorage.removeItem('ag_user'); // Fallback cleanup in case of legacy data
     };
 
     // Global Sync Indicator Polling

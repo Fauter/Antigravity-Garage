@@ -325,7 +325,7 @@ const PanelSalida: React.FC = () => {
                                     value={plate}
                                     onChange={(e) => setPlate(e.target.value.toUpperCase())}
                                     className="flex-1 bg-gray-800 border border-gray-700 rounded p-2 text-xl font-mono text-center uppercase text-white outline-none focus:border-blue-500"
-                                    maxLength={7}
+                                    maxLength={10}
                                     placeholder="AAA-000"
                                     autoFocus
                                 />

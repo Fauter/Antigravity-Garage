@@ -101,6 +101,7 @@ const StaySchema = new Schema<import('../../shared/schemas').Stay>({
     entryTime: { type: Date, required: true },
     exitTime: { type: Date },
     active: { type: Boolean, default: true },
+    ticket_code: { type: String },
     createdAt: { type: Date, default: Date.now }
 });
 

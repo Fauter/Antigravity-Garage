@@ -43,14 +43,14 @@ export class AccessController {
             if (!rawPlate) return res.status(400).json({ error: 'Plate is required' });
 
             // Normalize plate: uppercase, remove spaces, dashes, and underscores
-            const plate = rawPlate.toUpperCase().replace(/[\s\-_]/g, '');
+            const plate = rawPlate.trim().toUpperCase().replace(/[\s\-_]/g, '');
 
             if (!garageId) {
                 console.warn('⚠️ AccessController: Missing x-garage-id header on entry');
             }
 
             // 0. Check for existing Active Stay (Prevent Double Entry)
-            const existingStay = await this.stayRepository.findActiveByPlate(plate, garageId);
+            const existingStay = await this.stayRepository.findActiveByPlateOrTicket(plate, garageId);
             if (existingStay) {
                 return res.status(409).json({ error: 'Vehicle already in garage', stay: existingStay });
             }
@@ -150,9 +150,9 @@ export class AccessController {
 
             if (!rawPlate) return res.status(400).json({ error: 'Plate is required' });
 
-            const plate = rawPlate.toUpperCase().replace(/[\s\-_]/g, '');
+            const plate = rawPlate.trim().toUpperCase().replace(/[\s\-_]/g, '');
 
-            const stay = await this.stayRepository.findActiveByPlate(plate, garageId);
+            const stay = await this.stayRepository.findActiveByPlateOrTicket(plate, garageId);
             if (!stay) {
                 return res.status(404).json({ error: 'No active stay found for plate' });
             }
@@ -256,8 +256,8 @@ export class AccessController {
     getActiveStay = async (req: Request, res: Response) => {
         try {
             const rawPlate = req.params.plate;
-            const plate = String(rawPlate).toUpperCase().replace(/[\s\-_]/g, '');
-            const stay = await this.stayRepository.findActiveByPlate(plate);
+            const plate = String(rawPlate).trim().toUpperCase().replace(/[\s\-_]/g, '');
+            const stay = await this.stayRepository.findActiveByPlateOrTicket(plate);
             if (!stay) return res.status(404).json({ error: 'Stay not found' });
 
             // CRÍTICO: Garantía de datos directos de la tabla Vehicle

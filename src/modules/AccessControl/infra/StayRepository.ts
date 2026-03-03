@@ -14,6 +14,7 @@ export interface Stay {
     active?: boolean;
     isSubscriber?: boolean;
     subscriptionId?: string | null;
+    ticket_code?: string;
 }
 
 export class StayRepository {
@@ -44,6 +45,7 @@ export class StayRepository {
             ...dataWithoutInternalId,
             id: id, // Ensure public ID is explicit
             garageId: stay.garageId, // Explicitly ensure it's here
+            ticket_code: stay.ticket_code, // Explicit inclusion for persistence 
             updatedAt: new Date()
         };
 
@@ -72,31 +74,31 @@ export class StayRepository {
             vehicleType: stay.vehicleType,
             active: stay.active,
             isSubscriber: stay.isSubscriber,
-            subscriptionId: stay.subscriptionId
+            subscriptionId: stay.subscriptionId,
+            ticket_code: stay.ticket_code
         };
     }
 
-    async findActiveByPlate(plate: string, garageId?: string): Promise<Stay | null> {
+    async findActiveByPlateOrTicket(queryInput: string, garageId?: string): Promise<Stay | null> {
         // Local Only (Offline First)
         try {
-            // Create a regex to match the plate ignoring spaces, dashes, and casing
-            // e.g. "ABC123" -> /A[\s\-_]*B[\s\-_]*C[\s\-_]*1[\s\-_]*2[\s\-_]*3/i
-            const plateRegex = new RegExp([...plate].join('[\\\\s\\\\-_]*'), 'i');
-            const query: any = {
-                plate: { $regex: plateRegex }
-            };
-
-            // NeDB Logic for "Active" (exitTime is null or missing)
-            // NeDB syntax: { $or: [{ exitTime: null }, { exitTime: { $exists: false } }] }
-            // But we can filter in memory if complex, but NeDB supports basic queries.
-
+            const query: any = {};
             if (garageId) query.garageId = garageId;
 
-            // Find all for plate, then filter in memory for safety regarding 'active' logic nuances
-            const candidates = await db.stays.find(query);
-            const active = candidates.find((s: any) => !s.exitTime);
+            // 1. Exact match for ticket_code (Highest Priority)
+            const ticketCandidates = await db.stays.find({ ...query, ticket_code: queryInput });
+            const activeByTicket = ticketCandidates.find((s: any) => !s.exitTime);
+            if (activeByTicket) return this.mapStay(activeByTicket);
 
-            if (active) return this.mapStay(active);
+            // 2. Regex match for plate ignoring spaces, dashes, and casing
+            const plateRegex = new RegExp([...queryInput].join('[\\\\s\\\\-_]*'), 'i');
+            const plateCandidates = await db.stays.find({ ...query, plate: { $regex: plateRegex } });
+
+            // NeDB Logic for "Active" (exitTime is null or missing)
+            // Filter in memory for safety regarding 'active' logic nuances
+            const activeByPlate = plateCandidates.find((s: any) => !s.exitTime);
+
+            if (activeByPlate) return this.mapStay(activeByPlate);
             return null;
 
         } catch (e) {
