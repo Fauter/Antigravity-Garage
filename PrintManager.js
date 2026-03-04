@@ -5,89 +5,31 @@
  *  1. Registrar handlers IPC para impresión
  *  2. Cola secuencial de jobs (anti-bloqueo)
  *  3. BrowserWindow oculta por job → webContents.print({ silent: true })
- *  4. Cache de impresora por defecto (60s)
- *  5. Timeout de seguridad (15s) por job
+ *  4. Detección dinámica de impresora (isDefault → status:0 → primera)
+ *  5. Timeout de seguridad (25s) por job + delay de spooler (5s)
  */
 
 const { BrowserWindow, ipcMain } = require('electron');
+
+// ── DEBUG FLAG ───────────────────────────────────────────────────────────
+// Poner en true para mantener la BrowserWindow viva tras imprimir.
+// Esto permite verificar si el destroy() prematuro es el que corta el GDI.
+// Establecer via variable de entorno: DEBUG_KEEP_WINDOW_ALIVE=true
+const DEBUG_KEEP_WINDOW_ALIVE = process.env.DEBUG_KEEP_WINDOW_ALIVE === 'true';
 
 // ── Print Queue ──────────────────────────────────────────────────────────
 // Cadena de promesas: cada job espera a que termine el anterior.
 // Esto previene que imprimir varios tickets rápido sature el spooler.
 let printChain = Promise.resolve();
 
-// ── Printer Cache ────────────────────────────────────────────────────────
-let cachedPrinterName = null;
-let cacheTimestamp = 0;
-const CACHE_TTL_MS = 60_000; // 60 segundos
-
-/**
- * Obtiene la impresora por defecto del sistema.
- * Usa cache de 60s para no consultar en cada ticket.
- * Fallback: si la cacheada ya no existe, refresca.
- */
-async function getDefaultPrinterName() {
-    const now = Date.now();
-
-    if (cachedPrinterName && (now - cacheTimestamp) < CACHE_TTL_MS) {
-        return cachedPrinterName;
-    }
-
-    try {
-        const tmpWin = new BrowserWindow({ show: false, width: 1, height: 1 });
-        const printers = await tmpWin.webContents.getPrintersAsync();
-        tmpWin.destroy();
-
-        if (!printers || printers.length === 0) {
-            console.warn('⚠️ [PrintManager] No se detectaron impresoras.');
-            return null;
-        }
-
-        // 1. Intentar encontrar la marcada como Default por el sistema
-        let selected = printers.find(p => p.isDefault);
-
-        // 2. Si falla (como ahora), buscar por nombre específico (Fallback de seguridad)
-        if (!selected) {
-            console.log("🔍 [PrintManager] Falló isDefault, buscando 'Microsoft Print to PDF'...");
-            selected = printers.find(p => p.name.includes("Print to PDF"));
-        }
-
-        // 3. Si sigue fallando, tomar la primera de la lista
-        if (!selected) {
-            selected = printers[0];
-        }
-
-        cachedPrinterName = selected.name;
-        cacheTimestamp = now;
-
-        console.log(`🖨️ [PrintManager] Impresora seleccionada: "${cachedPrinterName}" (Detección: ${selected.isDefault ? 'SISTEMA' : 'NOMBRE/LISTA'})`);
-        return cachedPrinterName;
-    } catch (err) {
-        console.error('❌ [PrintManager] Error al obtener impresoras:', err);
-        return cachedPrinterName;
-    }
-}
-
-/**
- * Invalida la cache de impresora para forzar re-detección.
- */
-function invalidatePrinterCache() {
-    cachedPrinterName = null;
-    cacheTimestamp = 0;
-}
-
 /**
  * Ejecuta un trabajo de impresión individual.
  * Crea una BrowserWindow oculta, carga el HTML, imprime, destruye.
+ * @param {string} htmlContent - HTML renderizable del ticket
+ * @param {object} printerConfig - { deviceName?: string, pageWidth?: number (micrones) }
  */
-async function executePrintJob(htmlContent) {
-    const JOB_TIMEOUT_MS = 15_000; // 15 segundos máximo por job
-
-    // Obtener impresora
-    const deviceName = await getDefaultPrinterName();
-    if (!deviceName) {
-        return { success: false, error: 'No se detectó ninguna impresora en el sistema.' };
-    }
+async function executePrintJob(htmlContent, printerConfig = {}) {
+    const JOB_TIMEOUT_MS = 25_000; // 25s — margen extra para ticketeras lentas por USB serial
 
     let printWindow = null;
 
@@ -97,40 +39,101 @@ async function executePrintJob(htmlContent) {
             (async () => {
                 printWindow = new BrowserWindow({
                     show: false,
-                    width: 226,   // ~58mm @ 96dpi
-                    height: 800,
+                    width: 226,       // ~58mm @ 96dpi
+                    height: 1200,     // Más altura para tickets con dos copias (page-break)
                     webPreferences: {
-                        offscreen: true,
                         javascript: false, // No necesitamos JS en el ticket
+                        zoomFactor: 1.0,   // Previene distorsión por escalado de Windows (125%, 150%)
                     }
                 });
+
+                // Forzar DPI 1:1 para evitar que el escalado del sistema afecte el viewport
+                printWindow.webContents.setZoomFactor(1.0);
 
                 // Cargar HTML del ticket
                 const encodedHtml = encodeURIComponent(htmlContent);
                 await printWindow.loadURL(`data:text/html;charset=utf-8,${encodedHtml}`);
 
-                // Pequeña espera adicional para renderizado de imágenes/barcodes base64
-                await new Promise(resolve => setTimeout(resolve, 300));
+                // Espera para renderizado completo de imágenes/barcodes base64
+                await new Promise(resolve => setTimeout(resolve, 800));
 
-                // Imprimir silenciosamente
+                // ── Resolución de impresora ──
+                let printerName = '(default del sistema)';
+                let useDeviceName = undefined; // si se define, fuerza deviceName en print()
+
+                // Prioridad 1: Configuración manual del usuario (desde UI Config)
+                if (printerConfig.deviceName) {
+                    useDeviceName = printerConfig.deviceName;
+                    printerName = printerConfig.deviceName;
+                    console.log(`🎯 [PrintManager] Usando impresora CONFIGURADA por usuario: "${useDeviceName}"`);
+
+                    // Verificar que la impresora configurada todavía existe en el sistema
+                    try {
+                        const printers = await printWindow.webContents.getPrintersAsync();
+                        console.log(`📋 [PrintManager] === IMPRESORAS DETECTADAS (${printers.length}) ===`);
+                        printers.forEach((p, i) => {
+                            console.log(`   [${i}] "${p.name}" | isDefault: ${p.isDefault} | status: ${p.status}`);
+                        });
+                        console.log(`📋 [PrintManager] ==========================================`);
+
+                        const exists = printers.some(p => p.name === useDeviceName);
+                        if (!exists) {
+                            console.warn(`⚠️ [PrintManager] ¡ALERTA! Impresora configurada "${useDeviceName}" NO encontrada en el sistema. Se usará fallback del OS.`);
+                            useDeviceName = undefined; // dejar que el OS elija
+                        }
+                    } catch (err) {
+                        console.warn(`⚠️ [PrintManager] No se pudo verificar existencia de impresora: ${err.message}`);
+                    }
+                } else {
+                    // Prioridad 2: Sin config → log diagnóstico y dejar que el OS decida
+                    try {
+                        const printers = await printWindow.webContents.getPrintersAsync();
+                        console.log(`📋 [PrintManager] Sin config manual. === IMPRESORAS DETECTADAS (${printers.length}) ===`);
+                        printers.forEach((p, i) => {
+                            console.log(`   [${i}] "${p.name}" | isDefault: ${p.isDefault} | status: ${p.status}`);
+                        });
+                        console.log(`📋 [PrintManager] Se usará la impresora default del OS.`);
+                    } catch (err) {
+                        console.warn(`⚠️ [PrintManager] Error al listar impresoras: ${err.message}`);
+                    }
+                }
+
+                // ── Construir opciones de impresión ──
+                // No se fuerza pageSize: se deja que el CSS @page { size: 58mm auto }
+                // del HTML defina las dimensiones, compatible con rollo continuo.
+                const printOptions = {
+                    silent: true,
+                    printBackground: true,
+                    margins: { marginType: 'none' },
+                };
+                // Solo forzar deviceName si hay una impresora configurada y verificada
+                if (useDeviceName) {
+                    printOptions.deviceName = useDeviceName;
+                }
+
+                // ── Imprimir ──
+                console.log(`📄 [PrintManager] Enviando a "${useDeviceName || 'OS default'}"...`);
                 return new Promise((resolve) => {
                     printWindow.webContents.print(
-                        {
-                            silent: true,
-                            printBackground: true,
-                            deviceName: deviceName,
-                            margins: { marginType: 'none' },
-                        },
+                        printOptions,
                         (success, failureReason) => {
                             if (success) {
-                                resolve({ success: true });
+                                console.log(`✅ [PrintManager] Callback success recibido. Esperando 5s para vaciado de buffer del spooler...`);
+                                // ── Delay de sincronización con spooler (5000ms) ──
+                                // Las ticketeras térmicas necesitan tiempo para que el
+                                // spooler de Windows termine de vaciar el buffer GDI
+                                // hacia el puerto USB/Serial del dispositivo físico.
+                                // Sin este delay, destroy() corta el stream prematuramente.
+                                setTimeout(() => {
+                                    console.log(`✅ [PrintManager] Delay de spooler completado. Liberando job.`);
+                                    resolve({ success: true });
+                                }, 5000);
                             } else {
-                                // Si falla con la impresora cacheada, invalidar cache
-                                invalidatePrinterCache();
-                                resolve({
+                                console.error(`❌ [PrintManager] Impresión fallida en "${printerName}": ${failureReason}`);
+                                setTimeout(() => resolve({
                                     success: false,
                                     error: failureReason || 'Error desconocido de impresión'
-                                });
+                                }), 1000);
                             }
                         }
                     );
@@ -150,8 +153,11 @@ async function executePrintJob(htmlContent) {
         console.error('❌ [PrintManager] Error en job de impresión:', err);
         return { success: false, error: String(err.message || err) };
     } finally {
-        // ── Limpieza de memoria: SIEMPRE destruir la ventana ──
-        if (printWindow && !printWindow.isDestroyed()) {
+        // ── Limpieza de memoria ──
+        if (DEBUG_KEEP_WINDOW_ALIVE) {
+            console.log(`🔧 [PrintManager] DEBUG: Keep-alive activo → la BrowserWindow NO será destruida.`);
+            console.log(`🔧 [PrintManager] DEBUG: Si el ticket sale completo, el destroy() prematuro ES la causa raíz.`);
+        } else if (printWindow && !printWindow.isDestroyed()) {
             printWindow.destroy();
             printWindow = null;
         }
@@ -162,10 +168,10 @@ async function executePrintJob(htmlContent) {
  * Encola un trabajo de impresión en la cola secuencial.
  * Cada job espera a que termine el anterior antes de ejecutarse.
  */
-function enqueuePrint(htmlContent) {
+function enqueuePrint(htmlContent, printerConfig = {}) {
     return new Promise((resolve) => {
         printChain = printChain
-            .then(() => executePrintJob(htmlContent))
+            .then(() => executePrintJob(htmlContent, printerConfig))
             .then((result) => resolve(result))
             .catch((err) => {
                 console.error('❌ [PrintManager] Error inesperado en cola:', err);
@@ -179,15 +185,16 @@ function enqueuePrint(htmlContent) {
  * Llamar una vez después de que la app esté lista.
  */
 function initPrintManager() {
-    console.log('🖨️ [PrintManager] Inicializando módulo de impresión silenciosa...');
+    console.log('🖨️ [PrintManager] Inicializando módulo de impresión silenciosa (Default OS)...');
 
     // ── Canal principal: impresión silenciosa ──
-    ipcMain.handle('print:silent', async (_event, htmlContent) => {
+    ipcMain.handle('print:silent', async (_event, htmlContent, printerConfig) => {
         if (!htmlContent || typeof htmlContent !== 'string') {
             return { success: false, error: 'HTML de ticket inválido o vacío' };
         }
-        console.log(`🖨️ [PrintManager] Job encolado (${Math.round(htmlContent.length / 1024)}KB)`);
-        return enqueuePrint(htmlContent);
+        const config = printerConfig || {};
+        console.log(`🖨️ [PrintManager] Job encolado (${Math.round(htmlContent.length / 1024)}KB) | device: "${config.deviceName || 'OS default'}" | width: ${config.pageWidth ? (config.pageWidth / 1000) + 'mm' : 'auto'}`);
+        return enqueuePrint(htmlContent, config);
     });
 
     // ── Canal auxiliar: listar impresoras ──

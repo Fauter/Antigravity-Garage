@@ -56,14 +56,14 @@ export const PrinterService = {
             <div style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center;">
                 
                 <div style="margin-bottom: 10px; margin-top: 10px;">
-                    <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: 900; font-size: 14px; margin-bottom: 5px;">
+                    <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
                         [X]
                     </div>
-                    <div style="font-size: 10px; font-weight: 900;">DOCUMENTO NO VÁLIDO COMO FACTURA</div>
+                    <div style="font-size: 10px; font-weight: bold;">DOCUMENTO NO VÁLIDO COMO FACTURA</div>
                 </div>
 
                 <div style="margin-bottom: 5px;">
-                    <h2 style="margin: 0; font-size: 18px; font-weight: 900; letter-spacing: -0.5px; text-transform: uppercase;">${config.name}</h2>
+                    <h2 style="margin: 0; font-size: 18px; font-weight: bold; letter-spacing: -0.5px; text-transform: uppercase;">${config.name}</h2>
                     <div style="font-size: 12px; font-family: sans-serif; margin-top: 2px;">${config.address}</div>
                 </div>
 
@@ -85,18 +85,18 @@ export const PrinterService = {
                     <table style="width: 100%; font-size: 12px; line-height: 1.4; font-family: 'Courier New', Courier, monospace;">
                         <tr>
                             <td style="text-align: left;">Ingreso:</td>
-                            <td style="text-align: right; font-weight: 900;">${formattedDate}</td>
+                            <td style="text-align: right; font-weight: bold;">${formattedDate}</td>
                         </tr>
                         <tr>
                             <td style="text-align: left;">Tipo:</td>
-                            <td style="text-align: right; font-weight: 900;">${stay.vehicleType || 'Auto'}</td>
+                            <td style="text-align: right; font-weight: bold;">${stay.vehicleType || 'Auto'}</td>
                         </tr>
                     </table>
                 </div>
 
                 <div style="margin: 15px 0;">
                     <div style="font-size: 11px; margin-bottom: 2px;">PATENTE</div>
-                    <div style="font-size: 28px; font-weight: 900; letter-spacing: 1px;">${stay.plate}</div>
+                    <div style="font-size: 28px; font-weight: bold; letter-spacing: 1px;">${stay.plate}</div>
                 </div>
 
                 <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
@@ -105,12 +105,12 @@ export const PrinterService = {
                     <div>Conserve este ticket para retirar su vehículo.</div>
                     <div>La empresa no se responsabiliza por objetos</div>
                     <div>dejados en el interior del mismo.</div>
-                    <div style="font-weight: 900; margin-top: 5px;">¡Gracias por su visita!</div>
+                    <div style="font-weight: bold; margin-top: 5px;">¡Gracias por su visita!</div>
                 </div>
                 
                 ${PrinterService.getLegalFooter()}
 
-                <div style="font-size: 10px; font-weight: 900; margin-top: 10px; letter-spacing: 2px;">
+                <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
                 <!-- Spacing for printer cut -->
@@ -143,14 +143,14 @@ export const PrinterService = {
             <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center;">
                 
                 <div style="margin-bottom: 10px; margin-top: 10px;">
-                    <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: 900; font-size: 14px; margin-bottom: 5px;">
+                    <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
                         [X]
                     </div>
-                    <div style="font-size: 10px; font-weight: 900;">DOCUMENTO NO VÁLIDO COMO FACTURA</div>
+                    <div style="font-size: 10px; font-weight: bold;">DOCUMENTO NO VÁLIDO COMO FACTURA</div>
                 </div>
 
                 <div style="margin-bottom: 5px;">
-                    <h2 style="margin: 0; font-size: 18px; font-weight: 900; letter-spacing: -0.5px; text-transform: uppercase;">${config.name}</h2>
+                    <h2 style="margin: 0; font-size: 18px; font-weight: bold; letter-spacing: -0.5px; text-transform: uppercase;">${config.name}</h2>
                     <div style="font-size: 12px; font-family: sans-serif; margin-top: 2px;">${config.address}</div>
                 </div>
 
@@ -158,7 +158,7 @@ export const PrinterService = {
 
                 <div style="margin-bottom: 5px;">
                     <div style="font-size: 11px;">Ticket: <b>${shortId}</b></div>
-                    <div style="font-size: 14px; font-weight: 900; margin-top: 3px;">${title}</div>
+                    <div style="font-size: 14px; font-weight: bold; margin-top: 3px;">${title}</div>
                 </div>
 
                 ${barcodeDataUrl ? `
@@ -173,30 +173,30 @@ export const PrinterService = {
                     <table style="width: 100%; font-size: 12px; line-height: 1.4; font-family: 'Courier New', Courier, monospace;">
                         <tr>
                             <td style="text-align: left;">Ingreso:</td>
-                            <td style="text-align: right; font-weight: 900;">${formattedEntry}</td>
+                            <td style="text-align: right; font-weight: bold;">${formattedEntry}</td>
                         </tr>
                         <tr>
                             <td style="text-align: left;">Salida:</td>
-                            <td style="text-align: right; font-weight: 900;">${formattedExit}</td>
+                            <td style="text-align: right; font-weight: bold;">${formattedExit}</td>
                         </tr>
                         <tr>
                             <td style="text-align: left;">Duración:</td>
-                            <td style="text-align: right; font-weight: 900;">${duration}</td>
+                            <td style="text-align: right; font-weight: bold;">${duration}</td>
                         </tr>
                     </table>
                 </div>
 
                 <div style="margin: 15px 0;">
                     <div style="font-size: 11px; margin-bottom: 2px;">PATENTE</div>
-                    <div style="font-size: 28px; font-weight: 900; letter-spacing: 1px;">${stay.plate}</div>
+                    <div style="font-size: 28px; font-weight: bold; letter-spacing: 1px;">${stay.plate}</div>
                 </div>
 
                 <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
 
                 ${showTotal ? `
                 <div style="margin: 15px 0;">
-                    <div style="font-size: 14px; font-weight: 900;">TOTAL</div>
-                    <div style="font-size: 32px; font-weight: 900; letter-spacing: -1px;">$${totalAmount}</div>
+                    <div style="font-size: 14px; font-weight: bold;">TOTAL</div>
+                    <div style="font-size: 32px; font-weight: bold; letter-spacing: -1px;">$${totalAmount}</div>
                 </div>
                 
                 <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
@@ -204,11 +204,11 @@ export const PrinterService = {
                 <table style="width: 100%; font-size: 11px; line-height: 1.3; font-family: 'Courier New', Courier, monospace;">
                     <tr>
                         <td style="text-align: left;">Medio de Pago:</td>
-                        <td style="text-align: right; font-weight: 900;">${paymentMethod}</td>
+                        <td style="text-align: right; font-weight: bold;">${paymentMethod}</td>
                     </tr>
                     <tr>
                         <td style="text-align: left;">Operador:</td>
-                        <td style="text-align: right; font-weight: 900;">${operatorName.substring(0, 15)}</td>
+                        <td style="text-align: right; font-weight: bold;">${operatorName.substring(0, 15)}</td>
                     </tr>
                 </table>
                 ` : ''}
@@ -219,7 +219,7 @@ export const PrinterService = {
                 
                 ${PrinterService.getLegalFooter()}
 
-                <div style="font-size: 10px; font-weight: 900; margin-top: 10px; letter-spacing: 2px;">
+                <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
                 <!-- Spacing for printer cut -->
@@ -252,21 +252,21 @@ export const PrinterService = {
             <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center;">
                 
                 <div style="margin-bottom: 10px; margin-top: 10px;">
-                    <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: 900; font-size: 14px; margin-bottom: 5px;">
+                    <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
                         [X]
                     </div>
                 </div>
 
                 <div style="margin-bottom: 5px;">
-                    <h2 style="margin: 0; font-size: 18px; font-weight: 900; letter-spacing: -0.5px; text-transform: uppercase;">${config.name}</h2>
+                    <h2 style="margin: 0; font-size: 18px; font-weight: bold; letter-spacing: -0.5px; text-transform: uppercase;">${config.name}</h2>
                     <div style="font-size: 12px; font-family: sans-serif; margin-top: 2px;">${config.address}</div>
                 </div>
 
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
 
                 <div style="margin-bottom: 10px;">
-                    <div style="font-size: 14px; font-weight: 900; letter-spacing: 1px;">COMPROBANTE ALTA</div>
-                    <div style="font-size: 12px; font-weight: 900; margin-top: 3px;">${typeLabel}</div>
+                    <div style="font-size: 14px; font-weight: bold; letter-spacing: 1px;">COMPROBANTE ALTA</div>
+                    <div style="font-size: 12px; font-weight: bold; margin-top: 3px;">${typeLabel}</div>
                     <div style="font-size: 11px; margin-top: 3px;">ABONO MES</div>
                 </div>
 
@@ -276,15 +276,15 @@ export const PrinterService = {
                 <div style="text-align: left; font-size: 12px; margin: 10px 0; line-height: 1.4;">
                     <div style="margin-bottom: 5px;">
                         <span style="font-size: 10px;">Fecha Alta:</span><br/>
-                        <span style="font-weight: 900; margin-left: 10px;">${formattedDate}</span>
+                        <span style="font-weight: bold; margin-left: 10px;">${formattedDate}</span>
                     </div>
                     <div style="margin-bottom: 5px;">
                         <span style="font-size: 10px;">Cliente:</span><br/>
-                        <span style="font-weight: 900; margin-left: 10px; font-size: 14px;">${data.nombreApellido.toUpperCase()}</span>
+                        <span style="font-weight: bold; margin-left: 10px; font-size: 14px;">${data.nombreApellido.toUpperCase()}</span>
                     </div>
                     <div>
                         <span style="font-size: 10px;">Cochera:</span><br/>
-                        <span style="font-weight: 900; margin-left: 10px; font-size: 14px;">${cocheraText}</span>
+                        <span style="font-weight: bold; margin-left: 10px; font-size: 14px;">${cocheraText}</span>
                     </div>
                 </div>
 
@@ -294,19 +294,19 @@ export const PrinterService = {
                 <div style="text-align: left; font-size: 12px; margin: 10px 0; line-height: 1.4;">
                     <div style="margin-bottom: 5px;">
                         <span style="font-size: 10px;">Valor Mensual (Referencia):</span><br/>
-                        <span style="font-weight: 900; margin-left: 10px;">$${data.basePriceDisplay}</span>
+                        <span style="font-weight: bold; margin-left: 10px;">$${data.basePriceDisplay}</span>
                     </div>
                     <div style="margin-bottom: 5px;">
                         <span style="font-size: 10px;">Por días: ${daysRemaining}</span><br/>
                     </div>
                     <div style="margin-bottom: 5px; background: #000; color: #fff; padding: 3px;">
                         <span style="font-size: 11px;">RECIBIMOS:</span>
-                        <span style="font-weight: 900; font-size: 16px; float: right;">$${data.proratedPrice}</span>
+                        <span style="font-weight: bold; font-size: 16px; float: right;">$${data.proratedPrice}</span>
                         <div style="clear: both;"></div>
                     </div>
                     <div>
                         <span style="font-size: 10px;">Medio de Pago:</span><br/>
-                        <span style="font-weight: 900; margin-left: 10px;">${data.metodoPago}</span>
+                        <span style="font-weight: bold; margin-left: 10px;">${data.metodoPago}</span>
                     </div>
                 </div>
 
@@ -316,26 +316,26 @@ export const PrinterService = {
                 <div style="text-align: left; font-size: 12px; margin: 10px 0; line-height: 1.4;">
                     <div style="margin-bottom: 5px;">
                         <span style="font-size: 10px;">Vehículo (${data.tipoVehiculo}):</span><br/>
-                        <span style="font-weight: 900; margin-left: 10px;">${data.marca} ${data.modelo}</span>
+                        <span style="font-weight: bold; margin-left: 10px;">${data.marca} ${data.modelo}</span>
                     </div>
                 </div>
 
                 <div style="margin: 15px 0; text-align: center;">
                     <div style="font-size: 11px; margin-bottom: 2px;">PATENTE</div>
-                    <div style="font-size: 28px; font-weight: 900; letter-spacing: 1px;">${data.patente}</div>
+                    <div style="font-size: 28px; font-weight: bold; letter-spacing: 1px;">${data.patente}</div>
                 </div>
 
                 <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
 
                 <div style="font-size: 10px; line-height: 1.3; margin-top: 10px;">
-                    <div style="font-weight: 900;">¡Gracias por confiar en nosotros!</div>
+                    <div style="font-weight: bold;">¡Gracias por confiar en nosotros!</div>
                     <div style="margin-top: 5px;">Recuerde que la mensualidad</div>
                     <div>se paga del 1 al 10 de cada mes.</div>
                 </div>
                 
                 ${PrinterService.getLegalFooter()}
 
-                <div style="font-size: 10px; font-weight: 900; margin-top: 10px; letter-spacing: 2px;">
+                <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
                 <!-- Spacing for printer cut -->
@@ -361,28 +361,28 @@ export const PrinterService = {
             <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center;">
                 
                 <div style="margin-bottom: 5px; margin-top: 10px;">
-                    <h2 style="margin: 0; font-size: 16px; font-weight: 900; text-transform: uppercase;">${config.name}</h2>
+                    <h2 style="margin: 0; font-size: 16px; font-weight: bold; text-transform: uppercase;">${config.name}</h2>
                     <div style="font-size: 11px;">${config.address}</div>
                 </div>
 
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
 
                 <div style="margin-bottom: 10px;">
-                    <div style="font-size: 14px; font-weight: 900; letter-spacing: 0.5px;">RENOVACIÓN DE ABONO</div>
-                    <div style="font-size: 12px; font-weight: 900; margin-top: 2px;">${typeLabel}</div>
+                    <div style="font-size: 14px; font-weight: bold; letter-spacing: 0.5px;">RENOVACIÓN DE ABONO</div>
+                    <div style="font-size: 12px; font-weight: bold; margin-top: 2px;">${typeLabel}</div>
                 </div>
 
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
 
                 <div style="text-align: left; font-size: 12px; margin: 10px 0; line-height: 1.4;">
                     <div style="margin-bottom: 3px;">
-                        <span style="font-weight: 900;">TITULAR:</span> ${String(data.titular).toUpperCase()}
+                        <span style="font-weight: bold;">TITULAR:</span> ${String(data.titular).toUpperCase()}
                     </div>
                     <div style="margin-bottom: 3px;">
-                        <span style="font-weight: 900;">COCHERA:</span> ${data.cocheraTexto}
+                        <span style="font-weight: bold;">COCHERA:</span> ${data.cocheraTexto}
                     </div>
                     <div style="margin-bottom: 3px;">
-                        <span style="font-weight: 900;">PATENTES:</span>
+                        <span style="font-weight: bold;">PATENTES:</span>
                         <div style="margin-left: 10px;">
                             ${data.patentes.map((p: string) => `<div>- ${p}</div>`).join('')}
                         </div>
@@ -390,25 +390,25 @@ export const PrinterService = {
                 </div>
 
                 <div style="margin: 15px 0; background: #000; color: #fff; padding: 8px; text-align: center;">
-                    <div style="font-size: 11px; font-weight: 900; margin-bottom: 2px;">MONTO PAGADO:</div>
-                    <div style="font-size: 22px; font-weight: 900;">$${Number(data.monto).toLocaleString('es-AR')}</div>
+                    <div style="font-size: 11px; font-weight: bold; margin-bottom: 2px;">MONTO PAGADO:</div>
+                    <div style="font-size: 22px; font-weight: bold;">$${Number(data.monto).toLocaleString('es-AR')}</div>
                 </div>
 
                 <div style="text-align: left; font-size: 11px; margin: 10px 0; line-height: 1.3;">
-                    <div><span style="font-weight: 900;">FECHA:</span> ${formattedDate}</div>
-                    <div><span style="font-weight: 900;">OPERADOR:</span> ${data.operador}</div>
+                    <div><span style="font-weight: bold;">FECHA:</span> ${formattedDate}</div>
+                    <div><span style="font-weight: bold;">OPERADOR:</span> ${data.operador}</div>
                 </div>
 
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
 
                 <div style="font-size: 10px; line-height: 1.3; margin-top: 10px;">
-                    <div style="font-weight: 900; text-transform: uppercase;">Comprobante de Renovación</div>
+                    <div style="font-weight: bold; text-transform: uppercase;">Comprobante de Renovación</div>
                     <div style="margin-top: 2px;">CONSERVE ESTE TICKET</div>
                 </div>
                 
                 ${PrinterService.getLegalFooter()}
 
-                <div style="font-size: 10px; font-weight: 900; margin-top: 10px; letter-spacing: 2px;">
+                <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
                 <!-- Spacing for printer cut -->
@@ -434,23 +434,23 @@ export const PrinterService = {
             <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center;">
                 
                 <div style="margin-bottom: 10px; margin-top: 10px;">
-                    <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: 900; font-size: 14px; margin-bottom: 5px;">
+                    <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
                         [X]
                     </div>
-                    <div style="font-size: 10px; font-weight: 900;">DOCUMENTO NO VÁLIDO COMO FACTURA</div>
+                    <div style="font-size: 10px; font-weight: bold;">DOCUMENTO NO VÁLIDO COMO FACTURA</div>
                 </div>
 
                 <div style="margin-bottom: 5px;">
-                    <h2 style="margin: 0; font-size: 16px; font-weight: 900; text-transform: uppercase;">${config.name}</h2>
+                    <h2 style="margin: 0; font-size: 16px; font-weight: bold; text-transform: uppercase;">${config.name}</h2>
                     <div style="font-size: 11px;">${config.address}</div>
                 </div>
 
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
 
                 <div style="margin-bottom: 10px;">
-                    <div style="font-size: 13px; font-weight: 900; letter-spacing: 0.5px;">DIFERENCIA POR CAMBIO</div>
-                    <div style="font-size: 13px; font-weight: 900; letter-spacing: 0.5px;">DE CATEGORÍA</div>
-                    <div style="font-size: 12px; font-weight: 900; margin-top: 3px;">${typeLabel}</div>
+                    <div style="font-size: 13px; font-weight: bold; letter-spacing: 0.5px;">DIFERENCIA POR CAMBIO</div>
+                    <div style="font-size: 13px; font-weight: bold; letter-spacing: 0.5px;">DE CATEGORÍA</div>
+                    <div style="font-size: 12px; font-weight: bold; margin-top: 3px;">${typeLabel}</div>
                 </div>
 
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
@@ -458,16 +458,16 @@ export const PrinterService = {
                 <!-- SECCIÓN 1: IDENTIFICACIÓN -->
                 <div style="text-align: left; font-size: 12px; margin: 10px 0; line-height: 1.4;">
                     <div style="margin-bottom: 3px;">
-                        <span style="font-weight: 900;">TITULAR:</span> ${String(data.titular).toUpperCase()}
+                        <span style="font-weight: bold;">TITULAR:</span> ${String(data.titular).toUpperCase()}
                     </div>
                     <div style="margin-bottom: 3px;">
-                        <span style="font-weight: 900;">VEHÍCULO:</span> ${data.tipoVehiculo}
+                        <span style="font-weight: bold;">VEHÍCULO:</span> ${data.tipoVehiculo}
                     </div>
                 </div>
 
                 <div style="margin: 15px 0; text-align: center;">
                     <div style="font-size: 11px; margin-bottom: 2px;">PATENTE</div>
-                    <div style="font-size: 28px; font-weight: 900; letter-spacing: 1px;">${data.patente}</div>
+                    <div style="font-size: 28px; font-weight: bold; letter-spacing: 1px;">${data.patente}</div>
                 </div>
 
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
@@ -476,40 +476,40 @@ export const PrinterService = {
                 <div style="text-align: left; font-size: 12px; margin: 10px 0; line-height: 1.4;">
                     <div style="margin-bottom: 5px;">
                         <span style="font-size: 10px;">Precio Anterior:</span><br/>
-                        <span style="font-weight: 900; margin-left: 10px;">$${Number(data.precioAnterior).toLocaleString('es-AR')}</span>
+                        <span style="font-weight: bold; margin-left: 10px;">$${Number(data.precioAnterior).toLocaleString('es-AR')}</span>
                     </div>
                     <div style="margin-bottom: 5px;">
                         <span style="font-size: 10px;">Nuevo Precio Base:</span><br/>
-                        <span style="font-weight: 900; margin-left: 10px;">$${Number(data.precioNuevo).toLocaleString('es-AR')}</span>
+                        <span style="font-weight: bold; margin-left: 10px;">$${Number(data.precioNuevo).toLocaleString('es-AR')}</span>
                     </div>
                     <div style="margin-bottom: 5px; background: #000; color: #fff; padding: 3px;">
                         <span style="font-size: 11px;">DIFERENCIA COBRADA:</span>
-                        <span style="font-weight: 900; font-size: 16px; float: right;">$${Number(data.montoCobrado).toLocaleString('es-AR')}</span>
+                        <span style="font-weight: bold; font-size: 16px; float: right;">$${Number(data.montoCobrado).toLocaleString('es-AR')}</span>
                         <div style="clear: both;"></div>
                     </div>
                     <div>
                         <span style="font-size: 10px;">Medio de Pago:</span><br/>
-                        <span style="font-weight: 900; margin-left: 10px;">${data.metodoPago}</span>
+                        <span style="font-weight: bold; margin-left: 10px;">${data.metodoPago}</span>
                     </div>
                 </div>
 
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
 
                 <div style="text-align: left; font-size: 11px; margin: 10px 0; line-height: 1.3;">
-                    <div><span style="font-weight: 900;">FECHA:</span> ${formattedDate}</div>
-                    <div><span style="font-weight: 900;">OPERADOR:</span> ${data.operador}</div>
+                    <div><span style="font-weight: bold;">FECHA:</span> ${formattedDate}</div>
+                    <div><span style="font-weight: bold;">OPERADOR:</span> ${data.operador}</div>
                 </div>
 
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
 
                 <div style="font-size: 10px; line-height: 1.3; margin-top: 10px;">
-                    <div style="font-weight: 900; text-transform: uppercase;">Comprobante de Upgrade</div>
+                    <div style="font-weight: bold; text-transform: uppercase;">Comprobante de Upgrade</div>
                     <div style="margin-top: 2px;">CONSERVE ESTE TICKET</div>
                 </div>
                 
                 ${PrinterService.getLegalFooter()}
 
-                <div style="font-size: 10px; font-weight: 900; margin-top: 10px; letter-spacing: 2px;">
+                <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
                 <!-- Spacing for printer cut -->
@@ -532,14 +532,16 @@ const buildFullHtml = (html: string): string => `
             <style>
                 @media print {
                     @page { margin: 0; size: 58mm auto; }
-                    body { margin: 0; padding: 0; font-weight: 600; color: #000; }
+                    body { margin: 0; padding: 0; font-weight: 600; color: #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+                    * { box-sizing: border-box; }
                     .page-break { page-break-after: always; }
                 }
                 /* Screen styles for PDF/Blob preview */
                 body { margin: 0; padding: 0; background: #fff; font-weight: 600; color: #000; }
+                * { box-sizing: border-box; }
                 .page-break { page-break-after: always; }
                 
-                b, strong { font-weight: 900 !important; }
+                b, strong { font-weight: bold !important; }
                 td, th { font-weight: 600; }
             </style>
         </head>
@@ -550,8 +552,6 @@ const buildFullHtml = (html: string): string => `
 const printHtml = async (html: string, isVirtual: boolean = false) => {
     if (isVirtual) {
         // ── PDF Preview Mode ──
-        // Abre el ticket en una pestaña del navegador como HTML renderizado.
-        // Desde ahí el usuario puede guardar como PDF o inspeccionar.
         const fullHtml = buildFullHtml(html);
         const blob = new Blob([fullHtml], { type: 'text/html' });
         const url = URL.createObjectURL(blob);
@@ -560,13 +560,15 @@ const printHtml = async (html: string, isVirtual: boolean = false) => {
     }
 
     // ── Silent Print (Main Process IPC) ──
-    // El HTML se envía al Main Process que lo imprime via webContents.print({ silent: true })
-    // usando una BrowserWindow oculta con cola secuencial anti-bloqueo.
     const fullHtml = buildFullHtml(html);
 
     if (window.electronAPI?.silentPrint) {
+        // Solo enviar deviceName: las dimensiones las define @page CSS
+        const savedPrinter = localStorage.getItem('selected_printer_name') || undefined;
+        const printerConfig = { deviceName: savedPrinter };
+
         try {
-            const result = await window.electronAPI.silentPrint(fullHtml);
+            const result = await window.electronAPI.silentPrint(fullHtml, printerConfig);
             if (!result.success) {
                 console.error('[PrinterService] Silent print failed:', result.error);
                 toast.error('Error al imprimir: ' + (result.error || 'desconocido'));

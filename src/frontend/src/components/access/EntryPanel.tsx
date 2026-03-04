@@ -1,7 +1,7 @@
 import React from 'react';
 import { useEntryLogic } from '../../hooks/useEntryLogic';
 import { useAuth } from '../../context/AuthContext';
-import { Car, CheckCircle } from 'lucide-react';
+import { Car, CheckCircle, AlertTriangle } from 'lucide-react';
 
 const EntryPanel: React.FC = () => {
     const {
@@ -13,7 +13,8 @@ const EntryPanel: React.FC = () => {
         handleSubmit,
         isLoading,
         isSuccess,
-        error
+        errorInfo,
+        plateInputRef
     } = useEntryLogic();
 
     const { isGlobalSyncing } = useAuth();
@@ -46,11 +47,15 @@ const EntryPanel: React.FC = () => {
                         <div>
                             <label className="text-gray-500 text-xs font-bold uppercase tracking-widest mb-1 block">Patente</label>
                             <input
+                                ref={plateInputRef}
                                 type="text"
                                 value={plate}
                                 onChange={(e) => setPlate(e.target.value.toUpperCase())}
                                 placeholder="AAA-000"
-                                className="w-full h-14 bg-gray-800 border-2 border-gray-700 rounded-xl text-center text-3xl font-mono text-white font-bold focus:border-emerald-500 outline-none uppercase"
+                                className={`w-full h-14 bg-gray-800 border-2 rounded-xl text-center text-3xl font-mono text-white font-bold outline-none uppercase transition-colors ${errorInfo?.isConflict
+                                        ? 'border-red-500 focus:border-red-400'
+                                        : 'border-gray-700 focus:border-emerald-500'
+                                    }`}
                                 maxLength={7}
                                 autoFocus
                             />
@@ -99,9 +104,11 @@ const EntryPanel: React.FC = () => {
                             ENTRADA REGISTRADA
                         </div>
                     )}
-                    {(error as any) && (
-                        <div className="p-3 bg-red-900/20 border border-red-500/30 rounded-lg text-red-400 text-center text-xs font-bold">
-                            {(error as any)?.message || 'Error'}
+                    {errorInfo && (
+                        <div className={`p-3 bg-red-900/20 border border-red-500/30 rounded-lg text-red-400 text-center text-xs font-bold flex items-center justify-center gap-2 ${errorInfo.isConflict ? 'animate-shake' : ''
+                            }`}>
+                            {errorInfo.isConflict && <AlertTriangle className="w-4 h-4 shrink-0" />}
+                            {errorInfo.message}
                         </div>
                     )}
                 </div>

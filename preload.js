@@ -16,7 +16,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 // (como viejas sesiones de ag_user o supabase que hayan quedado de versiones previas)
 // excepto la configuración física del garaje, vital para la identidad del terminal.
 try {
-    const keysToPreserve = ['ag_terminal_config'];
+    const keysToPreserve = ['ag_terminal_config', 'selected_printer_name', 'printer_paper_width'];
     // Iterar el localStorage para limpiar
     // Usamos un array de llaves a borrar para evitar problemas mutando la colección mientras iteramos
     const keysToRemove = [];
@@ -27,7 +27,7 @@ try {
         }
     }
     keysToRemove.forEach(key => localStorage.removeItem(key));
-    // Opcional: limpiar también sessionStorage si queremos asegurar inicio fresco (generalmente ya viene vacío en un inicio limpio del BrowserWindow)
+    // Opcional: limpiar también sessionStorage si queremos asegurar inicio fresco
     sessionStorage.clear();
 } catch (e) {
     console.warn('⚠️ Error durante la limpieza quirúrgica pre-carga:', e);
@@ -38,9 +38,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /**
      * Envía HTML al Main Process para impresión silenciosa.
      * @param {string} html - HTML completo del ticket
+     * @param {object} [printerConfig] - { deviceName?: string, pageWidth?: number (micrones) }
      * @returns {Promise<{success: boolean, error?: string}>}
      */
-    silentPrint: (html) => ipcRenderer.invoke('print:silent', html),
+    silentPrint: (html, printerConfig) => ipcRenderer.invoke('print:silent', html, printerConfig || {}),
 
     /**
      * Obtiene la lista de impresoras del sistema.

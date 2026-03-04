@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Ticket, Wallet, LogOut, User as UserIcon, Eye, Database, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { LayoutDashboard, Ticket, Wallet, LogOut, User as UserIcon, Eye, Database, Loader2, AlertTriangle, RefreshCw, Settings, Printer, Check } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { api } from '../../services/api';
@@ -51,6 +51,13 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     const [isSavingIncident, setIsSavingIncident] = useState(false);
     const [lastSyncTime, setLastSyncTime] = useState<Date>(new Date());
     const [isBackgroundSyncing, setIsBackgroundSyncing] = useState(false);
+
+    // ── Printer Config Modal State ──
+    const [isPrinterModalOpen, setIsPrinterModalOpen] = useState(false);
+    const [printerList, setPrinterList] = useState<Array<{ name: string; isDefault: boolean; status?: number }>>([]);
+    const [isLoadingPrinters, setIsLoadingPrinters] = useState(false);
+    const [selectedPrinter, setSelectedPrinter] = useState<string>(localStorage.getItem('selected_printer_name') || '');
+    const [printerSaved, setPrinterSaved] = useState(false);
 
     const location = useLocation();
     const { user, logout, isGlobalSyncing } = useAuth();
@@ -230,6 +237,43 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
         }
     };
 
+    // ── Printer Config Handlers ──
+    const handleOpenPrinterModal = async () => {
+        setIsPrinterModalOpen(true);
+        setPrinterSaved(false);
+        setIsLoadingPrinters(true);
+        try {
+            if (window.electronAPI?.getPrinters) {
+                const printers = await window.electronAPI.getPrinters();
+                setPrinterList(printers);
+                // Si hay una impresora guardada, verificar que siga existiendo
+                const saved = localStorage.getItem('selected_printer_name');
+                if (saved && !printers.some(p => p.name === saved)) {
+                    toast.warning(`Impresora "${saved}" no encontrada en el sistema`, { duration: 4000 });
+                    setSelectedPrinter('');
+                }
+            } else {
+                toast.error('API de Electron no disponible (modo dev)');
+            }
+        } catch (err) {
+            console.error('Error loading printers:', err);
+            toast.error('Error al cargar impresoras');
+        } finally {
+            setIsLoadingPrinters(false);
+        }
+    };
+
+    const handleSavePrinterConfig = () => {
+        if (selectedPrinter) {
+            localStorage.setItem('selected_printer_name', selectedPrinter);
+        } else {
+            localStorage.removeItem('selected_printer_name');
+        }
+        setPrinterSaved(true);
+        toast.success(`Impresora configurada: ${selectedPrinter || 'Default del OS'}`);
+        setTimeout(() => setIsPrinterModalOpen(false), 800);
+    };
+
     return (
         <div className="h-screen overflow-hidden bg-black text-gray-200 font-sans selection:bg-emerald-500/30 flex flex-col">
             <SyncOverlay isVisible={isGlobalSyncing} />
@@ -309,12 +353,12 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                             icon={<AlertTriangle className="w-4 h-4" />}
                             label="Incidente"
                         />
-                        {/* <NavButton
-                            active={activeTab === 'config'}
-                            onClick={() => handleTabChange('config')}
+                        <NavButton
+                            active={false}
+                            onClick={handleOpenPrinterModal}
                             icon={<Settings className="w-4 h-4" />}
                             label="Config"
-                        /> */}
+                        />
                     </nav>
                 </div>
 
@@ -396,6 +440,82 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                                     </>
                                 ) : (
                                     'Guardar Incidente'
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* --- PRINTER CONFIG MODAL --- */}
+            {isPrinterModalOpen && (
+                <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="w-full max-w-md bg-gray-950 border border-gray-800 rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+                        <div className="px-6 py-4 border-b border-gray-800 flex items-center gap-3">
+                            <div className="p-2 bg-emerald-900/20 rounded-lg">
+                                <Printer className="w-5 h-5 text-emerald-500" />
+                            </div>
+                            <h2 className="text-lg font-bold text-white uppercase tracking-tight">Configurar Impresora</h2>
+                        </div>
+
+                        <div className="p-6 space-y-5">
+                            {/* Printer Selector */}
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500 px-1">
+                                    Impresora
+                                </label>
+                                {isLoadingPrinters ? (
+                                    <div className="flex items-center gap-2 p-3 bg-gray-900 border border-gray-800 rounded-lg">
+                                        <Loader2 className="w-4 h-4 text-emerald-500 animate-spin" />
+                                        <span className="text-xs text-gray-400">Cargando impresoras...</span>
+                                    </div>
+                                ) : (
+                                    <select
+                                        value={selectedPrinter}
+                                        onChange={(e) => setSelectedPrinter(e.target.value)}
+                                        className="w-full bg-gray-900 border border-gray-800 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all appearance-none cursor-pointer"
+                                    >
+                                        <option value="">🖥️ Usar default del Sistema Operativo</option>
+                                        {printerList.map((p) => (
+                                            <option key={p.name} value={p.name}>
+                                                {p.name} {p.status === 0 ? '✅' : ''}
+                                            </option>
+                                        ))}
+                                    </select>
+                                )}
+                                {printerList.length === 0 && !isLoadingPrinters && (
+                                    <p className="text-[10px] text-amber-500/80 px-1">No se detectaron impresoras en el sistema.</p>
+                                )}
+                            </div>
+
+                            {/* Current Config Summary */}
+                            <div className="flex items-center gap-2 p-3 bg-gray-900/50 rounded-lg border border-gray-800/50 text-[10px] text-gray-400">
+                                <span className="font-bold uppercase tracking-tight shrink-0">Impresora activa:</span>
+                                <span className="font-mono text-emerald-500 truncate">
+                                    {selectedPrinter || 'Default del Sistema Operativo'}
+                                </span>
+                            </div>
+                        </div>
+
+                        <div className="px-6 py-4 bg-gray-900/30 border-t border-gray-800 flex items-center justify-end gap-3">
+                            <button
+                                onClick={() => setIsPrinterModalOpen(false)}
+                                className="px-4 py-2 text-xs font-bold uppercase tracking-widest text-gray-500 hover:text-white transition-colors"
+                            >
+                                Cancelar
+                            </button>
+                            <button
+                                onClick={handleSavePrinterConfig}
+                                disabled={printerSaved}
+                                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-800 text-white text-xs font-bold uppercase tracking-widest rounded-lg shadow-lg shadow-emerald-900/20 transition-all flex items-center gap-2"
+                            >
+                                {printerSaved ? (
+                                    <>
+                                        <Check className="w-3 h-3" />
+                                        Guardado
+                                    </>
+                                ) : (
+                                    'Guardar'
                                 )}
                             </button>
                         </div>
