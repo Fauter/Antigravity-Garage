@@ -165,6 +165,8 @@ export const MovementSchema = z.object({
 
   ticketNumber: z.number().int().optional(),
   ticketPago: z.number().int().optional(),
+  receipt_number: z.string().optional(),
+  ticket_code: z.string().optional(),
 
   // Traceability
   operator: z.string().optional(),

@@ -318,6 +318,7 @@ export class SyncService {
             if (local.related_entity_id) { local.relatedEntityId = local.related_entity_id; delete local.related_entity_id; }
             if (local.invoice_type) { local.invoiceType = local.invoice_type; delete local.invoice_type; }
             if (local.ticket_number) { local.ticketNumber = local.ticket_number; delete local.ticket_number; }
+            // receipt_number and ticket_code: same name in both local and remote, no mapping needed
         }
 
         if (type === 'Vehicle') {
@@ -461,6 +462,7 @@ export class SyncService {
             if (base.relatedEntityId !== undefined) { base.related_entity_id = base.relatedEntityId; delete base.relatedEntityId; }
             if (base.invoiceType !== undefined) { base.invoice_type = base.invoiceType; delete base.invoiceType; }
             if (base.ticketNumber !== undefined) { base.ticket_number = base.ticketNumber; delete base.ticketNumber; }
+            // receipt_number and ticket_code: same name in both local and remote, passthrough
         }
 
         if (type === 'Customer') {

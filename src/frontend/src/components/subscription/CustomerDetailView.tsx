@@ -420,7 +420,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 startDate: new Date().toISOString()
             };
 
-            await api.post('/abonos/alta-completa', payload);
+            const altaResponse = await api.post('/abonos/alta-completa', payload);
 
             PrinterService.printSubscriptionTicket({
                 nombreApellido: clientName,
@@ -433,7 +433,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 numeroCochera: newCocheraData.numero,
                 metodoPago: newCocheraData.metodoPago,
                 basePriceDisplay: newCocheraFinancials.basePrice,
-                proratedPrice: newCocheraFinancials.proratedPrice
+                proratedPrice: newCocheraFinancials.proratedPrice,
+                ticket_code: altaResponse.data?.ticket_code || null
             });
 
             toast.success("Cochera y Abono creados exitosamente");
@@ -779,7 +780,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
         const btnSpinner = toast.loading("Procesando pago de deuda...");
         try {
-            await api.post('/abonos/renovar', {
+            const renewResponse = await api.post('/abonos/renovar', {
                 subId: selectedDebtSubId,
                 customerId: clientId,
                 amountToPay: renewalData.amountToPay,
@@ -815,7 +816,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 );
             }
 
-            PrinterService.printRenewalTicket(printPayload);
+            PrinterService.printRenewalTicket({ ...printPayload, ticket_code: renewResponse.data?.ticket_code || null });
 
             setIsRenewalModalOpen(false);
             refreshCustomerAssets(); // Auto Refresh State entirely

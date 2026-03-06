@@ -351,7 +351,8 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                 numeroCochera: formData.numeroCochera,
                 metodoPago: formData.metodoPago,
                 basePriceDisplay: basePriceDisplay,
-                proratedPrice: proratedPrice
+                proratedPrice: proratedPrice,
+                ticket_code: response.data?.ticket_code || null
             });
 
             // only show success on 200 OK (implied by awaiting promise not throwing)

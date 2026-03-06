@@ -9,6 +9,7 @@ import { SubscriptionRepository } from '../../Garage/infra/SubscriptionRepositor
 import { JsonDB } from '../../../infrastructure/database/json-db';
 import { db } from '../../../infrastructure/database/datastore';
 import { v4 as uuidv4 } from 'uuid';
+import { CorrelativeGenerator } from '../../../shared/CorrelativeGenerator';
 
 interface VehicleTypeData {
     id?: string;
@@ -120,13 +121,17 @@ export class AccessController {
                 }
             }
 
-            // 4. Process Entry
+            // 4. Generate Correlative Ticket Code
+            const ticketCode = await CorrelativeGenerator.nextStayTicket(garageId);
+
+            // 5. Process Entry
             const entry = AccessManager.processEntry(
                 plate,
                 existingVehicle || ({ id: vehicleId } as any),
                 null,
                 isSubscriber,
-                subscriptionId
+                subscriptionId,
+                ticketCode
             );
 
             // Patch linking details
@@ -190,7 +195,10 @@ export class AccessController {
                 if (garage) ownerId = garage.owner_id || garage.ownerId;
             }
 
-            // Generate Ticket Number (Numeric: last 9 digits of timestamp)
+            // Generate Correlative Receipt Number
+            const receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
+
+            // Generate Ticket Number (legacy numeric, kept for backward compat)
             const ticketNumber = Number(Date.now().toString().slice(-9));
 
             // Pass to Manager (async)
@@ -208,6 +216,9 @@ export class AccessController {
 
             await this.stayRepository.save(closedStay as any);
             if (exitMovement) {
+                // Inject correlative receipt_number and ticket_code
+                (exitMovement as any).receipt_number = receiptNumber;
+                (exitMovement as any).ticket_code = receiptNumber;
                 await this.movementRepository.save(exitMovement);
             }
 

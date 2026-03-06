@@ -20,9 +20,11 @@ export class AccessManager {
         vehicle?: Vehicle | null,
         customer?: Customer | null,
         isSubscriber: boolean = false,
-        subscriptionId?: string | null
+        subscriptionId?: string | null,
+        ticket_code?: string
     ): Stay {
-        const ticket_code = uuidv4().slice(0, 8).toUpperCase();
+        // Si no se provee un ticket_code correlativo, fallback a UUID (seguridad)
+        const finalTicketCode = ticket_code || uuidv4().slice(0, 8).toUpperCase();
 
         const entryStay: Stay = {
             id: uuidv4(),
@@ -32,13 +34,13 @@ export class AccessManager {
             active: true,
             isSubscriber,
             subscriptionId: subscriptionId || null,
-            ticket_code,
+            ticket_code: finalTicketCode,
             createdAt: new Date(),
         };
 
         const parsedStay = StaySchema.parse(entryStay);
         // FORCE the property even if Zod strips unknowns due to cache/build mismatch
-        parsedStay.ticket_code = ticket_code;
+        parsedStay.ticket_code = finalTicketCode;
         return parsedStay;
     }
 

@@ -119,6 +119,7 @@ const MovementSchema = new Schema<Movement>({
     paymentMethod: { type: String, default: 'Efectivo' },
     ticketNumber: { type: Number },
     ticketPago: { type: Number },
+    receipt_number: { type: String },
     operator: { type: String },
     invoiceType: { type: String },
     plate: { type: String },

@@ -28,7 +28,7 @@ export const PrinterService = {
                 format: "CODE128",
                 displayValue: false,
                 height: 40,
-                width: 3,
+                width: 2,
                 margin: 5,
                 background: "#ffffff",
                 lineColor: "#000000",
@@ -53,7 +53,7 @@ export const PrinterService = {
         const barcodeDataUrl = PrinterService.generateBase64Barcode(shortId);
 
         const content = `
-            <div style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center;">
+            <div style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
                 
                 <div style="margin-bottom: 10px; margin-top: 10px;">
                     <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
@@ -70,7 +70,7 @@ export const PrinterService = {
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
 
                 <div style="margin-bottom: 5px;">
-                    <div style="font-size: 11px;">Ticket: <b>${shortId}</b></div>
+                    <div style="font-size: 11px;">Ingreso: <b>${shortId}</b></div>
                 </div>
 
                 ${barcodeDataUrl ? `
@@ -140,7 +140,7 @@ export const PrinterService = {
         const operatorName = movement ? (movement.operator || 'Sys') : 'Sys';
 
         const generateTicket = (title: string, showTotal: boolean = true) => `
-            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center;">
+            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
                 
                 <div style="margin-bottom: 10px; margin-top: 10px;">
                     <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
@@ -157,7 +157,7 @@ export const PrinterService = {
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
 
                 <div style="margin-bottom: 5px;">
-                    <div style="font-size: 11px;">Ticket: <b>${shortId}</b></div>
+                    ${movement?.receipt_number ? `<div style="font-size: 11px; margin-top: 2px;">Ticket: <b>${movement.receipt_number}</b></div>` : ''}
                     <div style="font-size: 14px; font-weight: bold; margin-top: 3px;">${title}</div>
                 </div>
 
@@ -249,10 +249,10 @@ export const PrinterService = {
         const daysRemaining = (ultimoDia - now.getDate()) + 1;
 
         const generateTicketHtml = (typeLabel: string) => `
-            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center;">
+            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
                 
-                <div style="margin-bottom: 10px; margin-top: 10px;">
-                    <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
+                <div style="margin-bottom: 5px; margin-top: 5px;">
+                    <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px;">
                         [X]
                     </div>
                 </div>
@@ -264,10 +264,11 @@ export const PrinterService = {
 
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
 
-                <div style="margin-bottom: 10px;">
+                <div style="margin-bottom: 5px;">
                     <div style="font-size: 14px; font-weight: bold; letter-spacing: 1px;">COMPROBANTE ALTA</div>
-                    <div style="font-size: 12px; font-weight: bold; margin-top: 3px;">${typeLabel}</div>
-                    <div style="font-size: 11px; margin-top: 3px;">ABONO MES</div>
+                    <div style="font-size: 12px; font-weight: bold; margin-top: 2px;">${typeLabel}</div>
+                    ${data.ticket_code ? `<div style="font-size: 11px; margin-top: 2px;">Ticket: <b>${data.ticket_code}</b></div>` : ''}
+                    <div style="font-size: 11px; margin-top: 2px;">ABONO MES</div>
                 </div>
 
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
@@ -320,26 +321,26 @@ export const PrinterService = {
                     </div>
                 </div>
 
-                <div style="margin: 15px 0; text-align: center;">
+                <div style="margin: 8px 0; text-align: center;">
                     <div style="font-size: 11px; margin-bottom: 2px;">PATENTE</div>
                     <div style="font-size: 28px; font-weight: bold; letter-spacing: 1px;">${data.patente}</div>
                 </div>
 
                 <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
 
-                <div style="font-size: 10px; line-height: 1.3; margin-top: 10px;">
+                <div style="font-size: 10px; line-height: 1.3; margin-top: 5px;">
                     <div style="font-weight: bold;">¡Gracias por confiar en nosotros!</div>
-                    <div style="margin-top: 5px;">Recuerde que la mensualidad</div>
+                    <div style="margin-top: 3px;">Recuerde que la mensualidad</div>
                     <div>se paga del 1 al 10 de cada mes.</div>
                 </div>
                 
                 ${PrinterService.getLegalFooter()}
 
-                <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
+                <div style="font-size: 10px; font-weight: bold; margin-top: 5px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
                 <!-- Spacing for printer cut -->
-                <div style="height: 30px;"></div>
+                <div style="height: 15px;"></div>
             </div>
         `;
 
@@ -358,7 +359,7 @@ export const PrinterService = {
         });
 
         const generateRenewalHtml = (typeLabel: string) => `
-            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center;">
+            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
                 
                 <div style="margin-bottom: 5px; margin-top: 10px;">
                     <h2 style="margin: 0; font-size: 16px; font-weight: bold; text-transform: uppercase;">${config.name}</h2>
@@ -367,9 +368,10 @@ export const PrinterService = {
 
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
 
-                <div style="margin-bottom: 10px;">
+                <div style="margin-bottom: 5px;">
                     <div style="font-size: 14px; font-weight: bold; letter-spacing: 0.5px;">RENOVACIÓN DE ABONO</div>
                     <div style="font-size: 12px; font-weight: bold; margin-top: 2px;">${typeLabel}</div>
+                    ${data.ticket_code ? `<div style="font-size: 11px; margin-top: 2px;">Ticket: <b>${data.ticket_code}</b></div>` : ''}
                 </div>
 
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
@@ -401,18 +403,18 @@ export const PrinterService = {
 
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
 
-                <div style="font-size: 10px; line-height: 1.3; margin-top: 10px;">
+                <div style="font-size: 10px; line-height: 1.3; margin-top: 5px;">
                     <div style="font-weight: bold; text-transform: uppercase;">Comprobante de Renovación</div>
                     <div style="margin-top: 2px;">CONSERVE ESTE TICKET</div>
                 </div>
                 
                 ${PrinterService.getLegalFooter()}
 
-                <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
+                <div style="font-size: 10px; font-weight: bold; margin-top: 5px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
                 <!-- Spacing for printer cut -->
-                <div style="height: 30px;"></div>
+                <div style="height: 15px;"></div>
             </div>
         `;
 
@@ -431,10 +433,10 @@ export const PrinterService = {
         });
 
         const generateUpgradeHtml = (typeLabel: string) => `
-            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 58mm; margin: 0 auto; color: #000; padding: 0; text-align: center;">
+            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
                 
-                <div style="margin-bottom: 10px; margin-top: 10px;">
-                    <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
+                <div style="margin-bottom: 5px; margin-top: 5px;">
+                    <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px;">
                         [X]
                     </div>
                     <div style="font-size: 10px; font-weight: bold;">DOCUMENTO NO VÁLIDO COMO FACTURA</div>
@@ -447,10 +449,11 @@ export const PrinterService = {
 
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
 
-                <div style="margin-bottom: 10px;">
+                <div style="margin-bottom: 5px;">
                     <div style="font-size: 13px; font-weight: bold; letter-spacing: 0.5px;">DIFERENCIA POR CAMBIO</div>
                     <div style="font-size: 13px; font-weight: bold; letter-spacing: 0.5px;">DE CATEGORÍA</div>
-                    <div style="font-size: 12px; font-weight: bold; margin-top: 3px;">${typeLabel}</div>
+                    <div style="font-size: 12px; font-weight: bold; margin-top: 2px;">${typeLabel}</div>
+                    ${data.ticket_code ? `<div style="font-size: 11px; margin-top: 2px;">Ticket: <b>${data.ticket_code}</b></div>` : ''}
                 </div>
 
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
@@ -465,7 +468,7 @@ export const PrinterService = {
                     </div>
                 </div>
 
-                <div style="margin: 15px 0; text-align: center;">
+                <div style="margin: 8px 0; text-align: center;">
                     <div style="font-size: 11px; margin-bottom: 2px;">PATENTE</div>
                     <div style="font-size: 28px; font-weight: bold; letter-spacing: 1px;">${data.patente}</div>
                 </div>
@@ -502,18 +505,18 @@ export const PrinterService = {
 
                 <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
 
-                <div style="font-size: 10px; line-height: 1.3; margin-top: 10px;">
+                <div style="font-size: 10px; line-height: 1.3; margin-top: 5px;">
                     <div style="font-weight: bold; text-transform: uppercase;">Comprobante de Upgrade</div>
                     <div style="margin-top: 2px;">CONSERVE ESTE TICKET</div>
                 </div>
                 
                 ${PrinterService.getLegalFooter()}
 
-                <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
+                <div style="font-size: 10px; font-weight: bold; margin-top: 5px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
                 <!-- Spacing for printer cut -->
-                <div style="height: 30px;"></div>
+                <div style="height: 15px;"></div>
             </div>
         `;
 
@@ -530,19 +533,50 @@ const buildFullHtml = (html: string): string => `
         <head>
             <title>Pos Print</title>
             <style>
+                /* ═══ CSS SAFE-MODE PARA IMPRESORAS TÉRMICAS ═══ */
+                /* Fuerza color negro puro en TODOS los elementos.
+                   Las térmicas POS-58 con drivers genéricos ignoran grises y colores suaves.
+                   -webkit-print-color-adjust: exact fuerza la rasterización de backgrounds. */
+
                 @media print {
-                    @page { margin: 0; size: 58mm auto; }
-                    body { margin: 0; padding: 0; font-weight: 600; color: #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-                    * { box-sizing: border-box; }
+                    @page { margin: 0; size: 48mm auto; }
+                    body {
+                        margin: 0; padding: 0;
+                        font-weight: 600;
+                        color: #000 !important;
+                        -webkit-print-color-adjust: exact;
+                        print-color-adjust: exact;
+                    }
+                    * {
+                        box-sizing: border-box;
+                        color: black !important;
+                        -webkit-print-color-adjust: exact !important;
+                        print-color-adjust: exact !important;
+                    }
                     .page-break { page-break-after: always; }
                 }
+
                 /* Screen styles for PDF/Blob preview */
-                body { margin: 0; padding: 0; background: #fff; font-weight: 600; color: #000; }
-                * { box-sizing: border-box; }
+                body {
+                    margin: 0; padding: 0;
+                    background: #fff;
+                    font-weight: 600;
+                    color: #000 !important;
+                }
+                * {
+                    box-sizing: border-box;
+                    color: black !important;
+                }
                 .page-break { page-break-after: always; }
-                
+
                 b, strong { font-weight: bold !important; }
                 td, th { font-weight: 600; }
+
+                /* Forzar que las imágenes (barcodes) se rendericen como bitmap puro */
+                img {
+                    image-rendering: -webkit-optimize-contrast;
+                    image-rendering: crisp-edges;
+                }
             </style>
         </head>
         <body>${html}</body>
@@ -551,35 +585,29 @@ const buildFullHtml = (html: string): string => `
 
 const printHtml = async (html: string, isVirtual: boolean = false) => {
     if (isVirtual) {
-        // ── PDF Preview Mode ──
         const fullHtml = buildFullHtml(html);
         const blob = new Blob([fullHtml], { type: 'text/html' });
-        const url = URL.createObjectURL(blob);
-        window.open(url, '_blank');
+        window.open(URL.createObjectURL(blob), '_blank');
         return;
     }
 
-    // ── Silent Print (Main Process IPC) ──
     const fullHtml = buildFullHtml(html);
 
     if (window.electronAPI?.silentPrint) {
-        // Solo enviar deviceName: las dimensiones las define @page CSS
         const savedPrinter = localStorage.getItem('selected_printer_name') || undefined;
         const printerConfig = { deviceName: savedPrinter };
 
         try {
             const result = await window.electronAPI.silentPrint(fullHtml, printerConfig);
             if (!result.success) {
-                console.error('[PrinterService] Silent print failed:', result.error);
+                console.error('[PrinterService] Impresión fallida:', result.error);
                 toast.error('Error al imprimir: ' + (result.error || 'desconocido'));
             }
         } catch (err: any) {
-            console.error('[PrinterService] Print IPC error:', err);
+            console.error('[PrinterService] Error IPC:', err);
             toast.error('Error de comunicación con la impresora');
         }
     } else {
-        // Fallback: navegador o dev sin Electron → preview en nueva pestaña
-        console.warn('[PrinterService] electronAPI no disponible, usando fallback window.open()');
         const blob = new Blob([fullHtml], { type: 'text/html' });
         window.open(URL.createObjectURL(blob), '_blank');
     }

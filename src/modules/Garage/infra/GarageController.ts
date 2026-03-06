@@ -10,6 +10,7 @@ import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
 import { db } from '../../../infrastructure/database/datastore.js';
 import { PricingEngine } from '../../Billing/domain/PricingEngine.js';
 import { QueueService } from '../../Sync/application/QueueService.js';
+import { CorrelativeGenerator } from '../../../shared/CorrelativeGenerator';
 
 // Debt types eligible for automatic cancellation during cochera release
 const AUTO_CANCELLABLE_DEBT_TYPES: string[] = ['SISTEMA', 'CANON'];
@@ -675,11 +676,15 @@ export class GarageController {
             }
 
             // 5. Financial Movement (CRITICAL - TODO O NADA)
+            let receiptNumber: string | null = null;
             try {
                 // Validación para evitar montos nulos/ceros en altas de abono
                 if (savedSub.price === 0 || isNaN(savedSub.price)) {
                     throw new Error("Monto a cobrar inválido");
                 }
+
+                // Generate correlative receipt number
+                receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
 
                 await this.movementRepo.save({
                     id: uuidv4(),
@@ -690,9 +695,11 @@ export class GarageController {
                     notes: `Alta Abono ${subscriptionType} - ${vehicle.plate}`,
                     relatedEntityId: savedSub.id,
                     plate: vehicle.plate,
-                    garageId: garageId, // Inject Garage ID
-                    operator: operator || 'Sistema', // Received from Frontend
+                    garageId: garageId,
+                    operator: operator || 'Sistema',
                     invoice_type: billingType,
+                    receipt_number: receiptNumber,
+                    ticket_code: receiptNumber,
                     createdAt: new Date()
                 } as any);
 
@@ -714,7 +721,7 @@ export class GarageController {
                 throw new Error(`Error de Transacción (Rollback ejecutado): ${movementError.message}`);
             }
 
-            res.json(savedSub);
+            res.json({ ...savedSub, ticket_code: receiptNumber });
         } catch (error: any) {
             console.error('Subscription Create Error:', error);
             res.status(500).json({ error: error.message });
@@ -1125,6 +1132,9 @@ export class GarageController {
 
             const plateForMovement = isGlobalDebt ? 'Multiples' : (await this.subscriptionRepo.findById(subId))?.plate || 'N/A';
 
+            // Generate correlative receipt number for the renewal/debt payment
+            const receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
+
             await this.movementRepo.save({
                 id: uuidv4(),
                 type: 'CobroAbono',
@@ -1132,11 +1142,13 @@ export class GarageController {
                 paymentMethod: paymentMethod || 'Efectivo',
                 timestamp: new Date(),
                 notes: movementNotes,
-                relatedEntityId: isGlobalDebt ? (customerId || subId) : subId, // Relacionar a cliente (global) o sub (indiv)
+                relatedEntityId: isGlobalDebt ? (customerId || subId) : subId,
                 plate: plateForMovement,
                 garageId: garageId,
                 operator: operator || 'Sistema',
                 invoice_type: billingType || 'Final',
+                receipt_number: receiptNumber,
+                ticket_code: receiptNumber,
                 createdAt: new Date()
             } as any);
 
@@ -1166,9 +1178,9 @@ export class GarageController {
             }
 
             if (isGlobalDebt) {
-                return res.json({ message: 'Deuda global pagada y suscripciones vinculadas renovadas', subscriptions: renewedSubs });
+                return res.json({ message: 'Deuda global pagada y suscripciones vinculadas renovadas', subscriptions: renewedSubs, ticket_code: receiptNumber });
             } else {
-                return res.json({ message: 'Abono individual renovado y su deuda pagada', subscription: renewedSubs[0] || null });
+                return res.json({ message: 'Abono individual renovado y su deuda pagada', subscription: renewedSubs[0] || null, ticket_code: receiptNumber });
             }
 
         } catch (error: any) {
