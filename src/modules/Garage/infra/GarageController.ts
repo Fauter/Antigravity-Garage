@@ -1274,7 +1274,7 @@ export class GarageController {
             for (const subIdToRenew of subsToRenew) {
                 // Check if this subscription still has pending debts
                 const subDebtsAfter = await this.debtRepo.findBySubscriptionId(subIdToRenew);
-                const stillPending = subDebtsAfter.filter(d => d.status === 'PENDING' && ((d as any).remaining_amount ?? d.amount) > 0);
+                const stillPending = subDebtsAfter.filter(d => d.status === 'PENDING' && d.type === 'CANON' && ((d as any).remaining_amount ?? d.amount) > 0);
 
                 if (stillPending.length === 0) {
                     // All debts paid → renew subscription (extend endDate)

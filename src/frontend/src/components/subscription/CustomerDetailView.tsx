@@ -693,9 +693,17 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     }, [clientId]);
 
     const getActiveSurchargeStep = () => {
-        const today = new Date().getDate();
-        if (financialConfig?.surchargeConfig?.global_default?.steps) {
-            const steps = financialConfig.surchargeConfig.global_default.steps;
+        const now = new Date();
+        const today = now.getDate();
+        const currentMonthIdx = String(now.getMonth());
+
+        let steps = financialConfig?.surchargeConfig?.monthly_overrides?.[currentMonthIdx]?.steps;
+
+        if (!steps || steps.length === 0) {
+            steps = financialConfig?.surchargeConfig?.global_default?.steps;
+        }
+
+        if (steps && Array.isArray(steps)) {
             const sortedSteps = [...steps].sort((a: any, b: any) => b.day - a.day);
             for (const step of sortedSteps) {
                 if (today >= step.day) {
@@ -1142,7 +1150,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                             {/* Partial Payment Badge & Month Labels */}
                                             {(() => {
                                                 if (!associatedSub) return null;
-                                                const cocheraDebts = debts.filter(d => d.subscriptionId === associatedSub.id && d.status === 'PENDING');
+                                                const cocheraDebts = debts.filter(d => d.subscriptionId === associatedSub.id && d.status === 'PENDING' && d.type === 'CANON');
                                                 if (cocheraDebts.length === 0) return null;
 
                                                 const partialDebts = cocheraDebts.filter(d => getRemaining(d) < (Number(d.amount) || 0));
@@ -1263,7 +1271,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                 <button
                                                     onClick={() => {
                                                         // Use remaining_amount for base calculation if partially paid
-                                                        const specificDebts = debts.filter(d => d.subscriptionId === associatedSub.id && d.status === 'PENDING');
+                                                        const specificDebts = debts.filter(d => d.subscriptionId === associatedSub.id && d.status === 'PENDING' && d.type === 'CANON');
                                                         const totalRemaining = specificDebts.reduce((s: number, d: any) => s + getRemaining(d), 0);
                                                         const base = totalRemaining > 0 ? totalRemaining : (cochera.precioBase || 0);
                                                         const mora = calculateSurcharge(base);
@@ -1272,7 +1280,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                         handleOpenRenewalModal(associatedSub.id, cochera, base, mora, base + mora, isExpired, false, targetDebtsArray);
                                                     }}
                                                     className={`w-full py-2 ${(() => {
-                                                        const specificDebts = debts.filter(d => d.subscriptionId === associatedSub.id && d.status === 'PENDING');
+                                                        const specificDebts = debts.filter(d => d.subscriptionId === associatedSub.id && d.status === 'PENDING' && d.type === 'CANON');
                                                         // Caso A: Si todas las deudas pendientes están parcialmente pagadas
                                                         const allHavePartial = specificDebts.length > 0 && specificDebts.every(d => getRemaining(d) < (Number(d.amount) || 0));
                                                         return allHavePartial
@@ -1281,7 +1289,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                     })()} border rounded-lg text-xs font-bold uppercase tracking-widest transition-all`}
                                                 >
                                                     {(() => {
-                                                        const specificDebts = debts.filter(d => d.subscriptionId === associatedSub.id && d.status === 'PENDING');
+                                                        const specificDebts = debts.filter(d => d.subscriptionId === associatedSub.id && d.status === 'PENDING' && d.type === 'CANON');
                                                         // Caso A: Si todas las deudas pendientes están parcialmente pagadas
                                                         const allHavePartial = specificDebts.length > 0 && specificDebts.every(d => getRemaining(d) < (Number(d.amount) || 0));
                                                         const totalRemaining = specificDebts.reduce((s: number, d: any) => s + getRemaining(d), 0);
