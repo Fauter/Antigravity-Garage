@@ -300,9 +300,9 @@ export const PrinterService = {
                     <div style="margin-bottom: 5px;">
                         <span style="font-size: 10px;">Por días: ${daysRemaining}</span><br/>
                     </div>
-                    <div style="margin-bottom: 5px; background: #000; color: #fff; padding: 3px;">
-                        <span style="font-size: 11px;">RECIBIMOS:</span>
-                        <span style="font-weight: bold; font-size: 16px; float: right;">$${data.proratedPrice}</span>
+                    <div style="margin-bottom: 5px; border: 2px solid #000; padding: 3px;">
+                        <span style="font-size: 11px; font-weight: bold;">RECIBIMOS:</span>
+                        <span style="font-weight: bold; font-size: 16px; float: right;">$${data.montoRecibido ?? data.proratedPrice}</span>
                         <div style="clear: both;"></div>
                     </div>
                     <div>
@@ -391,7 +391,7 @@ export const PrinterService = {
                     </div>
                 </div>
 
-                <div style="margin: 15px 0; background: #000; color: #fff; padding: 8px; text-align: center;">
+                <div style="margin: 15px 0; border: 2px solid #000; padding: 8px; text-align: center;">
                     <div style="font-size: 11px; font-weight: bold; margin-bottom: 2px;">MONTO PAGADO:</div>
                     <div style="font-size: 22px; font-weight: bold;">$${Number(data.monto).toLocaleString('es-AR')}</div>
                 </div>
@@ -485,8 +485,8 @@ export const PrinterService = {
                         <span style="font-size: 10px;">Nuevo Precio Base:</span><br/>
                         <span style="font-weight: bold; margin-left: 10px;">$${Number(data.precioNuevo).toLocaleString('es-AR')}</span>
                     </div>
-                    <div style="margin-bottom: 5px; background: #000; color: #fff; padding: 3px;">
-                        <span style="font-size: 11px;">DIFERENCIA COBRADA:</span>
+                    <div style="margin-bottom: 5px; border: 2px solid #000; padding: 3px;">
+                        <span style="font-size: 11px; font-weight: bold;">DIFERENCIA COBRADA:</span>
                         <span style="font-weight: bold; font-size: 16px; float: right;">$${Number(data.montoCobrado).toLocaleString('es-AR')}</span>
                         <div style="clear: both;"></div>
                     </div>

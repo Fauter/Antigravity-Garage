@@ -113,6 +113,19 @@ export const useEntryLogic = () => {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+
+        if (plate.trim().length < 3) {
+            setErrorInfo({
+                message: 'La patente debe tener al menos 3 caracteres.',
+                isConflict: false,
+                plate: plate
+            });
+            setTimeout(() => {
+                plateInputRef.current?.select();
+            }, 50);
+            return;
+        }
+
         if (!plate || !vehicleType) return;
 
         entryMutation.mutate({

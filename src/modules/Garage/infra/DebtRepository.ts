@@ -22,7 +22,7 @@ export class DebtRepository {
 
         if (existingDebt) {
             // IDEMPOTENCY DEEP CHECK: Prevent infinite loop of identical updates
-            if (existingDebt.amount === debt.amount && existingDebt.status === debt.status) {
+            if (existingDebt.amount === debt.amount && existingDebt.status === debt.status && (existingDebt as any).remaining_amount === (debt as any).remaining_amount) {
                 // If the critical fields haven't changed, ignore the save and don't queue.
                 return existingDebt;
             }

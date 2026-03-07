@@ -125,7 +125,12 @@ const PanelSalida: React.FC = () => {
     const handleSearch = (e: React.FormEvent) => {
         e.preventDefault();
         setPaymentMethod(null);
-        if (plate.length > 2) searchStay(plate);
+        const exactPlate = plate.trim();
+        if (exactPlate.length < 3) {
+            toast.error('La patente debe tener al menos 3 caracteres.');
+            return;
+        }
+        searchStay(exactPlate);
     };
 
     // Load promos from local API on mount

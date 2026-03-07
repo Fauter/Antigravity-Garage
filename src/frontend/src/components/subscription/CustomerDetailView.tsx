@@ -111,6 +111,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         basePrice: 0,
         proratedPrice: 0
     });
+    const [montoAbonadoCochera, setMontoAbonadoCochera] = useState<number>(0);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
     // --- RENEWAL MODAL STATE ---
@@ -120,6 +121,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         baseAmount: 0,
         surchargeAmount: 0,
         amountToPay: 0,
+        montoCobrado: 0, // Editable: what the operator actually collects
         metodoPago: 'Efectivo',
         tipoFactura: 'Final',
         cocheraDetails: null as any,
@@ -348,6 +350,11 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
     }, [newCocheraData.tipo, newCocheraData.exclusiva, newCocheraData.tipoVehiculo, newCocheraData.metodoPago, electronicPricesMatrix, standardPricesMatrix, isNewCocheraOpen]);
 
+    // Synchronize partial payment with the calculated prorated price initially
+    useEffect(() => {
+        setMontoAbonadoCochera(newCocheraFinancials.proratedPrice);
+    }, [newCocheraFinancials.proratedPrice]);
+
     useEffect(() => {
         setErrorMessage(null);
         if (isNewCocheraOpen && (newCocheraData.tipo === 'Fija' || newCocheraData.exclusiva) && newCocheraData.numero) {
@@ -415,6 +422,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 paymentMethod: newCocheraData.metodoPago,
                 basePrice: newCocheraFinancials.basePrice,
                 amount: newCocheraFinancials.proratedPrice,
+                montoAbonado: montoAbonadoCochera,
                 billingType: newCocheraData.tipoFactura,
                 operator: operatorName,
                 startDate: new Date().toISOString()
@@ -434,6 +442,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 metodoPago: newCocheraData.metodoPago,
                 basePriceDisplay: newCocheraFinancials.basePrice,
                 proratedPrice: newCocheraFinancials.proratedPrice,
+                montoRecibido: montoAbonadoCochera,
                 ticket_code: altaResponse.data?.ticket_code || null
             });
 
@@ -709,13 +718,14 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             baseAmount: baseAmount,
             surchargeAmount: surchargeAmount,
             amountToPay: totalAmount,
+            montoCobrado: totalAmount, // Default: full amount
             metodoPago: 'Efectivo',
             tipoFactura: 'Final',
             cocheraDetails: cochera,
             hasPendingDebt: hasDebt,
             isGlobalDebt: isGlobalDebt,
             targetDebts: targetDebts,
-            surchargeStep: getActiveSurchargeStep() // New implicit field for UI detail
+            surchargeStep: getActiveSurchargeStep()
         });
         setIsRenewalModalOpen(true);
     };
@@ -773,17 +783,17 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     }, [renewalData.metodoPago, isRenewalModalOpen, standardPricesMatrix, electronicPricesMatrix, selectedDebtSubId, subscriptions, realVehicles, renewalData.hasPendingDebt]);
 
     const handleRenewSubscription = async () => {
-        if (!selectedDebtSubId || !renewalData.amountToPay) {
-            toast.error("Error al procesar la renovación (Faltan datos)");
+        if (!selectedDebtSubId || !renewalData.montoCobrado || renewalData.montoCobrado <= 0) {
+            toast.error("Error al procesar la renovación (Faltan datos o monto inválido)");
             return;
         }
 
-        const btnSpinner = toast.loading("Procesando pago de deuda...");
+        const btnSpinner = toast.loading("Procesando pago...");
         try {
             const renewResponse = await api.post('/abonos/renovar', {
                 subId: selectedDebtSubId,
                 customerId: clientId,
-                amountToPay: renewalData.amountToPay,
+                amountToPay: renewalData.montoCobrado,
                 paymentMethod: renewalData.metodoPago,
                 billingType: renewalData.tipoFactura,
                 operator: operatorName,
@@ -792,15 +802,20 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 targetDebtIds: renewalData.targetDebts ? renewalData.targetDebts.map((d: any) => d.id) : []
             });
 
-            toast.success("Renovación Exitosa! Imprimiendo Comprobante...", { id: btnSpinner });
+            const isPartial = renewResponse.data?.isPartial;
+            if (isPartial) {
+                toast.success(`Pago Parcial registrado. Saldo restante: $${renewResponse.data.totalRemainingAfter?.toLocaleString() || '---'}`, { id: btnSpinner });
+            } else {
+                toast.success("Pago Total Exitoso! Imprimiendo Comprobante...", { id: btnSpinner });
+            }
 
             // Prepare Payload for Printing
             const printPayload = {
                 titular: clientName,
-                monto: renewalData.amountToPay,
+                monto: renewalData.montoCobrado,
                 operador: operatorName,
                 cocheraTexto: renewalData.isGlobalDebt
-                    ? "PAGO DEUDA TOTAL"
+                    ? (isPartial ? "PAGO PARCIAL DEUDA" : "PAGO DEUDA TOTAL")
                     : (renewalData.cocheraDetails?.tipo === 'Movil' ? 'Móvil' : `#${renewalData.cocheraDetails?.numero || 'S/N'}`),
                 patentes: [] as string[]
             };
@@ -819,7 +834,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             PrinterService.printRenewalTicket({ ...printPayload, ticket_code: renewResponse.data?.ticket_code || null });
 
             setIsRenewalModalOpen(false);
-            refreshCustomerAssets(); // Auto Refresh State entirely
+            refreshCustomerAssets();
 
         } catch (error: any) {
             console.error("Renewal Error:", error);
@@ -862,13 +877,21 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     };
 
 
-    const inputStyle = "bg-gray-950/40 border border-gray-800/60 rounded-lg px-2.5 py-1.5 text-sm text-white outline-none focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/5 transition-all w-full placeholder-gray-700/50 font-medium h-9";
+    const inputStyle = "bg-gray-950/40 border border-gray-800/60 rounded-lg px-2.5 py-1.5 text-sm text-white outline-none focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/5 transition-all w-full placeholder-gray-700/50 font-medium h-9 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
     const labelStyle = "block text-[10px] uppercase text-gray-500 font-bold mb-0.5 tracking-wider";
 
     const canonDebts = debts.filter((d: any) => d.type === 'CANON');
     const otherDebts = debts.filter((d: any) => d.type !== 'CANON');
-    const totalCanon = canonDebts.reduce((sum: number, d: any) => sum + (d.amount || 0), 0);
-    const totalOther = otherDebts.reduce((sum: number, d: any) => sum + (d.amount || 0), 0);
+    // Use remaining_amount for real pending balance (supports partial payments)
+    // SAFE: handles null, undefined, NaN from DB
+    const getRemaining = (d: any) => {
+        const rem = Number(d.remaining_amount);
+        return (typeof d.remaining_amount === 'number' && !isNaN(rem)) ? rem : Number(d.amount) || 0;
+    };
+    const totalCanon = canonDebts.reduce((sum: number, d: any) => sum + getRemaining(d), 0);
+    const totalOther = otherDebts.reduce((sum: number, d: any) => sum + getRemaining(d), 0);
+    const hasPartialPayments = debts.some((d: any) => (d.amount_paid || 0) > 0 && d.status === 'PENDING');
+
 
     return (
         <div className="flex-1 min-h-full border-none bg-[#050505] w-full flex flex-col">
@@ -924,18 +947,20 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                             <div>
                                 <h4 className="text-red-400 font-bold uppercase tracking-widest text-sm mb-1">Deuda Acumulada</h4>
                                 <p className="text-gray-300 text-sm">
-                                    {canonDebts.length > 0 && otherDebts.length === 0
-                                        ? `Este cliente tiene ${canonDebts.length} abono(s) pendiente(s). Puede pagar la totalidad desde aquí.`
-                                        : canonDebts.length === 0 && otherDebts.length > 0
-                                            ? `Este cliente tiene ${otherDebts.length} cargo(s) manuales/migrados pendientes. Puede pagar la totalidad desde aquí.`
-                                            : `Este cliente tiene ${canonDebts.length} abono(s) y ${otherDebts.length} cargo(s) manuales pendientes. Puede pagar la totalidad desde aquí.`}
+                                    {canonDebts.length > 0
+                                        ? `Este cliente tiene deudas pendientes en ${new Set(canonDebts.map(d => d.subscriptionId)).size} abono(s)/cochera(s).`
+                                        : ''}
+                                    {otherDebts.length > 0
+                                        ? ` ${otherDebts.length} cargo(s) manual(es) pendiente(s).`
+                                        : ''}
+                                    {hasPartialPayments && <span className="ml-1 text-amber-400">(Existen saldos parciales registrados)</span>}
                                 </p>
                             </div>
                         </div>
                         <div className="text-right flex flex-col items-end gap-3 text-red-400 font-bold">
                             <div className="text-right">
                                 <span className="block text-2xl font-mono text-red-400 font-bold">
-                                    ${debts.reduce((sum, d) => sum + (d.amount || 0), 0).toLocaleString()}
+                                    ${debts.reduce((sum, d) => sum + getRemaining(d), 0).toLocaleString()}
                                 </span>
                                 {(totalCanon > 0 && totalOther > 0) && (
                                     <div className="text-xs text-gray-400/90 font-medium mb-1.5 flex items-center justify-end gap-2">
@@ -944,12 +969,12 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                         <span>MANUAL: ${totalOther.toLocaleString()}</span>
                                     </div>
                                 )}
-                                <span className="text-xs text-red-500/80 font-bold uppercase">Monto Base Pendiente (Los recargos se calcularán al pagar)</span>
+                                <span className="text-xs text-red-500/80 font-bold uppercase">Saldo Pendiente (Los recargos se calcularán al pagar)</span>
                             </div>
                             <button
                                 onClick={() => {
-                                    const totalAmount = debts.reduce((sum, d) => sum + (d.amount || 0), 0);
-                                    const totalSurcharge = debts.reduce((sum, d) => sum + calculateSurcharge(d.amount || 0), 0);
+                                    const totalAmount = debts.reduce((sum, d) => sum + getRemaining(d), 0);
+                                    const totalSurcharge = debts.reduce((sum, d) => sum + calculateSurcharge(getRemaining(d)), 0);
                                     const totalDebt = totalAmount + totalSurcharge;
                                     const firstSubId = debts[0]?.subscriptionId || subscriptions[0]?.id || '';
                                     handleOpenRenewalModal(firstSubId, null, totalAmount, totalSurcharge, totalDebt, true, true, debts);
@@ -1048,6 +1073,23 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                         expirationDate = rawD.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
                                     }
 
+                                    // OVERRIDE: If there are PENDING CANON debts with remaining_amount > 0,
+                                    // treat as expired/unpaid even if endDate is in the future
+                                    if (!isExpired && associatedSub) {
+                                        const pendingCanonDebts = debts.filter((d: any) =>
+                                            d.subscriptionId === associatedSub.id &&
+                                            d.type === 'CANON' &&
+                                            d.status === 'PENDING'
+                                        );
+                                        const hasUnpaidCanon = pendingCanonDebts.some((d: any) => {
+                                            const rem = Number(d.remaining_amount);
+                                            return (typeof d.remaining_amount === 'number' && !isNaN(rem)) ? rem > 0 : true;
+                                        });
+                                        if (hasUnpaidCanon) {
+                                            isExpired = true;
+                                        }
+                                    }
+
                                 } else {
                                     // Fallback to end of month if no sub found at all (Edge case)
                                     const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
@@ -1097,6 +1139,39 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                 <span className="text-[10px] uppercase text-gray-500 font-bold tracking-wider">Base</span>
                                                 <span className="font-mono text-emerald-400 font-bold">${cochera.precioBase?.toLocaleString()}</span>
                                             </div>
+                                            {/* Partial Payment Badge & Month Labels */}
+                                            {(() => {
+                                                if (!associatedSub) return null;
+                                                const cocheraDebts = debts.filter(d => d.subscriptionId === associatedSub.id && d.status === 'PENDING');
+                                                if (cocheraDebts.length === 0) return null;
+
+                                                const partialDebts = cocheraDebts.filter(d => getRemaining(d) < (Number(d.amount) || 0));
+                                                const pendingRemaining = cocheraDebts.reduce((s: number, d: any) => s + getRemaining(d), 0);
+
+                                                // Month labels
+                                                const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+                                                const canonPending = cocheraDebts.filter(d => d.type === 'CANON');
+                                                const labels = canonPending.map(d => {
+                                                    const dt = new Date(d.dueDate);
+                                                    return { label: monthNames[dt.getMonth()], time: dt.getTime() };
+                                                }).sort((a, b) => a.time - b.time).map(m => m.label).join('-');
+
+                                                return (
+                                                    <div className="mt-2 flex flex-col gap-1">
+                                                        {partialDebts.length > 0 && (
+                                                            <div className="inline-flex max-w-fit items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/10 border border-amber-500/30">
+                                                                <div className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                                                <span className="text-[10px] uppercase text-amber-400 font-bold tracking-wider">Deuda: ${pendingRemaining.toLocaleString()}</span>
+                                                            </div>
+                                                        )}
+                                                        {labels && (
+                                                            <span className="text-[10px] text-red-400/80 font-bold uppercase tracking-widest mt-0.5">
+                                                                Debe {canonPending.length} mes(es): {labels}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })()}
                                         </div>
 
                                         <div className="flex-1 mb-8 space-y-3">
@@ -1187,21 +1262,32 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                             {isExpired && associatedSub && (
                                                 <button
                                                     onClick={() => {
-                                                        const base = cochera.precioBase || 0;
+                                                        // Use remaining_amount for base calculation if partially paid
+                                                        const specificDebts = debts.filter(d => d.subscriptionId === associatedSub.id && d.status === 'PENDING');
+                                                        const totalRemaining = specificDebts.reduce((s: number, d: any) => s + getRemaining(d), 0);
+                                                        const base = totalRemaining > 0 ? totalRemaining : (cochera.precioBase || 0);
                                                         const mora = calculateSurcharge(base);
+                                                        const targetDebtsArray = specificDebts.length > 0 ? specificDebts : [];
 
-                                                        // Precisamente filtrar la deuda base canon de este abono
-                                                        const specificDebts = debts.filter(d => d.subscriptionId === associatedSub.id);
-                                                        const targetDebt = specificDebts.find(d => d.amount === base) || specificDebts[0];
-                                                        const targetDebtsArray = targetDebt ? [targetDebt] : [];
-
-                                                        // Pass hasDebt = true when it's expired so the live lookup doesn't override with live prices if not intended, OR keep it clean.
-                                                        // Instructed: "Asegúrate de que si isExpired es true, la llamada a handleOpenRenewalModal pase el argumento hasDebt como true"
                                                         handleOpenRenewalModal(associatedSub.id, cochera, base, mora, base + mora, isExpired, false, targetDebtsArray);
                                                     }}
-                                                    className="w-full py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 rounded-lg text-xs font-bold uppercase tracking-widest transition-all"
+                                                    className={`w-full py-2 ${(() => {
+                                                        const specificDebts = debts.filter(d => d.subscriptionId === associatedSub.id && d.status === 'PENDING');
+                                                        // Caso A: Si todas las deudas pendientes están parcialmente pagadas
+                                                        const allHavePartial = specificDebts.length > 0 && specificDebts.every(d => getRemaining(d) < (Number(d.amount) || 0));
+                                                        return allHavePartial
+                                                            ? 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 border-amber-500/20'
+                                                            : 'bg-red-500/10 hover:bg-red-500/20 text-red-500 border-red-500/20';
+                                                    })()} border rounded-lg text-xs font-bold uppercase tracking-widest transition-all`}
                                                 >
-                                                    Renovar Abono (${(cochera.precioBase || 0).toLocaleString('es-AR')})
+                                                    {(() => {
+                                                        const specificDebts = debts.filter(d => d.subscriptionId === associatedSub.id && d.status === 'PENDING');
+                                                        // Caso A: Si todas las deudas pendientes están parcialmente pagadas
+                                                        const allHavePartial = specificDebts.length > 0 && specificDebts.every(d => getRemaining(d) < (Number(d.amount) || 0));
+                                                        const totalRemaining = specificDebts.reduce((s: number, d: any) => s + getRemaining(d), 0);
+                                                        const displayAmount = (totalRemaining > 0 ? totalRemaining : (cochera.precioBase || 0)).toLocaleString('es-AR');
+                                                        return allHavePartial ? `Pagar Restante ($${displayAmount})` : `Renovar Abono ($${displayAmount})`;
+                                                    })()}
                                                 </button>
                                             )}
                                         </div>
@@ -1344,17 +1430,17 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
                 {isNewCocheraOpen && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-                        <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-4xl p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto">
-                            <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
+                        <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-4xl p-4 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+                            <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
                                 <Plus className="w-5 h-5 text-emerald-400" />
                                 Nueva Cochera
                             </h3>
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 {/* COLUMNA IZQUIERDA: Configuración y Pagos */}
-                                <div className="space-y-6">
+                                <div className="space-y-4">
                                     {/* 1. CONFIG COCHERA */}
-                                    <div className="p-4 bg-gray-800/30 rounded-lg border border-gray-700/30 space-y-3">
+                                    <div className="p-3 bg-gray-800/30 rounded-lg border border-gray-700/30 space-y-3">
                                         <div className="flex gap-4 items-end">
                                             <div className="flex-1">
                                                 <label className={labelStyle}>Tipo</label>
@@ -1432,17 +1518,44 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                         </div>
                                     </div>
 
-                                    {/* SUMMARY */}
-                                    <div className="bg-emerald-900/10 border border-emerald-500/20 p-4 rounded-xl flex items-center justify-between">
-                                        <div>
-                                            <span className="block text-[10px] text-gray-500 uppercase font-bold tracking-widest">Precio Mensual</span>
-                                            <span className="text-sm font-mono text-gray-300">${newCocheraFinancials.basePrice.toLocaleString()}</span>
-                                        </div>
-                                        <div className="text-right">
-                                            <span className="block text-[10px] text-emerald-500 uppercase font-bold tracking-widest">Total Inicial (Prorrateado)</span>
+                                    {/* 4. SUMMARY & MONTO A ABONAR */}
+                                    <div className="grid grid-cols-2 gap-4">
+                                        {/* SUMMARY */}
+                                        <div className="bg-emerald-900/10 border border-emerald-500/20 p-3 rounded-xl flex flex-col justify-center items-center text-center h-full">
+                                            <span className="block text-[10px] text-gray-400 uppercase font-bold tracking-widest mb-1">Total Inicial Prorrateado</span>
                                             <span className="text-2xl font-black text-white tracking-tighter">${newCocheraFinancials.proratedPrice.toLocaleString()}</span>
+                                            <span className="block text-[10px] text-emerald-500 uppercase font-bold tracking-widest mt-1">Base: ${newCocheraFinancials.basePrice.toLocaleString()}</span>
+                                        </div>
+
+                                        {/* MONTO A ABONAR */}
+                                        <div className="p-3 border border-dashed border-gray-800 rounded-xl bg-gray-950/40 flex flex-col justify-center items-center h-full">
+                                            <label className={`${labelStyle} text-center mb-1`}>Monto a Abonar</label>
+                                            <div className="relative w-full max-w-[160px]">
+                                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-500 font-bold text-xl">$</span>
+                                                <input
+                                                    type="number"
+                                                    min={0}
+                                                    max={newCocheraFinancials.proratedPrice}
+                                                    className={`w-full bg-gray-900 border border-gray-700/50 rounded-lg pl-8 pr-2 py-1.5 text-white focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition-all text-2xl font-black font-mono text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`}
+                                                    value={montoAbonadoCochera || ''}
+                                                    onChange={(e) => {
+                                                        let val = Number(e.target.value);
+                                                        if (val > newCocheraFinancials.proratedPrice) val = newCocheraFinancials.proratedPrice;
+                                                        if (val < 0) val = 0;
+                                                        setMontoAbonadoCochera(val);
+                                                    }}
+                                                />
+                                            </div>
                                         </div>
                                     </div>
+
+                                    {/* DEUDA A CREAR BANNER */}
+                                    {montoAbonadoCochera < newCocheraFinancials.proratedPrice && (
+                                        <div className="bg-amber-500/10 border border-amber-500/30 p-2 rounded-lg flex items-center justify-between px-4 animate-in fade-in zoom-in duration-300">
+                                            <span className="text-xs font-bold text-amber-500 uppercase tracking-wider">Deuda a Crear</span>
+                                            <span className="text-lg font-mono text-amber-400 font-bold">${(newCocheraFinancials.proratedPrice - montoAbonadoCochera).toLocaleString()}</span>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* COLUMNA DERECHA: Vehiculo */}
@@ -1519,7 +1632,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                 </div>
                             )}
 
-                            <div className="flex gap-3 mt-8 pt-4 border-t border-gray-800">
+                            <div className="flex gap-3 mt-4 pt-4 border-t border-gray-800">
                                 <button onClick={() => setIsNewCocheraOpen(false)} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-bold uppercase transition-colors">Cancelar</button>
                                 <button onClick={handleCreateCochera} className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold uppercase transition-colors shadow-lg shadow-emerald-900/20 flex items-center justify-center gap-2">
                                     <Plus className="w-4 h-4" /> Crear Cochera
@@ -1566,7 +1679,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                     </div>
                                     <div className="flex justify-between items-end pt-1">
                                         <div className="text-red-400">
-                                            <span className="block text-[10px] uppercase tracking-widest font-bold mb-1">Total Final a Cobrar</span>
+                                            <span className="block text-[10px] uppercase tracking-widest font-bold mb-1">Total Final</span>
                                             <span className="text-sm font-medium">Cochera {renewalData.cocheraDetails?.tipo === 'Movil' ? 'Móvil' : renewalData.cocheraDetails?.tipo} #{renewalData.cocheraDetails?.numero || 'S/N'}</span>
                                         </div>
                                         <div className="text-3xl font-black text-white font-mono tracking-tighter">
@@ -1574,6 +1687,50 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                         </div>
                                     </div>
                                 </div>
+
+                                {/* EDITABLE AMOUNT INPUT */}
+                                <div>
+                                    <label className={`${labelStyle} text-white`}>Monto a Cobrar</label>
+                                    <div className="relative">
+                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-lg">$</span>
+                                        <input
+                                            type="number"
+                                            className={`${inputStyle} pl-8 text-xl font-mono font-bold text-center border-2 ${renewalData.montoCobrado < renewalData.amountToPay ? 'border-amber-500/50 bg-amber-950/20 text-amber-300' : 'border-emerald-500/30 bg-gray-950 text-white'}`}
+                                            value={renewalData.montoCobrado || ''}
+                                            onChange={e => {
+                                                let val = Number(e.target.value) || 0;
+                                                if (val > renewalData.amountToPay) val = renewalData.amountToPay;
+                                                setRenewalData({ ...renewalData, montoCobrado: val });
+                                            }}
+                                            min={1}
+                                            max={renewalData.amountToPay}
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* PARTIAL PAYMENT WARNING BANNER */}
+                                {renewalData.montoCobrado > 0 && renewalData.montoCobrado < renewalData.amountToPay && (
+                                    <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 flex items-start gap-3 animate-in fade-in slide-in-from-top-2">
+                                        <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                                        <div className="flex-1">
+                                            <span className="block text-xs text-amber-400 font-bold uppercase tracking-wider mb-1">Pago Parcial</span>
+                                            <div className="text-xs text-amber-300/80 space-y-0.5">
+                                                <div className="flex justify-between">
+                                                    <span>Recargo a cubrir:</span>
+                                                    <span className="font-mono font-bold">${Math.min(renewalData.montoCobrado, renewalData.surchargeAmount).toLocaleString()}</span>
+                                                </div>
+                                                <div className="flex justify-between">
+                                                    <span>Capital a abonar:</span>
+                                                    <span className="font-mono font-bold">${Math.max(0, renewalData.montoCobrado - renewalData.surchargeAmount).toLocaleString()}</span>
+                                                </div>
+                                                <div className="flex justify-between border-t border-amber-500/20 pt-1 mt-1">
+                                                    <span className="font-bold">Saldo pendiente restante:</span>
+                                                    <span className="font-mono font-bold text-amber-400">${(renewalData.amountToPay - renewalData.montoCobrado).toLocaleString()}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
 
                                 <div className="grid grid-cols-2 gap-4">
                                     <div>
@@ -1607,123 +1764,133 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
                             <div className="flex gap-3 mt-8 pt-4 border-t border-gray-800">
                                 <button onClick={() => setIsRenewalModalOpen(false)} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-bold uppercase transition-colors">Cancelar</button>
-                                <button onClick={handleRenewSubscription} className="flex-1 py-3 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold uppercase transition-colors shadow-lg shadow-red-900/20 flex items-center justify-center gap-2">
-                                    <Check className="w-4 h-4" /> Confirmar Pago
+                                <button
+                                    onClick={handleRenewSubscription}
+                                    disabled={!renewalData.montoCobrado || renewalData.montoCobrado <= 0}
+                                    className={`flex-1 py-3 ${renewalData.montoCobrado < renewalData.amountToPay ? 'bg-amber-600 hover:bg-amber-500 shadow-amber-900/20' : 'bg-red-600 hover:bg-red-500 shadow-red-900/20'} text-white rounded-xl text-xs font-bold uppercase transition-colors shadow-lg flex items-center justify-center gap-2 disabled:opacity-50`}
+                                >
+                                    <Check className="w-4 h-4" />
+                                    {renewalData.montoCobrado < renewalData.amountToPay ? 'Confirmar Pago Parcial' : 'Confirmar Pago'}
                                 </button>
                             </div>
                         </div>
                     </div>
-                )}
+                )
+                }
 
                 {/* --- CUSTOM CONFIRMATION MODAL (GLOBAL) --- */}
-                {confirmModal.isOpen && (
-                    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-                        <div className={`bg-gray-900 border ${confirmModal.type === 'danger' ? 'border-red-500/30 shadow-red-900/20' : 'border-amber-500/30 shadow-amber-900/20'} rounded-2xl w-full max-w-md p-6 shadow-2xl relative`}>
-                            <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-                                {confirmModal.type === 'danger' ? (
-                                    <AlertTriangle className="w-5 h-5 text-red-500" />
-                                ) : (
-                                    <AlertCircle className="w-5 h-5 text-amber-500" />
-                                )}
-                                {confirmModal.title}
-                            </h3>
+                {
+                    confirmModal.isOpen && (
+                        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+                            <div className={`bg-gray-900 border ${confirmModal.type === 'danger' ? 'border-red-500/30 shadow-red-900/20' : 'border-amber-500/30 shadow-amber-900/20'} rounded-2xl w-full max-w-md p-6 shadow-2xl relative`}>
+                                <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                                    {confirmModal.type === 'danger' ? (
+                                        <AlertTriangle className="w-5 h-5 text-red-500" />
+                                    ) : (
+                                        <AlertCircle className="w-5 h-5 text-amber-500" />
+                                    )}
+                                    {confirmModal.title}
+                                </h3>
 
-                            <div className="text-gray-300 text-sm leading-relaxed mb-8">
-                                {confirmModal.message}
-                            </div>
+                                <div className="text-gray-300 text-sm leading-relaxed mb-8">
+                                    {confirmModal.message}
+                                </div>
 
-                            <div className="flex gap-3">
-                                <button
-                                    disabled={isConfirmLoading}
-                                    onClick={handleCloseConfirm}
-                                    className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-xs font-bold uppercase transition-colors disabled:opacity-50"
-                                >
-                                    Cancelar
-                                </button>
-                                <button
-                                    disabled={isConfirmLoading}
-                                    onClick={async () => {
-                                        setIsConfirmLoading(true);
-                                        try {
-                                            await confirmModal.onConfirm();
-                                        } catch (error: any) {
-                                            console.error("Confirmation Action Error:", error);
-                                            const msg = error.response?.data?.error || error.message || "Error desconocido";
-                                            toast.error(`Error: ${msg}`);
-                                        } finally {
-                                            setIsConfirmLoading(false);
-                                        }
-                                    }}
-                                    className={`flex-1 py-2.5 ${confirmModal.type === 'danger' ? 'bg-red-600 hover:bg-red-500 shadow-red-900/20' : 'bg-amber-600 hover:bg-amber-500 shadow-amber-900/20'} text-white rounded-lg text-xs font-bold uppercase transition-all shadow-lg flex items-center justify-center gap-2 disabled:opacity-70`}
-                                >
-                                    {isConfirmLoading ? (
-                                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                    ) : null}
-                                    {isConfirmLoading ? 'Procesando...' : 'Confirmar'}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* === EDIT CUSTOMER MODAL === */}
-                {isEditCustomerOpen && (
-                    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
-                        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setIsEditCustomerOpen(false)} />
-                        <div className="relative bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-                            <div className="flex items-center justify-between p-6 border-b border-gray-800">
-                                <h3 className="text-lg font-bold text-white">Editar datos del cliente</h3>
-                                <button onClick={() => setIsEditCustomerOpen(false)} className="p-1.5 text-gray-500 hover:text-white hover:bg-gray-800 rounded-lg transition-colors">
-                                    <X className="w-4 h-4" />
-                                </button>
-                            </div>
-                            <div className="p-6 space-y-4">
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div className="col-span-2">
-                                        <label className={labelStyle}>Nombre completo</label>
-                                        <input className={inputStyle} value={editCustomerData.name} onChange={e => setEditCustomerData(p => ({ ...p, name: e.target.value }))} placeholder="Nombre y Apellido" />
-                                    </div>
-                                    <div>
-                                        <label className={labelStyle}>DNI</label>
-                                        <input className={inputStyle} value={editCustomerData.dni} onChange={e => setEditCustomerData(p => ({ ...p, dni: e.target.value }))} placeholder="12345678" />
-                                    </div>
-                                    <div>
-                                        <label className={labelStyle}>Teléfono</label>
-                                        <input className={inputStyle} value={editCustomerData.phone} onChange={e => setEditCustomerData(p => ({ ...p, phone: e.target.value }))} placeholder="1122334455" />
-                                    </div>
-                                    <div className="col-span-2">
-                                        <label className={labelStyle}>Email</label>
-                                        <input className={inputStyle} type="email" value={editCustomerData.email} onChange={e => setEditCustomerData(p => ({ ...p, email: e.target.value }))} placeholder="ejemplo@mail.com" />
-                                    </div>
-                                    <div>
-                                        <label className={labelStyle}>Dirección</label>
-                                        <input className={inputStyle} value={editCustomerData.address} onChange={e => setEditCustomerData(p => ({ ...p, address: e.target.value }))} placeholder="Calle 123" />
-                                    </div>
-                                    <div>
-                                        <label className={labelStyle}>Localidad</label>
-                                        <input className={inputStyle} value={editCustomerData.localidad} onChange={e => setEditCustomerData(p => ({ ...p, localidad: e.target.value }))} placeholder="Ciudad" />
-                                    </div>
+                                <div className="flex gap-3">
+                                    <button
+                                        disabled={isConfirmLoading}
+                                        onClick={handleCloseConfirm}
+                                        className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-xs font-bold uppercase transition-colors disabled:opacity-50"
+                                    >
+                                        Cancelar
+                                    </button>
+                                    <button
+                                        disabled={isConfirmLoading}
+                                        onClick={async () => {
+                                            setIsConfirmLoading(true);
+                                            try {
+                                                await confirmModal.onConfirm();
+                                            } catch (error: any) {
+                                                console.error("Confirmation Action Error:", error);
+                                                const msg = error.response?.data?.error || error.message || "Error desconocido";
+                                                toast.error(`Error: ${msg}`);
+                                            } finally {
+                                                setIsConfirmLoading(false);
+                                            }
+                                        }}
+                                        className={`flex-1 py-2.5 ${confirmModal.type === 'danger' ? 'bg-red-600 hover:bg-red-500 shadow-red-900/20' : 'bg-amber-600 hover:bg-amber-500 shadow-amber-900/20'} text-white rounded-lg text-xs font-bold uppercase transition-all shadow-lg flex items-center justify-center gap-2 disabled:opacity-70`}
+                                    >
+                                        {isConfirmLoading ? (
+                                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                        ) : null}
+                                        {isConfirmLoading ? 'Procesando...' : 'Confirmar'}
+                                    </button>
                                 </div>
                             </div>
-                            <div className="flex justify-end gap-3 p-6 border-t border-gray-800">
-                                <button onClick={() => setIsEditCustomerOpen(false)} className="px-4 py-2 text-sm text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors">
-                                    Cancelar
-                                </button>
-                                <button
-                                    onClick={handleUpdateCustomer}
-                                    disabled={isEditSaving}
-                                    className="flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-all shadow-lg shadow-indigo-900/40"
-                                >
-                                    {isEditSaving && <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
-                                    {isEditSaving ? 'Guardando...' : 'Guardar cambios'}
-                                </button>
+                        </div>
+                    )
+                }
+
+                {/* === EDIT CUSTOMER MODAL === */}
+                {
+                    isEditCustomerOpen && (
+                        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+                            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setIsEditCustomerOpen(false)} />
+                            <div className="relative bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+                                <div className="flex items-center justify-between p-6 border-b border-gray-800">
+                                    <h3 className="text-lg font-bold text-white">Editar datos del cliente</h3>
+                                    <button onClick={() => setIsEditCustomerOpen(false)} className="p-1.5 text-gray-500 hover:text-white hover:bg-gray-800 rounded-lg transition-colors">
+                                        <X className="w-4 h-4" />
+                                    </button>
+                                </div>
+                                <div className="p-6 space-y-4">
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="col-span-2">
+                                            <label className={labelStyle}>Nombre completo</label>
+                                            <input className={inputStyle} value={editCustomerData.name} onChange={e => setEditCustomerData(p => ({ ...p, name: e.target.value }))} placeholder="Nombre y Apellido" />
+                                        </div>
+                                        <div>
+                                            <label className={labelStyle}>DNI</label>
+                                            <input className={inputStyle} value={editCustomerData.dni} onChange={e => setEditCustomerData(p => ({ ...p, dni: e.target.value }))} placeholder="12345678" />
+                                        </div>
+                                        <div>
+                                            <label className={labelStyle}>Teléfono</label>
+                                            <input className={inputStyle} value={editCustomerData.phone} onChange={e => setEditCustomerData(p => ({ ...p, phone: e.target.value }))} placeholder="1122334455" />
+                                        </div>
+                                        <div className="col-span-2">
+                                            <label className={labelStyle}>Email</label>
+                                            <input className={inputStyle} type="email" value={editCustomerData.email} onChange={e => setEditCustomerData(p => ({ ...p, email: e.target.value }))} placeholder="ejemplo@mail.com" />
+                                        </div>
+                                        <div>
+                                            <label className={labelStyle}>Dirección</label>
+                                            <input className={inputStyle} value={editCustomerData.address} onChange={e => setEditCustomerData(p => ({ ...p, address: e.target.value }))} placeholder="Calle 123" />
+                                        </div>
+                                        <div>
+                                            <label className={labelStyle}>Localidad</label>
+                                            <input className={inputStyle} value={editCustomerData.localidad} onChange={e => setEditCustomerData(p => ({ ...p, localidad: e.target.value }))} placeholder="Ciudad" />
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="flex justify-end gap-3 p-6 border-t border-gray-800">
+                                    <button onClick={() => setIsEditCustomerOpen(false)} className="px-4 py-2 text-sm text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors">
+                                        Cancelar
+                                    </button>
+                                    <button
+                                        onClick={handleUpdateCustomer}
+                                        disabled={isEditSaving}
+                                        className="flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-all shadow-lg shadow-indigo-900/40"
+                                    >
+                                        {isEditSaving && <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+                                        {isEditSaving ? 'Guardando...' : 'Guardar cambios'}
+                                    </button>
+                                </div>
                             </div>
                         </div>
-                    </div>
-                )}
-            </div>
+                    )
+                }
+            </div >
             <WebcamModal isOpen={showCameraModal} onClose={() => setShowCameraModal(false)} onCapture={handleCapture} label={activePhotoField || 'Doc'} />
-        </div>
+        </div >
     );
 };
 

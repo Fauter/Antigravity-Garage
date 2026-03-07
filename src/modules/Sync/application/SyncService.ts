@@ -544,7 +544,7 @@ export class SyncService {
             if (base.amount !== undefined) { base.amount = Number(base.amount); }
             if (base.garageId !== undefined) { base.garage_id = base.garageId; delete base.garageId; }
 
-            const allowedDebtFields = ['id', 'subscription_id', 'customer_id', 'amount', 'surcharge_applied', 'status', 'type', 'due_date', 'garage_id', 'created_at', 'updated_at'];
+            const allowedDebtFields = ['id', 'subscription_id', 'customer_id', 'amount', 'remaining_amount', 'amount_paid', 'surcharge_applied', 'status', 'type', 'due_date', 'garage_id', 'created_at', 'updated_at'];
             Object.keys(base).forEach(key => {
                 if (!allowedDebtFields.includes(key)) {
                     delete base[key];

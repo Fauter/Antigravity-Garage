@@ -42,8 +42,9 @@ export class VehicleRepository {
     }
 
     async findByPlate(plate: string, garageId?: string): Promise<Vehicle | null> {
-        // Create a regex to match the plate ignoring spaces, dashes, and casing
-        const plateRegex = new RegExp([...plate].join('[\\\\s\\\\-_]*'), 'i');
+        // Create a regex to match the exact plate ignoring spaces, dashes, and casing
+        const normalizedInput = plate.replace(/[\s\-_]/g, '');
+        const plateRegex = new RegExp('^[\\\\s\\\\-_]*' + [...normalizedInput].join('[\\\\s\\\\-_]*') + '[\\\\s\\\\-_]*$', 'i');
         const query: any = { plate: { $regex: plateRegex } };
         if (garageId) query.garageId = garageId;
         return await db.vehicles.findOne(query) as Vehicle | null;

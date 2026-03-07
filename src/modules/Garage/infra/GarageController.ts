@@ -678,27 +678,34 @@ export class GarageController {
             // 5. Financial Movement (CRITICAL - TODO O NADA)
             let receiptNumber: string | null = null;
             try {
+                // Determine actual amount charged (supports partial payment at alta)
+                const montoReal = (req.body.montoAbonado !== undefined && req.body.montoAbonado !== null && Number(req.body.montoAbonado) > 0)
+                    ? Number(req.body.montoAbonado)
+                    : savedSub.price;
+
                 // Validación para evitar montos nulos/ceros en altas de abono
-                if (savedSub.price === 0 || isNaN(savedSub.price)) {
+                if (montoReal === 0 || isNaN(montoReal)) {
                     throw new Error("Monto a cobrar inválido");
                 }
 
                 // Generate correlative receipt number
                 receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
 
+                const isPartialAlta = montoReal < savedSub.price;
                 await this.movementRepo.save({
                     id: uuidv4(),
                     type: 'CobroAbono',
-                    amount: savedSub.price,
+                    amount: montoReal,
                     paymentMethod: paymentMethod || 'Efectivo',
                     timestamp: new Date(),
-                    notes: `Alta Abono ${subscriptionType} - ${vehicle.plate}`,
+                    notes: isPartialAlta
+                        ? `Alta con Pago Parcial ${subscriptionType} - ${vehicle.plate}. Saldo pendiente: $${savedSub.price - montoReal}`
+                        : `Alta Abono ${subscriptionType} - ${vehicle.plate}`,
                     relatedEntityId: savedSub.id,
                     plate: vehicle.plate,
                     garageId: garageId,
                     operator: operator || 'Sistema',
                     invoice_type: billingType,
-                    receipt_number: receiptNumber,
                     ticket_code: receiptNumber,
                     createdAt: new Date()
                 } as any);
@@ -719,6 +726,36 @@ export class GarageController {
                 }
 
                 throw new Error(`Error de Transacción (Rollback ejecutado): ${movementError.message}`);
+            }
+
+            // 5.5. Alta con Deuda: If montoAbonado < totalInicial, create debt for difference
+            const montoAbonado = req.body.montoAbonado;
+            const totalInicial = req.body.totalInicial || savedSub.price;
+            if (montoAbonado !== undefined && montoAbonado !== null && Number(montoAbonado) < Number(totalInicial)) {
+                const diferencia = Number(totalInicial) - Number(montoAbonado);
+                if (diferencia > 0) {
+                    // Override movement amount to actual paid amount
+                    // (The movement was already saved with savedSub.price above, so we need to update it)
+                    // Actually, let's override the price before movement creation next time
+                    // For now: create debt for the difference
+                    const debtId = uuidv4();
+                    await this.debtRepo.save({
+                        id: debtId,
+                        subscriptionId: savedSub.id,
+                        customerId: customer!.id,
+                        garageId: garageId,
+                        amount: Number(totalInicial),
+                        remaining_amount: diferencia,
+                        amount_paid: Number(montoAbonado),
+                        surchargeApplied: 0,
+                        status: 'PENDING',
+                        type: 'CANON',
+                        dueDate: new Date(),
+                        createdAt: new Date(),
+                        updatedAt: new Date()
+                    } as any);
+                    console.log(`📋 [Abonos] Deuda creada por diferencia: $${diferencia} (montoAbonado: $${montoAbonado}, totalInicial: $${totalInicial})`);
+                }
             }
 
             res.json({ ...savedSub, ticket_code: receiptNumber });
@@ -897,6 +934,8 @@ export class GarageController {
                                 customerId: sub.customerId || (sub as any).clientId,
                                 garageId: garageId,
                                 amount: finalPrice,
+                                remaining_amount: (existingDebt && typeof (existingDebt as any).remaining_amount === 'number') ? (existingDebt as any).remaining_amount : finalPrice,
+                                amount_paid: (existingDebt && typeof (existingDebt as any).amount_paid === 'number') ? (existingDebt as any).amount_paid : 0,
                                 surchargeApplied: 0,
                                 status: existingDebt ? existingDebt.status : 'PENDING',
                                 type: 'CANON',
@@ -1065,8 +1104,19 @@ export class GarageController {
             const { subId, customerId, amountToPay, paymentMethod, billingType, operator, isDebtPaymentOnly, isGlobalDebt, targetDebts, targetDebtIds } = req.body;
             const garageId = req.headers['x-garage-id'] as string;
 
-            if (!amountToPay) {
-                return res.status(400).json({ error: 'amountToPay is required' });
+            if (!amountToPay || amountToPay <= 0) {
+                return res.status(400).json({ error: 'amountToPay is required and must be > 0' });
+            }
+
+            // ── Load Garage Surcharge Config ──
+            let garageSettings: any = {};
+            if (garageId) {
+                const garage: any = await db.garages.findOne({ id: garageId });
+                garageSettings = garage?.settings || garage?.config || garage || {};
+                const financialConfigs: any = await db.financialConfigs.find({ garageId });
+                if (financialConfigs && financialConfigs.length > 0) {
+                    garageSettings.surchargeConfig = financialConfigs[0].surchargeConfig || financialConfigs[0];
+                }
             }
 
             // Pay debts flow
@@ -1075,10 +1125,8 @@ export class GarageController {
 
             let debtsToPay: any[] = [];
             let subsToRenew: Set<string> = new Set();
-            let hasSubscriptionsToRenew = false;
 
             if (isGlobalDebt) {
-                // Pago Total: Todas las deudas del cliente proporcionadas en el payload (o filtradas por Target).
                 if (targetDebtIds && targetDebtIds.length > 0) {
                     debtsToPay = pendingDebts.filter(d => targetDebtIds.includes(d.id));
                 } else if (targetDebts && targetDebts.length > 0) {
@@ -1088,47 +1136,116 @@ export class GarageController {
                     debtsToPay = pendingDebts;
                 }
 
-                // Identificar deudas que corresponden a suscripciones y necesitan renovación
                 for (const debt of debtsToPay) {
-                    if (debt.subscriptionId) {
-                        subsToRenew.add(debt.subscriptionId);
-                        hasSubscriptionsToRenew = true;
-                    }
+                    if (debt.subscriptionId) subsToRenew.add(debt.subscriptionId);
                 }
             } else {
-                // Pago Individual / Renovación Individual: Exclusivo a una única Card (Suscripción o Cochera)
                 if (!subId) {
                     return res.status(400).json({ error: 'subId is required for individual renewal/payment' });
                 }
 
-                // SECURITY: Pagar EXCLUSIVAMENTE los debtIds enviados explícitamente desde el frontend.
-                // Esto evita el borrado accidental de deudas "Manuales" atadas a la subscrpición durante la liquidación de "Canon".
                 if (targetDebtIds && targetDebtIds.length > 0) {
                     debtsToPay = pendingDebts.filter(d => d.subscriptionId === subId && targetDebtIds.includes(d.id));
                 } else if (targetDebts && targetDebts.length > 0) {
                     const targetIds = targetDebts.map((td: any) => td.id);
                     debtsToPay = pendingDebts.filter(d => d.subscriptionId === subId && targetIds.includes(d.id));
                 } else {
-                    // Si el Front end no envia deudas explícitas (e.g., porque no las hay al renovar de forma anticipada)
-                    // entonces no pagamos ABSOLUTAMENTE NADA de forma automática/implicita.
                     debtsToPay = [];
                 }
 
                 subsToRenew.add(subId);
-                hasSubscriptionsToRenew = true;
             }
 
-            // 1. Mark target debts as PAID
+            // ── PARTIAL PAYMENT LOGIC ──
+            // For each debt: calculate its surcharge, then distribute the amountToPay
+            // Surcharge is covered FIRST, then capital (remaining_amount)
+            let remainingPayment = Number(amountToPay);
+            let totalSurchargeCovered = 0;
+            let totalCapitalCovered = 0;
+            let totalRemainingAfter = 0;
+            let allDebtsFullyPaid = true;
+            const notesParts: string[] = [];
+
+            // Sort debts by dueDate ascending (oldest first)
+            debtsToPay.sort((a: any, b: any) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+
             for (const debt of debtsToPay) {
-                debt.status = 'PAID';
-                debt.updatedAt = new Date();
-                await this.debtRepo.save(debt);
+                if (remainingPayment <= 0) {
+                    allDebtsFullyPaid = false;
+                    break;
+                }
+
+                const debtRemaining = (typeof (debt as any).remaining_amount === 'number' && (debt as any).remaining_amount !== null) ? (debt as any).remaining_amount : debt.amount;
+                const debtAmountPaid = (typeof (debt as any).amount_paid === 'number' && (debt as any).amount_paid !== null) ? (debt as any).amount_paid : 0;
+                const surchargeForDebt = PricingEngine.calculateSurcharge(debtRemaining, garageSettings);
+                const totalOwedThisDebt = debtRemaining + surchargeForDebt;
+
+                if (remainingPayment >= totalOwedThisDebt) {
+                    // Full payment of this debt
+                    remainingPayment -= totalOwedThisDebt;
+                    totalSurchargeCovered += surchargeForDebt;
+                    totalCapitalCovered += debtRemaining;
+
+                    debt.status = 'PAID';
+                    (debt as any).remaining_amount = 0;
+                    (debt as any).amount_paid = debt.amount;
+                    debt.surchargeApplied = (debt.surchargeApplied || 0) + surchargeForDebt;
+                    debt.updatedAt = new Date();
+                    await this.debtRepo.save(debt);
+                } else {
+                    // Partial payment: surcharge first, then capital
+                    allDebtsFullyPaid = false;
+                    let appliedToSurcharge = 0;
+                    let appliedToCapital = 0;
+
+                    if (remainingPayment >= surchargeForDebt) {
+                        appliedToSurcharge = surchargeForDebt;
+                        appliedToCapital = remainingPayment - surchargeForDebt;
+                    } else {
+                        // Not enough even for surcharge — all goes to surcharge
+                        appliedToSurcharge = remainingPayment;
+                        appliedToCapital = 0;
+                    }
+
+                    totalSurchargeCovered += appliedToSurcharge;
+                    totalCapitalCovered += appliedToCapital;
+
+                    const newRemaining = debtRemaining - appliedToCapital;
+                    totalRemainingAfter += newRemaining;
+
+                    (debt as any).remaining_amount = newRemaining;
+                    (debt as any).amount_paid = debtAmountPaid + appliedToCapital;
+                    debt.surchargeApplied = (debt.surchargeApplied || 0) + appliedToSurcharge;
+                    debt.status = 'PENDING'; // Still pending
+                    debt.updatedAt = new Date();
+                    await this.debtRepo.save(debt);
+
+                    notesParts.push(`Parcial Deuda ${debt.id.slice(0, 8)}: Recargo $${appliedToSurcharge}, Capital $${appliedToCapital}, Saldo restante $${newRemaining}`);
+                    remainingPayment = 0;
+                }
             }
 
-            // 2. Register single payment movement
-            const movementNotes = isGlobalDebt
-                ? `Pago de Deuda Total Acumulada (${debtsToPay.length} abonos)`
-                : `Renovación Abono / Pago Deuda Individual - ${subId || 'N/A'}`;
+            // Also accumulate remaining for debts not reached
+            for (const debt of debtsToPay) {
+                if (debt.status === 'PENDING') {
+                    const dr = (debt as any).remaining_amount ?? debt.amount;
+                    if (dr > 0 && !notesParts.some(n => n.includes(debt.id.slice(0, 8)))) {
+                        totalRemainingAfter += dr;
+                    }
+                }
+            }
+
+            // 2. Build movement notes (simplified)
+            let movementNotes = '';
+            if (allDebtsFullyPaid && debtsToPay.length > 0) {
+                movementNotes = isGlobalDebt
+                    ? `Pago Total Deuda Acumulada (${debtsToPay.length} deudas)`
+                    : `Pago Total por Renovación`;
+            } else if (debtsToPay.length > 0) {
+                movementNotes = `Pago Parcial por Renovación, Saldo restante: $${totalRemainingAfter}`;
+            } else {
+                movementNotes = `Renovación Abono Anticipada`;
+            }
 
             const plateForMovement = isGlobalDebt ? 'Multiples' : (await this.subscriptionRepo.findById(subId))?.plate || 'N/A';
 
@@ -1147,41 +1264,51 @@ export class GarageController {
                 garageId: garageId,
                 operator: operator || 'Sistema',
                 invoice_type: billingType || 'Final',
-                receipt_number: receiptNumber,
                 ticket_code: receiptNumber,
                 createdAt: new Date()
             } as any);
 
-            // 3. Renew Subscriptions concurrently (using SubscriptionManager logic)
+            // 3. Renew Subscriptions ONLY if ALL debts for that sub are fully paid
             let renewedSubs: any[] = [];
-            const activeCustomerSubs = customerId ? await this.subscriptionRepo.findByCustomerId(customerId).then(subs => subs.filter(s => s.active)) : [];
 
-            // Evaluamos si el action es renovación (no solo apagar el rojo, sino extender el endDate)
-            // Por la directriz 3: "Si el cliente tiene 2 o 3 suscripciones vencidas, todas deben quedar con su endDate actualizado"
-            // También se requiere para flujo individual.
-
-            // Si subsToRenew tiene items, renovamos. Pero sólo renovamos si pasaron el proceso de pago (flujo default del sistema actual)
             for (const subIdToRenew of subsToRenew) {
-                const subToRenew = await this.subscriptionRepo.findById(subIdToRenew);
-                if (subToRenew && subToRenew.active) {
-                    const vehicle = await this.vehicleRepo.findByPlate(subToRenew.plate || '');
+                // Check if this subscription still has pending debts
+                const subDebtsAfter = await this.debtRepo.findBySubscriptionId(subIdToRenew);
+                const stillPending = subDebtsAfter.filter(d => d.status === 'PENDING' && ((d as any).remaining_amount ?? d.amount) > 0);
 
-                    const renewedSub = SubscriptionManager.renewSubscription(
-                        subToRenew,
-                        new Date(),
-                        PRICING_CONFIG as any
-                    );
-
-                    await this.subscriptionRepo.save(renewedSub);
-                    renewedSubs.push(renewedSub);
+                if (stillPending.length === 0) {
+                    // All debts paid → renew subscription (extend endDate)
+                    const subToRenew = await this.subscriptionRepo.findById(subIdToRenew);
+                    if (subToRenew && subToRenew.active) {
+                        const renewedSub = SubscriptionManager.renewSubscription(
+                            subToRenew,
+                            new Date(),
+                            PRICING_CONFIG as any
+                        );
+                        await this.subscriptionRepo.save(renewedSub);
+                        renewedSubs.push(renewedSub);
+                    }
                 }
             }
 
+            const responsePayload: any = {
+                message: allDebtsFullyPaid
+                    ? (isGlobalDebt ? 'Deuda global pagada y suscripciones renovadas' : 'Abono renovado y deuda pagada')
+                    : 'Pago parcial registrado. Saldo pendiente restante.',
+                ticket_code: receiptNumber,
+                isPartial: !allDebtsFullyPaid,
+                totalSurchargeCovered,
+                totalCapitalCovered,
+                totalRemainingAfter
+            };
+
             if (isGlobalDebt) {
-                return res.json({ message: 'Deuda global pagada y suscripciones vinculadas renovadas', subscriptions: renewedSubs, ticket_code: receiptNumber });
+                responsePayload.subscriptions = renewedSubs;
             } else {
-                return res.json({ message: 'Abono individual renovado y su deuda pagada', subscription: renewedSubs[0] || null, ticket_code: receiptNumber });
+                responsePayload.subscription = renewedSubs[0] || null;
             }
+
+            return res.json(responsePayload);
 
         } catch (error: any) {
             console.error('Renew Error:', error);

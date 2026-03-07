@@ -53,8 +53,8 @@ const EntryPanel: React.FC = () => {
                                 onChange={(e) => setPlate(e.target.value.toUpperCase())}
                                 placeholder="AAA-000"
                                 className={`w-full h-14 bg-gray-800 border-2 rounded-xl text-center text-3xl font-mono text-white font-bold outline-none uppercase transition-colors ${errorInfo?.isConflict
-                                        ? 'border-red-500 focus:border-red-400'
-                                        : 'border-gray-700 focus:border-emerald-500'
+                                    ? 'border-red-500 focus:border-red-400'
+                                    : 'border-gray-700 focus:border-emerald-500'
                                     }`}
                                 maxLength={7}
                                 autoFocus
@@ -85,8 +85,8 @@ const EntryPanel: React.FC = () => {
                         <div className="pt-2">
                             <button
                                 type="submit"
-                                disabled={!plate || !vehicleType || isLoading || isGlobalSyncing}
-                                className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-wide flex items-center justify-center gap-3 transition-all ${(!plate || !vehicleType || isGlobalSyncing)
+                                disabled={!plate || plate.trim().length < 3 || !vehicleType || isLoading || isGlobalSyncing}
+                                className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-wide flex items-center justify-center gap-3 transition-all ${(!plate || plate.trim().length < 3 || !vehicleType || isGlobalSyncing)
                                     ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
                                     : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-900/30'
                                     }`}

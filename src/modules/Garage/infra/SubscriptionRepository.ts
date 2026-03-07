@@ -50,8 +50,9 @@ export class SubscriptionRepository {
     }
 
     async findActiveByPlate(plate: string): Promise<any | null> {
-        // Create a regex to match the plate ignoring spaces, dashes, and casing
-        const plateRegex = new RegExp([...plate].join('[\\\\s\\\\-_]*'), 'i');
+        // Create a regex to match the exact plate ignoring spaces, dashes, and casing
+        const normalizedInput = plate.replace(/[\s\-_]/g, '');
+        const plateRegex = new RegExp('^[\\\\s\\\\-_]*' + [...normalizedInput].join('[\\\\s\\\\-_]*') + '[\\\\s\\\\-_]*$', 'i');
         return await db.subscriptions.findOne({ plate: { $regex: plateRegex }, active: true });
     }
 

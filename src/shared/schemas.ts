@@ -118,6 +118,8 @@ export const DebtSchema = z.object({
   subscriptionId: UuidSchema,
   customerId: UuidSchema,
   amount: z.number().min(0),
+  remaining_amount: z.number().min(0).optional(), // Saldo pendiente (decrece con pagos parciales)
+  amount_paid: z.number().min(0).default(0),       // Total acumulado pagado
   surchargeApplied: z.number().min(0).default(0),
   status: DebtStatusEnum.default('PENDING'),
   type: DebtTypeEnum.default('CANON'),

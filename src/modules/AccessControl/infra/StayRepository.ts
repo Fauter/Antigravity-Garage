@@ -90,13 +90,19 @@ export class StayRepository {
             const activeByTicket = ticketCandidates.find((s: any) => !s.exitTime);
             if (activeByTicket) return this.mapStay(activeByTicket);
 
-            // 2. Regex match for plate ignoring spaces, dashes, and casing
-            const plateRegex = new RegExp([...queryInput].join('[\\\\s\\\\-_]*'), 'i');
-            const plateCandidates = await db.stays.find({ ...query, plate: { $regex: plateRegex } });
+            // 2. Exact match for plate, ensuring uppercase
+            const exactPlate = queryInput.trim().toUpperCase();
+            const plateCandidates = await db.stays.find({ ...query, plate: exactPlate, active: true });
 
             // NeDB Logic for "Active" (exitTime is null or missing)
             // Filter in memory for safety regarding 'active' logic nuances
-            const activeByPlate = plateCandidates.find((s: any) => !s.exitTime);
+            let activeByPlate = plateCandidates.find((s: any) => !s.exitTime);
+
+            // Fallback for older records where active: true might not be explicitly set
+            if (!activeByPlate) {
+                const legacyCandidates = await db.stays.find({ ...query, plate: exactPlate });
+                activeByPlate = legacyCandidates.find((s: any) => !s.exitTime && s.active !== false);
+            }
 
             if (activeByPlate) return this.mapStay(activeByPlate);
             return null;

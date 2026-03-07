@@ -1,6 +1,6 @@
 {
   "name": "GarageIA",
-  "version": "3.2.3",
+  "version": "3.2.5",
   "description": "Este documento contiene la Hoja de Ruta Técnica y el Análisis Crítico para la reconstrucción del sistema, diseñado bajo arquitectura **Offline-First**.",
   "main": "main.js",
   "scripts": {

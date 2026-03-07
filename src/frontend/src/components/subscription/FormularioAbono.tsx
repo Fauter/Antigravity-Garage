@@ -43,6 +43,7 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
     // Data
     const [basePriceDisplay, setBasePriceDisplay] = useState(0);
     const [proratedPrice, setProratedPrice] = useState(0);
+    const [montoAbonado, setMontoAbonado] = useState(0); // Partial payment support
     const [pricesMatrix, setPricesMatrix] = useState<any>({});
     const [standardPricesMatrix, setStandardPricesMatrix] = useState<any>({});
     const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
@@ -88,6 +89,8 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
     useEffect(() => { loadConfig(); }, [formData.metodoPago]);
     useEffect(() => { calculatePrice(); }, [formData.tipoCochera, formData.exclusivaOverride, formData.tipoVehiculo, pricesMatrix, standardPricesMatrix]);
     useEffect(() => { setErrorMessage(null); }, [formData.numeroCochera, formData.tipoCochera, formData.tipoVehiculo, formData.patente]);
+    // Sync montoAbonado whenever proratedPrice changes (default: full amount)
+    useEffect(() => { setMontoAbonado(proratedPrice); }, [proratedPrice]);
 
     // --- Building Levels ---
     const [buildingLevels, setBuildingLevels] = useState<any[]>([]);
@@ -325,6 +328,7 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                 basePrice: basePriceDisplay,
                 amount: proratedPrice,
                 totalInicial: proratedPrice,
+                montoAbonado: montoAbonado,
                 billingType: formData.tipoFactura,
                 operator: operatorName,
                 startDate: new Date().toISOString()
@@ -352,6 +356,7 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                 metodoPago: formData.metodoPago,
                 basePriceDisplay: basePriceDisplay,
                 proratedPrice: proratedPrice,
+                montoRecibido: montoAbonado,
                 ticket_code: response.data?.ticket_code || null
             });
 
@@ -614,6 +619,37 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                                 <span className="block text-2xl font-black text-white tracking-tighter">${proratedPrice.toLocaleString()}</span>
                             </div>
 
+                            {/* Monto a Abonar (Partial Payment Input) */}
+                            <div className="mt-3">
+                                <label className={labelStyle}>Monto a Abonar</label>
+                                <div className="relative">
+                                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500 font-bold text-sm">$</span>
+                                    <input
+                                        type="number"
+                                        className={`${inputStyle} pl-7 text-xl font-mono font-bold text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${montoAbonado < proratedPrice ? 'border-amber-500/40 bg-amber-950/15 text-amber-300' : ''}`}
+                                        value={montoAbonado || ''}
+                                        onChange={e => {
+                                            let val = Number(e.target.value) || 0;
+                                            if (val > proratedPrice) val = proratedPrice;
+                                            setMontoAbonado(val);
+                                        }}
+                                        min={0}
+                                        max={proratedPrice}
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Debt Preview for Partial Payment */}
+                            {montoAbonado > 0 && montoAbonado < proratedPrice && (
+                                <div className="mt-2 bg-amber-500/10 border border-amber-500/30 rounded-lg p-2.5 animate-in fade-in slide-in-from-top-2">
+                                    <span className="block text-[9px] text-amber-400 uppercase font-bold tracking-widest mb-1">Deuda a Crear</span>
+                                    <div className="flex justify-between text-xs">
+                                        <span className="text-amber-300/70">Saldo pendiente:</span>
+                                        <span className="font-mono font-bold text-amber-400">${(proratedPrice - montoAbonado).toLocaleString()}</span>
+                                    </div>
+                                </div>
+                            )}
+
                             {errorMessage && (
                                 <div className="mt-3 bg-red-500/10 border border-red-500/50 p-3 rounded flex items-start gap-2 animate-in fade-in slide-in-from-top-2">
                                     <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
@@ -621,9 +657,9 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                                 </div>
                             )}
 
-                            <button form="abono-form" type="submit" disabled={loading || isDniDuplicate || !formData.tipoFactura}
-                                className={`w-full py-3 text-xs font-black uppercase tracking-widest rounded shadow-lg flex items-center justify-center gap-2 mt-3 transition-all active:scale-95 ${(isDniDuplicate || !formData.tipoFactura) ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-white hover:bg-gray-200 text-black'}`}>
-                                {loading ? '...' : <><Check className="w-3.5 h-3.5" /> Confirmar</>}
+                            <button form="abono-form" type="submit" disabled={loading || isDniDuplicate || !formData.tipoFactura || montoAbonado <= 0}
+                                className={`w-full py-3 text-xs font-black uppercase tracking-widest rounded shadow-lg flex items-center justify-center gap-2 mt-3 transition-all active:scale-95 ${(isDniDuplicate || !formData.tipoFactura || montoAbonado <= 0) ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : montoAbonado < proratedPrice ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-white hover:bg-gray-200 text-black'}`}>
+                                {loading ? '...' : <><Check className="w-3.5 h-3.5" /> {montoAbonado < proratedPrice ? 'Confirmar (Parcial)' : 'Confirmar'}</>}
                             </button>
                         </div>
                     ) : (

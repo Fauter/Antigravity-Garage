@@ -9,6 +9,8 @@ interface Debt {
     subscriptionId: string;
     customerId: string;
     amount: number | string;
+    remaining_amount?: number | string | null;
+    amount_paid?: number | string | null;
     status: string;
     dueDate: string;
 }
@@ -134,7 +136,11 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
 
                 // --- Balance Calculation ---
                 const customerDebts = debts.filter(d => d.customerId === customerId && d.status === 'PENDING');
-                const balance = customerDebts.reduce((sum, d) => sum + Number(d.amount || 0), 0);
+                const balance = customerDebts.reduce((sum, d) => {
+                    const rem = Number(d.remaining_amount);
+                    const debtValue = (!isNaN(rem) && d.remaining_amount != null) ? rem : Number(d.amount || 0);
+                    return sum + debtValue;
+                }, 0);
 
                 // --- Plate Mapping from Cocheras ---
                 const clientCocheras = cocheras.filter(c => c.clienteId === customerId && c.status === 'Ocupada');
