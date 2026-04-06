@@ -9,7 +9,7 @@
  *  5. Timeout de seguridad (25s) por job + delay de spooler (5s)
  */
 
-const { BrowserWindow, ipcMain } = require('electron');
+const { BrowserWindow, ipcMain, screen } = require('electron');
 
 // ── Print Queue ──────────────────────────────────────────────────────────
 let printChain = Promise.resolve();
@@ -33,17 +33,23 @@ async function executePrintJob(htmlContent, printerConfig = {}) {
     try {
         const result = await Promise.race([
             (async () => {
+                const sf = screen.getPrimaryDisplay().scaleFactor;
+                const safeZoom = 1.0 / sf;
+
+                // Ancho dinámico: 600px para 80mm, 384px para 58mm/default
+                const viewportWidth = (printerConfig.dimensions && printerConfig.dimensions.width === 80000) ? 600 : 384;
+
                 printWindow = new BrowserWindow({
                     show: false,
-                    width: 226,
+                    width: viewportWidth,
                     height: 1200,
                     webPreferences: {
                         javascript: true,
-                        zoomFactor: 1.0,
+                        zoomFactor: safeZoom,
                     }
                 });
 
-                printWindow.webContents.setZoomFactor(1.0);
+                printWindow.webContents.setZoomFactor(safeZoom);
 
                 // Capturar errores críticos del render process
                 printWindow.webContents.on('did-fail-load', (_e, code, desc) => {
@@ -121,8 +127,13 @@ async function executePrintJob(htmlContent, printerConfig = {}) {
                     printOptions.deviceName = useDeviceName;
                 }
 
-                // Dimensiones forzadas para POS-58 (evita mapeo a A4)
-                if (detectedPOS58) {
+                // Prioridad de Configuración Manual y Dimensiones forzadas
+                if (printerConfig.dimensions) {
+                    printOptions.pageSize = {
+                        width: printerConfig.dimensions.width,
+                        height: printerConfig.dimensions.height,
+                    };
+                } else if (detectedPOS58) {
                     printOptions.pageSize = {
                         width: 58000,
                         height: 300000,
@@ -137,10 +148,16 @@ async function executePrintJob(htmlContent, printerConfig = {}) {
                         printOptions,
                         (success, failureReason) => {
                             if (success) {
-                                const SPOOLER_DELAY = detectedPOS58 ? 7000 : 5000;
+                                let spoolerDelay = 5000;
+                                if (printerConfig.dimensions && printerConfig.dimensions.width === 80000) {
+                                    spoolerDelay = 3000; // Impresoras 80mm suelen ser más rápidas (auto-cutter y mayor baudrate)
+                                } else if (detectedPOS58 || (printerConfig.dimensions && printerConfig.dimensions.width === 58000)) {
+                                    spoolerDelay = 7000;
+                                }
+
                                 setTimeout(() => {
                                     resolve({ success: true });
-                                }, SPOOLER_DELAY);
+                                }, spoolerDelay);
                             } else {
                                 console.error(`❌ [PrintManager] Impresión fallida: ${failureReason}`);
                                 setTimeout(() => resolve({
@@ -167,6 +184,12 @@ async function executePrintJob(htmlContent, printerConfig = {}) {
         return { success: false, error: String(err.message || err) };
     } finally {
         if (printWindow && !printWindow.isDestroyed()) {
+            // Limpieza Agresiva de la Cola: abortar spooler enganchado
+            try { 
+                printWindow.webContents.stop(); 
+            } catch (e) {
+                console.error('❌ [PrintManager] Error al hacer webContents.stop:', e);
+            }
             printWindow.destroy();
             printWindow = null;
         }

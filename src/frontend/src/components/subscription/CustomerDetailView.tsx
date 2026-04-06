@@ -738,57 +738,119 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         setIsRenewalModalOpen(true);
     };
 
-    // --- Live Lookup para Renovaciones sin Deuda ---
+    // --- Live Lookup para Renovaciones (Single Source of Truth) ---
+    // Recalcula el precio base desde la matriz activa cada vez que cambia el método de pago.
+    // Soporta tanto renovaciones individuales como recálculo masivo de Deuda Global.
     useEffect(() => {
-        if (!isRenewalModalOpen || renewalData.hasPendingDebt || !selectedDebtSubId) return;
+        if (!isRenewalModalOpen || !selectedDebtSubId) return;
 
-        const sub = subscriptions.find(s => s.id === selectedDebtSubId);
-        if (!sub) return;
-
-        const matrix = renewalData.metodoPago === 'Efectivo' ? standardPricesMatrix : electronicPricesMatrix;
-        if (!matrix || Object.keys(matrix).length === 0) return;
+        const activeMatrix = renewalData.metodoPago === 'Efectivo' ? standardPricesMatrix : electronicPricesMatrix;
+        if (!activeMatrix || Object.keys(activeMatrix).length === 0) return;
 
         const normalize = (s: string) => s ? String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim() : '';
 
-        // Determinar Vehículo
-        let vKey = '';
-        const cochera = renewalData.cocheraDetails;
-        if (cochera && cochera.vehiculos && cochera.vehiculos.length > 0) {
-            const plateStr = typeof cochera.vehiculos[0] === 'string' ? cochera.vehiculos[0] : (cochera.vehiculos[0] as any).plate;
-            const v = realVehicles.find(rv => rv.plate === plateStr);
-            if (v && v.type) vKey = normalize(v.type);
-        } else if (sub.plate || sub.vehicleData?.plate) {
-            const plateStr = sub.plate || sub.vehicleData?.plate;
-            const v = realVehicles.find(rv => rv.plate === plateStr);
-            if (v && v.type) vKey = normalize(v.type);
-        }
+        // Helper inline: obtener saldo pendiente real de una deuda (soporta pagos parciales)
+        const getSafeRemaining = (d: any): number => {
+            const rem = Number(d.remaining_amount);
+            return (typeof d.remaining_amount === 'number' && !isNaN(rem)) ? rem : Number(d.amount) || 0;
+        };
 
-        // Determinar Tarifa
-        const subTypeRaw = sub.type || sub.subscriptionType || 'Movil';
-        let tKey = normalize(subTypeRaw);
-        if (subTypeRaw === 'Exclusiva') tKey = normalize('abono exclusivo');
-        else tKey = normalize(`abono ${subTypeRaw}`);
+        // Helper: buscar precio en la matriz para un vKey + tKey dados
+        const lookupMatrixPrice = (vKey: string, tKey: string, subTypeRaw: string): number => {
+            const typeKey = Object.keys(activeMatrix).find(k => normalize(k) === vKey);
+            if (typeKey && activeMatrix[typeKey]) {
+                const priceKey = Object.keys(activeMatrix[typeKey]).find(k => {
+                    const nk = normalize(k);
+                    return nk === tKey || nk === normalize(subTypeRaw);
+                });
+                if (priceKey) return Number(activeMatrix[typeKey][priceKey]);
+            }
+            return 0;
+        };
 
-        let foundPrice = 0;
-        const typeKey = Object.keys(matrix).find(k => normalize(k) === vKey);
-        if (typeKey && matrix[typeKey]) {
-            const priceKey = Object.keys(matrix[typeKey]).find(k => normalize(k) === tKey || normalize(k) === normalize(subTypeRaw));
-            if (priceKey) {
-                foundPrice = Number(matrix[typeKey][priceKey]);
+        // ═══════════════════════════════════════════════════════════════
+        // BIFURCACIÓN: Deuda Global vs Renovación Individual
+        // ═══════════════════════════════════════════════════════════════
+
+        if (renewalData.isGlobalDebt && renewalData.targetDebts && renewalData.targetDebts.length > 0) {
+            // ─── DEUDA GLOBAL: Los montos de deuda son históricos e inmutables ───
+            // NO se consulta la matriz de precios actual — el valor en DB ya fue
+            // calculado al momento de generar la deuda y puede incluir acumulados.
+            let totalBaseCalculado = 0;
+
+            renewalData.targetDebts.forEach((d: any) => {
+                const remaining = getSafeRemaining(d);
+                totalBaseCalculado += remaining;
+            });
+
+            // Recalcular mora global sobre el nuevo total base
+            const nuevaMoraGlobal = calculateSurcharge(totalBaseCalculado);
+
+            // Actualización atómica (Regla #2)
+            setRenewalData(prev => ({
+                ...prev,
+                baseAmount: totalBaseCalculado,
+                surchargeAmount: nuevaMoraGlobal,
+                amountToPay: totalBaseCalculado + nuevaMoraGlobal,
+                montoCobrado: totalBaseCalculado + nuevaMoraGlobal
+            }));
+
+        } else {
+            // ─── RENOVACIÓN INDIVIDUAL: Lógica existente por selectedDebtSubId ───
+            let vKey = '';
+            const sub = subscriptions.find(s => s.id === selectedDebtSubId);
+            const cochera = renewalData.cocheraDetails;
+
+            // Capa 1: Vehículo de cochera → realVehicles
+            if (cochera && cochera.vehiculos && cochera.vehiculos.length > 0) {
+                const plateStr = typeof cochera.vehiculos[0] === 'string' ? cochera.vehiculos[0] : (cochera.vehiculos[0] as any).plate;
+                const v = realVehicles.find(rv => rv.plate === plateStr);
+                if (v && v.type) vKey = normalize(v.type);
+            } else if (sub && (sub.plate || sub.vehicleData?.plate)) {
+                const plateStr = sub.plate || sub.vehicleData?.plate;
+                const v = realVehicles.find(rv => rv.plate === plateStr);
+                if (v && v.type) vKey = normalize(v.type);
+            }
+
+            // Capa 2: Fallback al tipo embebido en la suscripción
+            if (!vKey && sub?.vehicleData?.type) {
+                vKey = normalize(sub.vehicleData.type);
+            }
+            if (!vKey && sub?.vehicleType) {
+                vKey = normalize(sub.vehicleType);
+            }
+
+            // Capa 4 (Emergencia): Fallback a 'Auto' para evitar $0
+            if (!vKey) {
+                vKey = normalize('Auto');
+                console.warn(`[Renewal SSoT Individual] vKey vacío para sub ${sub?.id?.slice(0, 8) || 'N/A'}. Usando fallback: "auto"`);
+            }
+
+            const subTypeRaw = sub?.type || sub?.subscriptionType || 'Movil';
+            let tKey = normalize(subTypeRaw);
+            if (normalize(subTypeRaw) === normalize('Exclusiva')) tKey = normalize('abono exclusivo');
+            else tKey = normalize(`abono ${subTypeRaw}`);
+
+            const foundPrice = lookupMatrixPrice(vKey, tKey, subTypeRaw);
+
+            if (foundPrice > 0) {
+                const nuevoCalculoMora = calculateSurcharge(foundPrice);
+                setRenewalData(prev => ({
+                    ...prev,
+                    baseAmount: foundPrice,
+                    surchargeAmount: nuevoCalculoMora,
+                    amountToPay: foundPrice + nuevoCalculoMora,
+                    montoCobrado: foundPrice + nuevoCalculoMora
+                }));
+            } else {
+                console.warn(
+                    `[Renewal SSoT] No se encontró precio en la matriz para vKey="${vKey}", tKey="${tKey}", método="${renewalData.metodoPago}". ` +
+                    `Se mantienen los valores de la DB como fallback de seguridad.`
+                );
             }
         }
 
-        if (foundPrice > 0) {
-            const mora = calculateSurcharge(foundPrice);
-            setRenewalData(prev => ({
-                ...prev,
-                baseAmount: foundPrice,
-                amountToPay: foundPrice + mora,
-                surchargeAmount: mora
-            }));
-        }
-
-    }, [renewalData.metodoPago, isRenewalModalOpen, standardPricesMatrix, electronicPricesMatrix, selectedDebtSubId, subscriptions, realVehicles, renewalData.hasPendingDebt]);
+    }, [renewalData.metodoPago, isRenewalModalOpen, renewalData.isGlobalDebt, renewalData.targetDebts, selectedDebtSubId, subscriptions, realVehicles, standardPricesMatrix, electronicPricesMatrix]);
 
     const handleRenewSubscription = async () => {
         if (!selectedDebtSubId || !renewalData.montoCobrado || renewalData.montoCobrado <= 0) {
@@ -807,7 +869,9 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 operator: operatorName,
                 isDebtPaymentOnly: renewalData.hasPendingDebt,
                 isGlobalDebt: renewalData.isGlobalDebt,
-                targetDebtIds: renewalData.targetDebts ? renewalData.targetDebts.map((d: any) => d.id) : []
+                targetDebtIds: renewalData.targetDebts ? renewalData.targetDebts.map((d: any) => d.id) : [],
+                spotNumber: renewalData.cocheraDetails?.numero || null,
+                cocheraType: renewalData.cocheraDetails?.tipo || null
             });
 
             const isPartial = renewResponse.data?.isPartial;
@@ -890,6 +954,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
     const canonDebts = debts.filter((d: any) => d.type === 'CANON');
     const otherDebts = debts.filter((d: any) => d.type !== 'CANON');
+    const manualDebtsPending = debts.filter((d: any) => d.status === 'PENDING' && d.type === 'MANUAL_MIGRATION');
     // Use remaining_amount for real pending balance (supports partial payments)
     // SAFE: handles null, undefined, NaN from DB
     const getRemaining = (d: any) => {
@@ -979,18 +1044,20 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                 )}
                                 <span className="text-xs text-red-500/80 font-bold uppercase">Saldo Pendiente (Los recargos se calcularán al pagar)</span>
                             </div>
-                            <button
-                                onClick={() => {
-                                    const totalAmount = debts.reduce((sum, d) => sum + getRemaining(d), 0);
-                                    const totalSurcharge = debts.reduce((sum, d) => sum + calculateSurcharge(getRemaining(d)), 0);
-                                    const totalDebt = totalAmount + totalSurcharge;
-                                    const firstSubId = debts[0]?.subscriptionId || subscriptions[0]?.id || '';
-                                    handleOpenRenewalModal(firstSubId, null, totalAmount, totalSurcharge, totalDebt, true, true, debts);
-                                }}
-                                className="px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-bold uppercase tracking-widest transition-all shadow-lg shadow-red-900/20"
-                            >
-                                Pagar Deuda Total
-                            </button>
+                            {manualDebtsPending.length > 0 && (
+                                <button
+                                    onClick={() => {
+                                        const totalAmount = manualDebtsPending.reduce((sum, d) => sum + getRemaining(d), 0);
+                                        const totalSurcharge = manualDebtsPending.reduce((sum, d) => sum + calculateSurcharge(getRemaining(d)), 0);
+                                        const totalDebt = totalAmount + totalSurcharge;
+                                        const firstSubId = manualDebtsPending[0]?.subscriptionId || subscriptions[0]?.id || '';
+                                        handleOpenRenewalModal(firstSubId, null, totalAmount, totalSurcharge, totalDebt, true, true, manualDebtsPending);
+                                    }}
+                                    className="px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-bold uppercase tracking-widest transition-all shadow-lg shadow-red-900/20"
+                                >
+                                    Pagar Deudas Manuales
+                                </button>
+                            )}
                         </div>
                     </div>
                 )}

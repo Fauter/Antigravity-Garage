@@ -153,7 +153,7 @@ export class AccessManager {
         // Apply Promo Discount (purely numeric, no notes impact)
         if (promoPercentage && promoPercentage > 0) {
             const originalPrice = price;
-            price = Math.round(price * (1 - promoPercentage / 100));
+            price = price * (1 - promoPercentage / 100);
             console.log(`🎟️ Promo discount applied: ${promoPercentage}% => $${originalPrice} -> $${price}`);
         }
 
@@ -191,5 +191,78 @@ export class AccessManager {
             exitMovement: MovementSchema.parse(exitMovement),
             price
         };
+    }
+
+    /**
+     * Quote-only: Calculates the exit price using the same logic as processExit,
+     * but WITHOUT closing the stay or generating any movement/mutation.
+     * Used by the /cotizar endpoint so the UI can display the exact backend price.
+     */
+    static async quoteExit(
+        stay: Stay,
+        paymentMethod: string = 'Efectivo',
+        garageId?: string,
+        promoPercentage?: number
+    ): Promise<number> {
+        const finalGarageId = garageId || (stay as any).garageId;
+
+        if ((stay as any).is_subscriber || stay.isSubscriber) {
+            return 0;
+        }
+
+        // Direct DB Access (identical to processExit)
+        const priceRepo = {
+            getPrices: async (method: string) => {
+                const listFilter = (method === 'EFECTIVO') ? 'standard' : 'electronic';
+                const prices: any[] = await db.prices.find({ garageId: finalGarageId, priceList: listFilter });
+                const schemas: any[] = await db.vehicleTypes.find({ garageId: finalGarageId });
+                const tariffs: any[] = await db.tariffs.find({ garageId: finalGarageId });
+
+                const matrix: any = {};
+                const vMap = new Map(schemas.map((v: any) => [v.id, v.name]));
+                const tMap = new Map(tariffs.map((t: any) => [t.id, t.name]));
+
+                prices.forEach((p: any) => {
+                    const vId = p.vehicleTypeId || p.vehicle_type_id;
+                    const tId = p.tariffId || p.tariff_id;
+                    const vName = vMap.get(vId);
+                    const tName = tMap.get(tId);
+                    if (vName && tName) {
+                        if (!matrix[vName]) matrix[vName] = {};
+                        matrix[vName][tName] = Number(p.amount);
+                    }
+                });
+                return matrix;
+            }
+        };
+
+        const tariffRepo = { getAll: () => db.tariffs.find({ garageId: finalGarageId }) };
+        const paramRepo = {
+            getParams: async () => {
+                const configs: any[] = await db.financialConfigs.find({ garageId: finalGarageId });
+                if (configs && configs.length > 0) {
+                    const config = configs[0];
+                    return {
+                        initial_tolerance: config.initialTolerance ?? 15,
+                        fractionate_after: config.fractionateAfter ?? 0,
+                        toleranciaInicial: config.initialTolerance ?? 15,
+                        fraccionarDesde: config.fractionateAfter ?? 0
+                    };
+                }
+                return { toleranciaInicial: 15, fraccionarDesde: 0, initial_tolerance: 15, fractionate_after: 0 };
+            }
+        };
+
+        const engine = new PricingEngine(tariffRepo as any, paramRepo as any, priceRepo);
+        const exitDate = new Date(); // Server time = source of truth
+        const params = await paramRepo.getParams();
+
+        let price = await engine.calculateParkingFee(stay, exitDate, paymentMethod, params);
+
+        if (promoPercentage && promoPercentage > 0) {
+            price = price * (1 - promoPercentage / 100);
+        }
+
+        return price;
     }
 }

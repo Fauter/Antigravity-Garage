@@ -1235,19 +1235,66 @@ export class GarageController {
                 }
             }
 
-            // 2. Build movement notes (simplified)
+            // 2. Build movement notes with Cochera identifier
+            // Fetch subscription early for cochera context (individual renewals only)
+            const subToFetch = !isGlobalDebt && subId
+                ? await this.subscriptionRepo.findById(subId)
+                : null;
+
+            // Extract cochera data from request body (sent by frontend)
+            const bodySpotNumber = req.body.spotNumber || null;
+            const bodyCocheraType = req.body.cocheraType || null;
+
+            const cocheraSuffix = await (async () => {
+                if (isGlobalDebt) return '';
+
+                // Capa 1: spotNumber enviado desde el frontend
+                if (bodySpotNumber) return ` - Cochera #${bodySpotNumber}`;
+
+                // Capa 2: spotNumber del repositorio de suscripciones
+                const subSpot = (subToFetch as any)?.spotNumber;
+                if (subSpot) return ` - Cochera #${subSpot}`;
+
+                // Capa 3 (Rescate): Buscar en cocherasDB por cliente y patente
+                if (customerId) {
+                    try {
+                        const allCocheras = await cocherasDB.getAll();
+                        const subPlate = subToFetch?.plate;
+                        const match = allCocheras.find((c: any) => {
+                            if (c.clienteId !== customerId) return false;
+                            if (c.numero && subPlate && c.vehiculos?.some((v: any) =>
+                                (typeof v === 'string' ? v : v.plate) === subPlate
+                            )) return true;
+                            return false;
+                        });
+                        if (match?.numero) return ` - Cochera #${match.numero}`;
+                    } catch (e) {
+                        // Silenciar error de rescate — no bloquear la operación
+                    }
+                }
+
+                // Capa 4: Tipo Móvil explícito o default
+                if (bodyCocheraType === 'Movil' || (subToFetch as any)?.type === 'Movil') {
+                    return ' - Cochera Móvil';
+                }
+
+                return ' - Cochera Móvil';
+            })();
+
             let movementNotes = '';
             if (allDebtsFullyPaid && debtsToPay.length > 0) {
                 movementNotes = isGlobalDebt
                     ? `Pago Total Deuda Acumulada (${debtsToPay.length} deudas)`
-                    : `Pago Total por Renovación`;
+                    : `Pago Total por Renovación${cocheraSuffix}`;
             } else if (debtsToPay.length > 0) {
-                movementNotes = `Pago Parcial por Renovación, Saldo restante: $${totalRemainingAfter}`;
+                movementNotes = isGlobalDebt
+                    ? `Pago Parcial Deuda Acumulada. Saldo restante: $${totalRemainingAfter}`
+                    : `Pago Parcial por Renovación${cocheraSuffix}. Saldo restante: $${totalRemainingAfter}`;
             } else {
-                movementNotes = `Renovación Abono Anticipada`;
+                movementNotes = `Renovación Abono Anticipada${cocheraSuffix}`;
             }
 
-            const plateForMovement = isGlobalDebt ? 'Multiples' : (await this.subscriptionRepo.findById(subId))?.plate || 'N/A';
+            const plateForMovement = isGlobalDebt ? 'Multiples' : (subToFetch?.plate || 'N/A');
 
             // Generate correlative receipt number for the renewal/debt payment
             const receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);

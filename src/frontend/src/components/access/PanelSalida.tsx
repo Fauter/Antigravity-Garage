@@ -4,39 +4,16 @@ import { toast } from 'sonner';
 import { api } from '../../services/api';
 
 import { useAuth } from '../../context/AuthContext';
-import { PricingEngine } from '../../../../modules/Billing/domain/PricingEngine';
-import { ApiTariffRepository } from '../../repositories/ApiTariffRepository';
-import { ApiParamRepository } from '../../repositories/ApiParamRepository';
-import { ApiPriceMatrixRepository } from '../../repositories/ApiPriceMatrixRepository';
 import { PrinterService } from '../../services/PrinterService';
-
-// Frontend Instance of Pricing Engine
-const tariffRepo = new ApiTariffRepository();
-const paramRepo = new ApiParamRepository();
-const priceRepo = new ApiPriceMatrixRepository();
-const pricingEngine = new PricingEngine(tariffRepo, paramRepo, priceRepo);
 
 // API Hook simplified for this component
 const useExitLogic = () => {
     const [loading, setLoading] = useState(false);
     const [stay, setStay] = useState<any>(null);
-    const [price, setPrice] = useState<number>(0);
-    const [basePrice, setBasePrice] = useState<number>(0);
+    const [price, setPrice] = useState<number | null>(null);
+    const [basePrice, setBasePrice] = useState<number | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [params, setParams] = useState<any>(null);
     const { operatorName } = useAuth();
-
-    useEffect(() => {
-        const fetchParams = async () => {
-            try {
-                const p = await paramRepo.getParams();
-                setParams(p);
-            } catch (err) {
-                console.warn('[useExitLogic] Fallo al cargar params:', err);
-            }
-        };
-        fetchParams();
-    }, []);
 
     const isSubscriber = Boolean(stay?.is_subscriber);
 
@@ -44,21 +21,23 @@ const useExitLogic = () => {
         setLoading(true);
         setError(null);
         setStay(null);
-        setPrice(0);
-        setBasePrice(0);
+        setPrice(null);
+        setBasePrice(null);
 
         try {
             const res = await api.get(`/estadias/activa/${plate}`);
             console.log('📡 [API Response] Data recibida:', res.data);
             console.log('🔍 [Subscriber Check] Valor de is_subscriber:', res.data.is_subscriber);
-            console.log('🏗️ [UI State] Seteando isSubscriber derivado como:', Boolean(res.data.is_subscriber));
 
             setStay(res.data);
 
             if (res.data) {
                 if (!res.data.is_subscriber) {
+                    setBasePrice(res.data.price ?? null);
+                    setPrice(res.data.price ?? null);
+                } else {
                     setBasePrice(0);
-                    setPrice(0); // Default to 0, wait for payment method
+                    setPrice(0);
                 }
             }
 
@@ -70,10 +49,24 @@ const useExitLogic = () => {
         }
     };
 
+    // Quote: Ask backend for exact price without closing the stay
+    const quotePrice = async (plate: string, paymentMethod: string, promoPercentage: number) => {
+        try {
+            const res = await api.post('/estadias/cotizar', {
+                plate,
+                paymentMethod,
+                promoPercentage: promoPercentage || 0
+            });
+            return res.data?.price ?? 0;
+        } catch (err: any) {
+            console.warn('[useExitLogic] Quote failed, price stays at 0:', err.message);
+            return 0;
+        }
+    };
+
     const processExit = async (plate: string, paymentMethod: string, invoiceType: string, promoPercentage: number) => {
         setLoading(true);
         try {
-            // Include operator in the request
             const res = await api.post('/estadias/salida', {
                 plate,
                 paymentMethod,
@@ -92,12 +85,12 @@ const useExitLogic = () => {
 
     const resetLogic = () => {
         setStay(null);
-        setPrice(0);
-        setBasePrice(0);
+        setPrice(null);
+        setBasePrice(null);
         setError(null);
     };
 
-    return { searchStay, stay, price, setPrice, basePrice, loading, error, isSubscriber, processExit: processExit as (plate: string, paymentMethod: string, invoiceType: string, promoPercentage: number) => Promise<any>, resetLogic, params };
+    return { searchStay, stay, price, setPrice, basePrice, loading, error, isSubscriber, quotePrice, processExit: processExit as (plate: string, paymentMethod: string, invoiceType: string, promoPercentage: number) => Promise<any>, resetLogic };
 };
 
 const PanelSalida: React.FC = () => {
@@ -108,11 +101,11 @@ const PanelSalida: React.FC = () => {
     const [selectedPromo, setSelectedPromo] = useState<any>(null);
     const [showSuccess, setShowSuccess] = useState(false);
 
-    const { searchStay, stay, price, setPrice, error, isSubscriber, processExit, resetLogic, params } = useExitLogic();
-    const { isGlobalSyncing, operatorName } = useAuth();
+    const { searchStay, stay, price, setPrice, error, isSubscriber, quotePrice, processExit, resetLogic } = useExitLogic();
+    const { isGlobalSyncing } = useAuth();
     const [isCalculating, setIsCalculating] = useState(false);
 
-    const isGracePeriod = Boolean(stay && !isSubscriber && price === 0 && !isCalculating);
+    const isGracePeriod = Boolean(stay && !isSubscriber && stay.is_grace_period && price === 0);
 
     const handleCancel = () => {
         resetLogic(); // Limpia stay, price, error en el hook
@@ -147,51 +140,32 @@ const PanelSalida: React.FC = () => {
         fetchPromos();
     }, []);
 
-    // Calculation Logic
+    // Price Quote: Ask backend for exact price (Single Source of Truth)
     useEffect(() => {
         if (isSubscriber) return;
+        if (!stay || !paymentMethod) return;
 
-        const calculate = async () => {
-            if (!stay || isSubscriber) return;
-
+        const fetchQuote = async () => {
             setIsCalculating(true);
-            const entryDate = new Date(stay.entryTime);
-            const exitDate = new Date();
-
-            // Log for debugging
-            const durationMinutes = Math.ceil((exitDate.getTime() - entryDate.getTime()) / 60000);
-            console.log(`[PanelSalida] Calculating for ${stay.plate} (${stay.vehicleType}) - Method: ${paymentMethod || 'Efectivo'} - Duration: ${durationMinutes} min`);
-
             try {
-                console.log("[PanelSalida] Llamando a PricingEngine con:", stay.plate, paymentMethod || 'Efectivo', params);
-                let calculated = await pricingEngine.calculateParkingFee(
-                    { ...stay, vehicleType: stay.vehicleType || 'Auto' },
-                    exitDate,
-                    paymentMethod || 'Efectivo',
-                    params
+                console.log(`[PanelSalida] Requesting backend quote for ${stay.plate} - Method: ${paymentMethod}`);
+                const quoted = await quotePrice(
+                    stay.plate,
+                    paymentMethod,
+                    selectedPromo?.porcentaje || 0
                 );
-
-                console.log(`[PanelSalida] Price Result: $${calculated}`);
-
-                // Apply dynamic promo discount (percentage-based)
-                if (selectedPromo && selectedPromo.porcentaje > 0) {
-                    calculated = Math.round(calculated * (1 - selectedPromo.porcentaje / 100));
-                }
-
-                setPrice(calculated);
+                console.log(`[PanelSalida] Backend Quote: $${quoted}`);
+                setPrice(quoted);
             } catch (err) {
-                console.error("[PanelSalida] Calculation error:", err);
-                setPrice(0);
+                console.error('[PanelSalida] Quote error:', err);
+                setPrice(null);
             } finally {
                 setIsCalculating(false);
             }
         };
 
-        // Only run if we have a stay and it's not a subscriber 
-        if (stay && !isSubscriber) {
-            calculate();
-        }
-    }, [paymentMethod, stay, selectedPromo, isSubscriber, params]);
+        fetchQuote();
+    }, [paymentMethod, stay, selectedPromo, isSubscriber]);
 
 
 
@@ -214,20 +188,15 @@ const PanelSalida: React.FC = () => {
 
         const result = await processExit(stay.plate, method, invoice, selectedPromo?.porcentaje || 0);
         if (result) {
-            // FIX: Trust backend recalculation as Source of Truth
-            const finalAmount = result.movement?.amount !== undefined ? result.movement.amount : price;
-            setPrice(finalAmount); // Updates the UI for the Success Overlay instantly
+            // SINGLE SOURCE OF TRUTH: Backend raw value, zero processing
+            const backendAmount = result.movement?.amount ?? 0;
+            setPrice(backendAmount);
 
-            // TICKET LOGIC
-            const exitStay = result.stay || { ...stay, exitTime: new Date() };
-            const exitMovement = result.movement || {
-                amount: finalAmount,
-                paymentMethod: method,
-                operator: operatorName,
-                notes: isGracePeriod ? 'Tiempo de Gracia' : (isSubscriber ? 'Abonado' : 'Salida Registrada')
-            };
+            // TICKET LOGIC: Trust backend objects entirely
+            const exitStay = result.stay ?? { ...stay, exitTime: new Date() };
+            const exitMovement = result.movement ?? null;
 
-            if (!isSubscriber) {
+            if (!isSubscriber && exitMovement) {
                 PrinterService.printExitTicket(exitStay, exitMovement);
             }
 
@@ -446,11 +415,11 @@ const PanelSalida: React.FC = () => {
                         <div className="bg-gray-950 border border-gray-800 rounded-xl p-3 flex justify-center items-center gap-8 mb-3 shadow-inner">
                             <div className="text-center">
                                 <span className="text-gray-600 text-[10px] font-bold uppercase tracking-widest block mb-1">Total a Pagar</span>
-                                <span className={`text-5xl font-black tracking-tighter block ${paymentMethod && price > 0 ? 'text-white drop-shadow-md' : 'text-gray-700'}`}>
+                                <span className={`text-5xl font-black tracking-tighter block ${price !== null && price > 0 ? 'text-white drop-shadow-md' : 'text-gray-700'}`}>
                                     {isCalculating ? (
                                         <span className="animate-pulse opacity-50 block mt-1">...</span>
-                                    ) : paymentMethod ? (
-                                        `$${price.toLocaleString()}`
+                                    ) : price !== null ? (
+                                        `$${price.toFixed(2)}`
                                     ) : (
                                         <span className="opacity-30">$ -</span>
                                     )}

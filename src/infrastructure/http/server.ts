@@ -114,6 +114,10 @@ export const startServer = async () => {
             if (accessController?.registerExit) return accessController.registerExit(req, res);
             res.status(404).send('Method not found');
         });
+        app.post('/api/estadias/cotizar', (req, res) => {
+            if (accessController?.quoteExit) return accessController.quoteExit(req, res);
+            res.status(404).send('Method not found');
+        });
         app.get('/api/estadias/activa/:plate', (req, res) => {
             if (accessController?.getActiveStay) return accessController.getActiveStay(req, res);
             res.status(404).send('Method not found');

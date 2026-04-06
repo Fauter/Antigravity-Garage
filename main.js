@@ -1,6 +1,11 @@
 const { app, BrowserWindow, Menu, ipcMain } = require('electron');
 const path = require('path');
 const { initPrintManager } = require('./PrintManager');
+
+// Blindaje Total de DPI (Nivel Engine)
+app.commandLine.appendSwitch('high-dpi-support', '1');
+app.commandLine.appendSwitch('force-device-scale-factor', '1');
+
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
 // Start the backend server

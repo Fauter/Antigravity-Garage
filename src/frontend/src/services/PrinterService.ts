@@ -6,11 +6,15 @@ import JsBarcode from 'jsbarcode';
 const getGarageConfig = () => {
     try {
         const stored = localStorage.getItem('ag_terminal_config');
-        if (stored) return JSON.parse(stored);
+        if (stored) {
+            const parsed = JSON.parse(stored);
+            if (!parsed.paperWidth) parsed.paperWidth = 58;
+            return parsed;
+        }
     } catch (e) {
         console.error('Error reading terminal config for printer', e);
     }
-    return { name: 'ANTIGRAVITY GARAGE', address: 'Dirección no configurada' };
+    return { name: 'ANTIGRAVITY GARAGE', address: 'Dirección no configurada', paperWidth: 58 };
 };
 
 export const PrinterService = {
@@ -21,14 +25,15 @@ export const PrinterService = {
         </div>
     `,
 
-    generateBase64Barcode: (text: string): string => {
+    generateBase64Barcode: (text: string, paperWidth: number = 58): string => {
         try {
             const canvas = document.createElement('canvas');
+            const bcWidth = paperWidth === 80 ? 3 : 2;
             JsBarcode(canvas, text, {
                 format: "CODE128",
                 displayValue: false,
                 height: 40,
-                width: 2,
+                width: bcWidth,
                 margin: 5,
                 background: "#ffffff",
                 lineColor: "#000000",
@@ -47,10 +52,10 @@ export const PrinterService = {
         const entryTime = new Date(stay.entryTime || stay.entry_time || Date.now());
         const formattedDate = entryTime.toLocaleString('es-AR', {
             day: '2-digit', month: '2-digit', year: 'numeric',
-            hour: '2-digit', minute: '2-digit'
+            hour: '2-digit', minute: '2-digit', hour12: false
         });
 
-        const barcodeDataUrl = PrinterService.generateBase64Barcode(shortId);
+        const barcodeDataUrl = PrinterService.generateBase64Barcode(shortId, config.paperWidth);
 
         const content = `
             <div style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
@@ -117,7 +122,7 @@ export const PrinterService = {
                 <div style="height: 30px;"></div>
             </div>
         `;
-        printHtml(content);
+        printHtml(content, config.paperWidth);
         toast.info(`🖨️ Imprimiendo Ticket Entrada: ${stay.plate}`);
     },
 
@@ -127,12 +132,12 @@ export const PrinterService = {
         const isSubscriber = stay.isSubscriber || stay.is_subscriber || (movement && movement.amount === 0 && movement.notes?.includes('Abonado'));
         const ticketType = isSubscriber ? 'SALIDA - ABONADO' : 'TICKET SALIDA';
 
-        const barcodeDataUrl = PrinterService.generateBase64Barcode(shortId);
+        const barcodeDataUrl = PrinterService.generateBase64Barcode(shortId, config.paperWidth);
 
         const entryTime = new Date(stay.entryTime || stay.entry_time);
         const exitTime = new Date(stay.exitTime || stay.exit_time || Date.now());
-        const formattedEntry = entryTime.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-        const formattedExit = exitTime.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        const formattedEntry = entryTime.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+        const formattedExit = exitTime.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
 
         const duration = (movement && movement.notes) ? movement.notes : 'N/A';
         const totalAmount = movement ? Math.floor(movement.amount || 0) : 0;
@@ -196,7 +201,7 @@ export const PrinterService = {
                 ${showTotal ? `
                 <div style="margin: 15px 0;">
                     <div style="font-size: 14px; font-weight: bold;">TOTAL</div>
-                    <div style="font-size: 32px; font-weight: bold; letter-spacing: -1px;">$${totalAmount}</div>
+                    <div style="font-size: 32px; font-weight: bold; letter-spacing: -1px;">$${Number(totalAmount).toFixed(2)}</div>
                 </div>
                 
                 <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
@@ -231,7 +236,7 @@ export const PrinterService = {
         const controlTicket = generateTicket(ticketType === 'SALIDA - ABONADO' ? 'CONTROL - ABONADO' : 'CONTROL INTERNO', true);
 
         // Print both sequentially
-        printHtml(clientTicket + controlTicket);
+        printHtml(clientTicket + controlTicket, config.paperWidth);
 
         toast.info(`🖨️ Imprimiendo Tickets Salida (x2): ${stay.plate}`);
     },
@@ -240,7 +245,7 @@ export const PrinterService = {
         const config = getGarageConfig();
         const formattedDate = new Date().toLocaleString('es-AR', {
             day: '2-digit', month: '2-digit', year: 'numeric',
-            hour: '2-digit', minute: '2-digit'
+            hour: '2-digit', minute: '2-digit', hour12: false
         });
 
         const cocheraText = data.tipoCochera === 'Movil' ? 'Móvil' : (data.numeroCochera || 'Fija');
@@ -347,7 +352,7 @@ export const PrinterService = {
         const ticketOriginal = generateTicketHtml('ORIGINAL');
         const ticketDuplicado = generateTicketHtml('DUPLICADO (CONTROL)');
 
-        printHtml(ticketOriginal + ticketDuplicado);
+        printHtml(ticketOriginal + ticketDuplicado, config.paperWidth);
         toast.info(`🖨️ Imprimiendo Comprobantes Alta Abono (x2): ${data.patente}`);
     },
 
@@ -355,7 +360,7 @@ export const PrinterService = {
         const config = getGarageConfig();
         const formattedDate = new Date().toLocaleString('es-AR', {
             day: '2-digit', month: '2-digit', year: 'numeric',
-            hour: '2-digit', minute: '2-digit'
+            hour: '2-digit', minute: '2-digit', hour12: false
         });
 
         const generateRenewalHtml = (typeLabel: string) => `
@@ -421,7 +426,7 @@ export const PrinterService = {
         const original = generateRenewalHtml('ORIGINAL');
         const duplicado = generateRenewalHtml('DUPLICADO');
 
-        printHtml(original + duplicado);
+        printHtml(original + duplicado, config.paperWidth);
         toast.info(`🖨️ Imprimiendo Comprobante Renovación (x2): ${data.titular}`);
     },
 
@@ -429,7 +434,7 @@ export const PrinterService = {
         const config = getGarageConfig();
         const formattedDate = new Date().toLocaleString('es-AR', {
             day: '2-digit', month: '2-digit', year: 'numeric',
-            hour: '2-digit', minute: '2-digit'
+            hour: '2-digit', minute: '2-digit', hour12: false
         });
 
         const generateUpgradeHtml = (typeLabel: string) => `
@@ -523,24 +528,222 @@ export const PrinterService = {
         const original = generateUpgradeHtml('ORIGINAL');
         const duplicado = generateUpgradeHtml('DUPLICADO (CONTROL)');
 
-        printHtml(original + duplicado);
+        printHtml(original + duplicado, config.paperWidth);
         toast.info(`🖨️ Imprimiendo Comprobante Upgrade (x2): ${data.patente}`);
+    },
+
+    printPartialCloseTicket: (data: any) => {
+        const config = getGarageConfig();
+
+        const generateTicket = (title: string) => `
+            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
+                
+                <div style="margin-bottom: 10px; margin-top: 10px;">
+                    <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
+                        [X]
+                    </div>
+                    <div style="font-size: 10px; font-weight: bold;">DOCUMENTO NO VÁLIDO COMO FACTURA</div>
+                </div>
+
+                <div style="margin-bottom: 5px;">
+                    <h2 style="margin: 0; font-size: 18px; font-weight: bold; letter-spacing: -0.5px; text-transform: uppercase;">${config.name}</h2>
+                    <div style="font-size: 12px; font-family: sans-serif; margin-top: 2px;">${config.address}</div>
+                </div>
+
+                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+
+                <div style="margin-bottom: 5px;">
+                    <div style="font-size: 11px; margin-top: 2px;">${title}</div>
+                    <div style="font-size: 14px; font-weight: bold; margin-top: 3px;">RETIRO PARCIAL</div>
+                </div>
+
+                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+
+                <div style="margin: 10px 0;">
+                    <table style="width: 100%; font-size: 12px; line-height: 1.4; font-family: 'Courier New', Courier, monospace;">
+                        <tr>
+                            <td style="text-align: left;">Fecha:</td>
+                            <td style="text-align: right; font-weight: bold;">${new Date(data.timestamp).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}</td>
+                        </tr>
+                        <tr>
+                            <td style="text-align: left;">Operador:</td>
+                            <td style="text-align: right; font-weight: bold;">${data.operatorName ? data.operatorName.substring(0, 15) : '---'}</td>
+                        </tr>
+                        <tr>
+                            <td style="text-align: left;">A:</td>
+                            <td style="text-align: right; font-weight: bold;">${data.recipientName}</td>
+                        </tr>
+                        ${data.partialNotes ? `
+                        <tr>
+                            <td style="text-align: left;">Notas:</td>
+                            <td style="text-align: right; font-weight: bold;">${data.partialNotes}</td>
+                        </tr>
+                        ` : ''}
+                    </table>
+                </div>
+
+                <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
+
+                <div style="margin: 15px 0;">
+                    <div style="font-size: 14px; font-weight: bold;">TOTAL RETIRADO</div>
+                    <div style="font-size: 32px; font-weight: bold; letter-spacing: -1px;">$${Number(data.partialAmount).toLocaleString('es-AR')}</div>
+                </div>
+                
+                <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
+
+                <div style="text-align: center; margin-top: 20px;">
+                    <div style="border-bottom: 1px solid #000; width: 80%; margin: 0 auto;"></div>
+                    <div style="font-size: 11px; margin-top: 5px;">Firma de quien recibe</div>
+                </div>
+
+                <div style="font-size: 10px; line-height: 1.3; margin-top: 15px;">
+                    <div>Retiro parcial de caja</div>
+                </div>
+                
+                ${PrinterService.getLegalFooter()}
+
+                <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
+                    XXXXXXXXXXXXXXXXX
+                </div>
+                <!-- Spacing for printer cut -->
+                <div style="height: 30px;"></div>
+            </div>
+        `;
+
+        const original = generateTicket('ORIGINAL');
+        const duplicado = generateTicket('DUPLICADO');
+        
+        printHtml(original + duplicado, config.paperWidth);
+        toast.info('🖨️ Imprimiendo Retiro Parcial');
+    },
+
+    printShiftCloseTicket: (data: any) => {
+        const config = getGarageConfig();
+
+        const generateTicket = (title: string) => `
+            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
+                
+                <div style="margin-bottom: 10px; margin-top: 10px;">
+                    <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
+                        [X]
+                    </div>
+                    <div style="font-size: 10px; font-weight: bold;">DOCUMENTO NO VÁLIDO COMO FACTURA</div>
+                </div>
+
+                <div style="margin-bottom: 5px;">
+                    <h2 style="margin: 0; font-size: 18px; font-weight: bold; letter-spacing: -0.5px; text-transform: uppercase;">${config.name}</h2>
+                    <div style="font-size: 12px; font-family: sans-serif; margin-top: 2px;">${config.address}</div>
+                </div>
+
+                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+
+                <div style="margin-bottom: 5px;">
+                    <div style="font-size: 11px; margin-top: 2px;">${title}</div>
+                    <div style="font-size: 14px; font-weight: bold; margin-top: 3px;">CIERRE DE CAJA FINAL</div>
+                </div>
+
+                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+
+                <div style="margin: 10px 0;">
+                    <table style="width: 100%; font-size: 12px; line-height: 1.4; font-family: 'Courier New', Courier, monospace;">
+                        <tr>
+                            <td style="text-align: left;">Fecha:</td>
+                            <td style="text-align: right; font-weight: bold;">${new Date(data.timestamp).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}</td>
+                        </tr>
+                        <tr>
+                            <td style="text-align: left;">Operador:</td>
+                            <td style="text-align: right; font-weight: bold;">${data.operatorName ? data.operatorName.substring(0, 15) : '---'}</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+
+                <div style="margin: 10px 0;">
+                    <table style="width: 100%; font-size: 12px; line-height: 1.4; font-family: 'Courier New', Courier, monospace;">
+                        <tr>
+                            <td style="text-align: left;">Ef. Esperado:</td>
+                            <td style="text-align: right; font-weight: bold;">$${Number(data.total).toLocaleString('es-AR')}</td>
+                        </tr>
+                        <tr>
+                            <td style="text-align: left;">Ef. Contado:</td>
+                            <td style="text-align: right; font-weight: bold;">$${Number(data.totalInCash).toLocaleString('es-AR')}</td>
+                        </tr>
+                        <tr>
+                            <td style="text-align: left;">Diferencia:</td>
+                            <td style="text-align: right; font-weight: bold;">${data.difference > 0 ? '+' : (data.difference < 0 ? '-' : '')}$${Math.abs(Number(data.difference)).toLocaleString('es-AR')}</td>
+                        </tr>
+                        <tr>
+                            <td style="text-align: left;">Queda Fondo:</td>
+                            <td style="text-align: right; font-weight: bold;">$${Number(data.stayingInCash).toLocaleString('es-AR')}</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
+
+                <div style="margin: 15px 0;">
+                    <div style="font-size: 14px; font-weight: bold;">MONTO RENDIDO</div>
+                    <div style="font-size: 32px; font-weight: bold; letter-spacing: -1px;">$${Number(data.renderedAmount).toLocaleString('es-AR')}</div>
+                </div>
+                
+                <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
+
+                <div style="text-align: center; margin-top: 20px;">
+                    <div style="border-bottom: 1px solid #000; width: 80%; margin: 0 auto;"></div>
+                    <div style="font-size: 11px; margin-top: 5px;">Firma del Operador</div>
+                </div>
+
+                <div style="font-size: 10px; line-height: 1.3; margin-top: 15px;">
+                    <div>Cierre de turno</div>
+                </div>
+                
+                ${PrinterService.getLegalFooter()}
+
+                <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
+                    XXXXXXXXXXXXXXXXX
+                </div>
+                <!-- Spacing for printer cut -->
+                <div style="height: 30px;"></div>
+            </div>
+        `;
+
+        const original = generateTicket('ORIGINAL');
+        const duplicado = generateTicket('DUPLICADO');
+
+        printHtml(original + duplicado, config.paperWidth);
+        toast.info('🖨️ Imprimiendo Cierre de Caja Final');
     }
 };
 
-const buildFullHtml = (html: string): string => `
+const buildFullHtml = (html: string, paperWidth: number): string => {
+    const is80 = paperWidth === 80;
+    const layoutWidth = is80 ? '100%' : '48mm';
+    const baseFontSize = is80 ? '16px' : '12px'; // Proporcional para 80mm via calc()
+
+    // Reemplazamos los widths fijos de 48mm por 100% (el contenedor dictará el límite real)
+    let processedHtml = html.replace(/width:\s*48mm;/g, 'width: 100%;');
+
+    // Reemplazamos todos los font-size: Xpx por proporciones basadas en var(--base-font-size)
+    processedHtml = processedHtml.replace(/font-size:\s*(\d+)px/g, (_match, p1) => {
+        const factor = (parseInt(p1) / 12).toFixed(3);
+        return `font-size: calc(${factor} * var(--base-font-size))`;
+    });
+
+    return `
     <html>
         <head>
             <title>Pos Print</title>
             <style>
+                :root {
+                    --base-font-size: ${baseFontSize};
+                }
                 /* ═══ CSS SAFE-MODE PARA IMPRESORAS TÉRMICAS ═══ */
-                /* Fuerza color negro puro en TODOS los elementos.
-                   Las térmicas POS-58 con drivers genéricos ignoran grises y colores suaves.
-                   -webkit-print-color-adjust: exact fuerza la rasterización de backgrounds. */
-
                 @media print {
-                    @page { margin: 0; size: 48mm auto; }
+                    @page { margin: 0; size: ${paperWidth}mm auto; }
                     body {
+                        zoom: 1;
+                        transform: none;
                         margin: 0; padding: 0;
                         font-weight: 600;
                         color: #000 !important;
@@ -556,7 +759,6 @@ const buildFullHtml = (html: string): string => `
                     .page-break { page-break-after: always; }
                 }
 
-                /* Screen styles for PDF/Blob preview */
                 body {
                     margin: 0; padding: 0;
                     background: #fff;
@@ -568,34 +770,52 @@ const buildFullHtml = (html: string): string => `
                     color: black !important;
                 }
                 .page-break { page-break-after: always; }
-
                 b, strong { font-weight: bold !important; }
                 td, th { font-weight: 600; }
-
-                /* Forzar que las imágenes (barcodes) se rendericen como bitmap puro */
                 img {
                     image-rendering: -webkit-optimize-contrast;
                     image-rendering: crisp-edges;
                 }
+                
+                /* Contenedor estricto para Área Imprimible */
+                .print-container {
+                    width: ${layoutWidth};
+                    max-width: ${is80 ? '100%' : layoutWidth};
+                    overflow: hidden;
+                    margin: 0 auto;
+                    ${is80 ? 'padding: 0 5mm;' : ''}
+                }
             </style>
         </head>
-        <body>${html}</body>
+        <body>
+            <div class="print-container">
+                ${processedHtml}
+            </div>
+        </body>
     </html>
-`;
+    `;
+};
 
-const printHtml = async (html: string, isVirtual: boolean = false) => {
+const printHtml = async (html: string, paperWidth: number, isVirtual: boolean = false) => {
     if (isVirtual) {
-        const fullHtml = buildFullHtml(html);
+        const fullHtml = buildFullHtml(html, paperWidth);
         const blob = new Blob([fullHtml], { type: 'text/html' });
         window.open(URL.createObjectURL(blob), '_blank');
         return;
     }
 
-    const fullHtml = buildFullHtml(html);
+    const fullHtml = buildFullHtml(html, paperWidth);
 
     if (window.electronAPI?.silentPrint) {
         const savedPrinter = localStorage.getItem('selected_printer_name') || undefined;
-        const printerConfig = { deviceName: savedPrinter };
+        // Prioridad Absoluta de config manual. Se inyectan las dimensiones en micrones.
+        const printerConfig = { 
+            deviceName: savedPrinter,
+            dimensions: {
+                width: paperWidth === 80 ? 80000 : 58000,
+                height: 300000
+            }
+        };
 
         try {
             const result = await window.electronAPI.silentPrint(fullHtml, printerConfig);

@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import { toast } from 'sonner';
 import { Wallet, TrendingUp, Calendar, User, ArrowDownRight, LogOut, FileText, CheckCircle, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { PrinterService } from '../services/PrinterService';
 
 interface Movement {
     id?: string;
@@ -143,8 +144,17 @@ const CajaPage: React.FC = () => {
                 staying_in_cash: Number(stayingInCash),
                 rendered_amount: renderedAmount
             });
-            toast.success('CIERRE DE CAJA EXITOSO. La sesión se cerrará automáticamente.');
-            logout(); // Cierre forzoso de sesión
+            toast.success('CIERRE DE CAJA EXITOSO. La sesión se cerrará automáticamente en breve.');
+            PrinterService.printShiftCloseTicket({
+                timestamp: new Date().toISOString(),
+                operatorName: operatorName,
+                total: total,
+                totalInCash: Number(totalInCash),
+                difference: difference,
+                stayingInCash: Number(stayingInCash),
+                renderedAmount: renderedAmount
+            });
+            setTimeout(() => logout(), 2000); // Give printing time before unmount
         } catch (error) {
             console.error("Error al cerrar caja", error);
             toast.error('Error al procesar la operación');
@@ -160,6 +170,13 @@ const CajaPage: React.FC = () => {
                 notes: partialNotes
             });
             toast.success('RETIRO PARCIAL REGISTRADO CORRECTAMENTE');
+            PrinterService.printPartialCloseTicket({
+                timestamp: new Date().toISOString(),
+                operatorName: operatorName,
+                recipientName: recipientName,
+                partialNotes: partialNotes,
+                partialAmount: Number(partialAmount)
+            });
             setIsPartialCloseModalOpen(false);
             setPartialCloseStep(1);
             setPartialAmount('');

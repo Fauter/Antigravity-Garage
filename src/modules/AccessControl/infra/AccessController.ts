@@ -264,9 +264,47 @@ export class AccessController {
         }
     };
 
+    quoteExit = async (req: Request, res: Response) => {
+        try {
+            const rawPlate = req.body.plate;
+            const { paymentMethod, promoPercentage } = req.body;
+            const garageId = (req.headers['x-garage-id'] as string);
+
+            if (!rawPlate) return res.status(400).json({ error: 'Plate is required' });
+
+            const plate = rawPlate.trim().toUpperCase().replace(/[\s\-_]/g, '');
+
+            const stay = await this.stayRepository.findActiveByPlateOrTicket(plate, garageId);
+            if (!stay) {
+                return res.status(404).json({ error: 'No active stay found for plate' });
+            }
+
+            // Re-validate subscriber status
+            const vehicle = await this.vehicleRepository.findByPlate(plate, garageId);
+            if (vehicle) {
+                const subStatus = vehicle.isSubscriber || (vehicle as any).is_subscriber;
+                stay.isSubscriber = subStatus;
+                (stay as any).is_subscriber = subStatus;
+            }
+
+            const price = await AccessManager.quoteExit(
+                stay as any,
+                paymentMethod || 'Efectivo',
+                garageId,
+                Number(promoPercentage) || 0
+            );
+
+            res.json({ price });
+        } catch (error: any) {
+            console.error('Quote error:', error);
+            res.status(500).json({ error: error.message });
+        }
+    };
+
     getActiveStay = async (req: Request, res: Response) => {
         try {
             const rawPlate = req.params.plate;
+            const garageId = (req.headers['x-garage-id'] as string) || '';
             const plate = String(rawPlate).trim().toUpperCase().replace(/[\s\-_]/g, '');
             const stay = await this.stayRepository.findActiveByPlateOrTicket(plate);
             if (!stay) return res.status(404).json({ error: 'Stay not found' });
@@ -278,6 +316,17 @@ export class AccessController {
                 stay.isSubscriber = subStatus;
                 (stay as any).is_subscriber = subStatus;
             }
+
+            // --- NUEVO: Cotización Automática y Tiempo de Gracia ---
+            const price = await AccessManager.quoteExit(stay as any, 'Efectivo', garageId, 0);
+            (stay as any).price = price;
+            
+            // Evaluamos is_grace_period
+            let isGracePeriod = false;
+            if (!stay.isSubscriber && price === 0) {
+                isGracePeriod = true;
+            }
+            (stay as any).is_grace_period = isGracePeriod;
 
             res.json(stay);
         } catch (error: any) {
