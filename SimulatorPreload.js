@@ -8,7 +8,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('simulatorAPI', {
-    // Simular ingreso de vehículo (botón físico + cámara ANPR)
+    // Simular ingreso de vehículo (botón físico + cámara)
     simulateEntry: () => ipcRenderer.invoke('hw:simulate-entry'),
 
     // Simular escaneo de barcode en barrera de salida
@@ -17,11 +17,19 @@ contextBridge.exposeInMainWorld('simulatorAPI', {
     // Obtener estado del hardware
     getHardwareStatus: () => ipcRenderer.invoke('hw:get-status'),
 
-    // Listeners para resultados
+    // ── Mock Mode Control ──
+    setMockMode: (enabled) => ipcRenderer.invoke('hw:set-mock-mode', enabled),
+    getMockMode: () => ipcRenderer.invoke('hw:get-mock-mode'),
+    getHardwareConfig: () => ipcRenderer.invoke('hw:get-config'),
+
+    // ── Listeners ──
     onEntryResult: (callback) => {
         ipcRenderer.on('sim:entry-result', (_event, data) => callback(data));
     },
     onExitResult: (callback) => {
         ipcRenderer.on('sim:exit-result', (_event, data) => callback(data));
-    }
+    },
+    onMockModeChanged: (callback) => {
+        ipcRenderer.on('hw:mock-mode-changed', (_event, data) => callback(data));
+    },
 });

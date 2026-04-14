@@ -155,9 +155,10 @@ export const HardwareProvider: React.FC<{ children: ReactNode }> = ({ children }
     // ── IPC: Listen for hardware entry events ──
     useEffect(() => {
         const electronAPI = (window as any).electronAPI;
-        if (!electronAPI?.onHardwareEntry) return;
+        if (!electronAPI) return;
 
-        const cleanup = electronAPI.onHardwareEntry((event: any) => {
+        // Listen for entry events
+        const cleanupEntry = electronAPI.onHardwareEntry?.((event: any) => {
             const pending: PendingEntry = {
                 id: event.id,
                 timestamp: event.timestamp,
@@ -180,7 +181,26 @@ export const HardwareProvider: React.FC<{ children: ReactNode }> = ({ children }
             } catch { }
         });
 
-        return cleanup;
+        // Listen for status changes
+        const cleanupStatus = electronAPI.onHardwareStatusChanged?.((status: any) => {
+            // Unify status: if barrier or camera goes down, we might want to show disconnected
+            // For now, we consider it connected if the main driver is up
+            const isConnected = status.entryBarrierOnline || status.exitBarrierOnline || status.cameraOnline;
+            dispatch({ type: 'SET_HW_CONNECTED', payload: isConnected });
+        });
+
+        // Fetch initial status
+        electronAPI.getHardwareStatus?.().then((status: any) => {
+            if (status) {
+                const isConnected = status.entryBarrierOnline || status.exitBarrierOnline || status.cameraOnline;
+                dispatch({ type: 'SET_HW_CONNECTED', payload: isConnected });
+            }
+        });
+
+        return () => {
+            if (cleanupEntry) cleanupEntry();
+            if (cleanupStatus) cleanupStatus();
+        };
     }, []);
 
     // ── Convenience Methods ──

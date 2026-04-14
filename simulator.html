@@ -77,6 +77,7 @@
         .section-title.entry { color: #34d399; }
         .section-title.exit { color: #60a5fa; }
         .section-title.log { color: #a78bfa; }
+        .section-title.mock { color: #fbbf24; }
 
         .btn {
             width: 100%;
@@ -183,6 +184,86 @@
             color: #60a5fa;
         }
 
+        /* ── Mock Mode Toggle Switch ── */
+        .mock-switch-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .mock-label {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .mock-label-title {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: #fbbf24;
+        }
+
+        .mock-label-desc {
+            font-size: 10px;
+            color: #555;
+            line-height: 1.4;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 52px;
+            height: 28px;
+            flex-shrink: 0;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: #333;
+            border-radius: 28px;
+            transition: all 0.3s ease;
+            border: 1px solid #444;
+        }
+
+        .toggle-slider:before {
+            content: '';
+            position: absolute;
+            width: 22px;
+            height: 22px;
+            left: 2px;
+            bottom: 2px;
+            background: #888;
+            border-radius: 50%;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background: linear-gradient(135deg, #f59e0b, #fbbf24);
+            border-color: #f59e0b;
+            box-shadow: 0 0 20px rgba(245, 158, 11, 0.3);
+        }
+
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(24px);
+            background: white;
+        }
+
+        .toggle-switch.loading .toggle-slider {
+            opacity: 0.5;
+            cursor: wait;
+        }
+
         /* Log */
         .log-container {
             max-height: 160px;
@@ -202,6 +283,7 @@
         .log-entry .msg-ok { color: #34d399; }
         .log-entry .msg-err { color: #f87171; }
         .log-entry .msg-info { color: #60a5fa; }
+        .log-entry .msg-warn { color: #fbbf24; }
 
         /* Status bar */
         .status-bar {
@@ -225,10 +307,12 @@
             width: 6px;
             height: 6px;
             border-radius: 50%;
-            background: #34d399;
             margin-right: 4px;
             animation: pulse 2s infinite;
         }
+
+        .status-dot.mock-on { background: #fbbf24; }
+        .status-dot.mock-off { background: #34d399; }
 
         @keyframes pulse {
             0%, 100% { opacity: 1; }
@@ -251,9 +335,27 @@
 
     <div class="container">
 
+        <!-- MOCK MODE MASTER SWITCH -->
+        <div class="section">
+            <div class="section-title mock">🔀 Modo Simulación</div>
+            <div class="mock-switch-container">
+                <div class="mock-label">
+                    <span class="mock-label-title">MODO SIMULACIÓN (MOCK)</span>
+                    <span class="mock-label-desc">
+                        Al activar, todos los drivers reales se reemplazan por simuladores.
+                        Los campos de configuración en la app quedan bloqueados.
+                    </span>
+                </div>
+                <label class="toggle-switch" id="mockToggleWrapper">
+                    <input type="checkbox" id="mockToggle" checked>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+        </div>
+
         <!-- ENTRY SIMULATION -->
         <div class="section">
-            <div class="section-title entry">🚗 Simular Entrada (Barrera + ANPR)</div>
+            <div class="section-title entry">🚗 Simular Entrada (Barrera + Cámara)</div>
             <p style="font-size: 11px; color: #555; margin-bottom: 14px; line-height: 1.6;">
                 Simula: botón físico presionado → cámara captura foto → barrera se abre → evento enviado a la app.
             </p>
@@ -284,7 +386,7 @@
             <div class="log-container" id="logContainer">
                 <div class="log-entry">
                     <span class="time">[INIT]</span>
-                    <span class="msg-info">Simulador inicializado. MockDriver activo.</span>
+                    <span class="msg-info">Simulador inicializado.</span>
                 </div>
             </div>
         </div>
@@ -292,16 +394,21 @@
     </div>
 
     <div class="status-bar">
-        <span><span class="status-dot"></span> MOCK DRIVER ACTIVE</span>
+        <span><span class="status-dot mock-on" id="statusDot"></span> <span id="statusText">MOCK ACTIVO</span></span>
         <span>Ctrl+Shift+D</span>
     </div>
 
     <script>
         const logContainer = document.getElementById('logContainer');
+        const mockToggle = document.getElementById('mockToggle');
+        const mockToggleWrapper = document.getElementById('mockToggleWrapper');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        let isTogglingMock = false;
 
         function addLog(type, message) {
             const time = new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            const colorClass = type === 'ok' ? 'msg-ok' : type === 'err' ? 'msg-err' : 'msg-info';
+            const colorClass = type === 'ok' ? 'msg-ok' : type === 'err' ? 'msg-err' : type === 'warn' ? 'msg-warn' : 'msg-info';
             const entry = document.createElement('div');
             entry.className = 'log-entry';
             entry.innerHTML = `<span class="time">[${time}]</span> <span class="${colorClass}">${message}</span>`;
@@ -316,6 +423,65 @@
             // Auto-hide after 8s
             setTimeout(() => { el.classList.remove('visible'); }, 8000);
         }
+
+        function updateStatusBar(mockEnabled) {
+            if (mockEnabled) {
+                statusDot.className = 'status-dot mock-on';
+                statusText.textContent = 'MOCK ACTIVO';
+            } else {
+                statusDot.className = 'status-dot mock-off';
+                statusText.textContent = 'DRIVERS REALES';
+            }
+        }
+
+        // ── Mock Mode Toggle Handler ──
+        mockToggle.addEventListener('change', async () => {
+            if (isTogglingMock) return;
+            isTogglingMock = true;
+            mockToggleWrapper.classList.add('loading');
+
+            const enabled = mockToggle.checked;
+            addLog('warn', `${enabled ? 'Activando' : 'Desactivando'} modo simulación...`);
+
+            try {
+                const result = await window.simulatorAPI.setMockMode(enabled);
+                if (result.success) {
+                    updateStatusBar(enabled);
+                    addLog('ok', `Modo simulación ${enabled ? 'ACTIVADO' : 'DESACTIVADO'} — drivers ${enabled ? 'mock' : 'reales'} cargados`);
+                } else {
+                    // Revert toggle on failure
+                    mockToggle.checked = !enabled;
+                    addLog('err', `Error al cambiar modo: ${result.error}`);
+                }
+            } catch (err) {
+                mockToggle.checked = !enabled;
+                addLog('err', `Error IPC: ${err.message}`);
+            } finally {
+                isTogglingMock = false;
+                mockToggleWrapper.classList.remove('loading');
+            }
+        });
+
+        // ── Initialize: sync toggle state from persistent config ──
+        (async () => {
+            try {
+                const mockMode = await window.simulatorAPI.getMockMode();
+                mockToggle.checked = mockMode;
+                updateStatusBar(mockMode);
+                addLog('info', `Estado persistente cargado: Mock ${mockMode ? 'ON' : 'OFF'}`);
+            } catch (err) {
+                addLog('err', `Error al cargar estado: ${err.message}`);
+            }
+        })();
+
+        // ── Listen for external mock mode changes ──
+        window.simulatorAPI.onMockModeChanged((enabled) => {
+            if (mockToggle.checked !== enabled) {
+                mockToggle.checked = enabled;
+                updateStatusBar(enabled);
+                addLog('info', `Mock mode cambiado externamente → ${enabled ? 'ON' : 'OFF'}`);
+            }
+        });
 
         async function handleSimulateEntry() {
             const btn = document.getElementById('btnEntry');

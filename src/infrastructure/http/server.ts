@@ -394,6 +394,25 @@ export const startServer = async () => {
             }
         });
 
+        // Mark stay as exit-used for anti-passback
+        app.patch('/api/hardware/mark-exit-used/:stayId', async (req, res) => {
+            try {
+                const stayId = req.params.stayId;
+                const { barrier_exit_used, barrier_exit_at } = req.body;
+                
+                await db.stays.update(
+                    { id: stayId } as any,
+                    { $set: { barrier_exit_used, barrier_exit_at: barrier_exit_at ? new Date(barrier_exit_at) : new Date() } } as any,
+                    {} as any
+                );
+                
+                res.json({ success: true, stayId });
+            } catch (error: any) {
+                console.error('❌ Hardware mark-exit-used error:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
         // Get pending hardware entries
         app.get('/api/hardware/pending-entries', async (req, res) => {
             try {

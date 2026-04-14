@@ -1,0 +1,18 @@
+{
+  "mockMode": true,
+  "barrier": {
+    "driver": "MOCK"
+  },
+  "camera": {
+    "driver": "MOCK"
+  },
+  "scanner": {
+    "driver": "MOCK"
+  },
+  "reconnect": {
+    "enabled": true,
+    "intervalMs": 5000,
+    "maxAttempts": -1,
+    "backoffMultiplier": 1.5
+  }
+}

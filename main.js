@@ -9,6 +9,18 @@ app.commandLine.appendSwitch('force-device-scale-factor', '1');
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
+// ── TSX Register: MUST be loaded before any .ts require ──────────────
+// Previously this was inside startServer() which only ran in production.
+// HardwareService.js needs it to require HardwareOrchestrator.ts.
+if (isDev) {
+    try {
+        require('tsx');
+        console.log('🛠️ [DEV] tsx loaded — TypeScript imports enabled');
+    } catch (e) {
+        console.error('❌ Error: El paquete "tsx" es necesario en desarrollo.', e.message);
+    }
+}
+
 // Start the backend server
 const fs = require('fs');
 
@@ -17,14 +29,7 @@ const startServer = () => {
 
     let serverPath;
     if (isDev) {
-        console.log('🛠️ [DEV] Registrando transpiler tsx para ejecución directa...');
-        try {
-            require('tsx/register');
-            serverPath = path.join(__dirname, 'src/infrastructure/http/server.ts');
-        } catch (e) {
-            console.error('❌ Error: El paquete "tsx" es necesario en desarrollo.');
-            process.exit(1);
-        }
+        serverPath = path.join(__dirname, 'src/infrastructure/http/server.ts');
     } else {
         console.log('📦 [PROD] Cargando servidor pre-compilado (CommonJS)...');
         // In production, we point to the compiled .js file inside the asar or resources

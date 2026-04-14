@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Ticket, Wallet, LogOut, User as UserIcon, Eye, Database, Loader2, AlertTriangle, RefreshCw, Settings, Printer, Check } from 'lucide-react';
+import { LayoutDashboard, Ticket, Wallet, LogOut, User as UserIcon, Eye, Database, Loader2, AlertTriangle, RefreshCw, Settings, Printer, Check, Wifi, WifiOff, Lock } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { api } from '../../services/api';
@@ -52,12 +52,21 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     const [lastSyncTime, setLastSyncTime] = useState<Date>(new Date());
     const [isBackgroundSyncing, setIsBackgroundSyncing] = useState(false);
 
-    // ── Printer Config Modal State ──
-    const [isPrinterModalOpen, setIsPrinterModalOpen] = useState(false);
+    // ── Config Modal State ──
+    const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+    
+    // Printer State
     const [printerList, setPrinterList] = useState<Array<{ name: string; isDefault: boolean; status?: number }>>([]);
     const [isLoadingPrinters, setIsLoadingPrinters] = useState(false);
     const [selectedPrinter, setSelectedPrinter] = useState<string>(localStorage.getItem('selected_printer_name') || '');
-    const [printerSaved, setPrinterSaved] = useState(false);
+    
+    // Hardware State
+    const [hwConfig, setHwConfig] = useState<any>(null);
+    const [isLoadingHw, setIsLoadingHw] = useState(false);
+    const [mockMode, setMockMode] = useState(true);
+    const [hwStatus, setHwStatus] = useState<{ barrierOnline: boolean; cameraOnline: boolean }>({ barrierOnline: false, cameraOnline: false });
+
+    const [configSaved, setConfigSaved] = useState(false);
 
     const location = useLocation();
     const { user, logout, isGlobalSyncing } = useAuth();
@@ -86,6 +95,57 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                 console.error('Failed to parse terminal config for branding', e);
             }
         }
+    }, []);
+
+    // ── Mock Mode + Hardware Status Listeners ──
+    useEffect(() => {
+        let cleanupMock: (() => void) | undefined;
+        let cleanupToast: (() => void) | undefined;
+
+        if (window.electronAPI?.onMockModeChanged) {
+            cleanupMock = window.electronAPI.onMockModeChanged((enabled: boolean) => {
+                setMockMode(enabled);
+            });
+        }
+
+        if (window.electronAPI?.onDriverStatusToast) {
+            cleanupToast = window.electronAPI.onDriverStatusToast((data: { driverType: string; online: boolean; message: string }) => {
+                if (data.online) {
+                    toast.success(data.message, {
+                        duration: 3000,
+                        style: { background: '#022c22', border: '1px solid rgba(16, 185, 129, 0.4)', color: '#34d399' },
+                    });
+                } else {
+                    toast.error(data.message, {
+                        duration: 4000,
+                        style: { background: '#1c1917', border: '1px solid rgba(239, 68, 68, 0.4)', color: '#f87171' },
+                    });
+                }
+                // Update local hw status
+                setHwStatus(prev => ({
+                    ...prev,
+                    barrierOnline: data.driverType === 'ETHERNET_RELAY' ? data.online : prev.barrierOnline,
+                    cameraOnline: data.driverType === 'ANPR_WEBHOOK' ? data.online : prev.cameraOnline,
+                }));
+            });
+        }
+
+        // Also listen for general status changes
+        let cleanupStatus: (() => void) | undefined;
+        if (window.electronAPI?.onHardwareStatusChanged) {
+            cleanupStatus = window.electronAPI.onHardwareStatusChanged((status: any) => {
+                setHwStatus({
+                    barrierOnline: status.entryBarrierOnline ?? false,
+                    cameraOnline: status.cameraOnline ?? false,
+                });
+            });
+        }
+
+        return () => {
+            cleanupMock?.();
+            cleanupToast?.();
+            cleanupStatus?.();
+        };
     }, []);
 
     // Sync active tab with URL 
@@ -237,18 +297,19 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
         }
     };
 
-    // ── Printer Config Handlers ──
-    const handleOpenPrinterModal = async () => {
-        setIsPrinterModalOpen(true);
-        setPrinterSaved(false);
+    // ── Config Handlers ──
+    const handleOpenConfigModal = async () => {
+        setIsConfigModalOpen(true);
+        setConfigSaved(false);
+        
+        // Load Printers
         setIsLoadingPrinters(true);
         try {
             if (window.electronAPI?.getPrinters) {
                 const printers = await window.electronAPI.getPrinters();
                 setPrinterList(printers);
-                // Si hay una impresora guardada, verificar que siga existiendo
                 const saved = localStorage.getItem('selected_printer_name');
-                if (saved && !printers.some(p => p.name === saved)) {
+                if (saved && !printers.some((p: any) => p.name === saved)) {
                     toast.warning(`Impresora "${saved}" no encontrada en el sistema`, { duration: 4000 });
                     setSelectedPrinter('');
                 }
@@ -261,17 +322,75 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
         } finally {
             setIsLoadingPrinters(false);
         }
+
+        // Load HW Config — with fallback to MOCK defaults
+        const DEFAULT_MOCK_CONFIG = {
+            mockMode: true,
+            barrier: { driver: 'MOCK' },
+            camera: { driver: 'MOCK' },
+            scanner: { driver: 'MOCK' },
+            reconnect: { enabled: true, intervalMs: 5000, maxAttempts: -1, backoffMultiplier: 1.5 },
+        };
+
+        setIsLoadingHw(true);
+        try {
+            if (window.electronAPI?.getHardwareConfig) {
+                const cfg = await window.electronAPI.getHardwareConfig();
+                if (cfg && cfg.barrier && cfg.camera) {
+                    setHwConfig(cfg);
+                    setMockMode(cfg.mockMode ?? true);
+                } else {
+                    console.warn('[HW-UI] getHardwareConfig returned empty/invalid, falling back to MOCK defaults');
+                    setHwConfig(DEFAULT_MOCK_CONFIG);
+                    setMockMode(true);
+                    toast.warning('Configuración de hardware vacía — usando modo simulador', { duration: 3000 });
+                }
+            } else {
+                // Electron API not available (web dev mode)
+                console.warn('[HW-UI] electronAPI.getHardwareConfig not available, using MOCK defaults');
+                setHwConfig(DEFAULT_MOCK_CONFIG);
+                setMockMode(true);
+            }
+
+            // Also fetch current hw status for indicators
+            if (window.electronAPI?.getHardwareStatus) {
+                const status = await window.electronAPI.getHardwareStatus();
+                setHwStatus({
+                    barrierOnline: status.entryBarrierOnline ?? false,
+                    cameraOnline: status.cameraOnline ?? false,
+                });
+            }
+        } catch (err) {
+            console.error('[HW-UI] ❌ Error loading HW config, falling back to MOCK:', err);
+            setHwConfig(DEFAULT_MOCK_CONFIG);
+            setMockMode(true);
+            toast.error('Error al cargar config de hardware — modo simulador activo');
+        } finally {
+            setIsLoadingHw(false);
+        }
     };
 
-    const handleSavePrinterConfig = () => {
+    const handleSaveConfig = async () => {
+        // Save Printer
         if (selectedPrinter) {
             localStorage.setItem('selected_printer_name', selectedPrinter);
         } else {
             localStorage.removeItem('selected_printer_name');
         }
-        setPrinterSaved(true);
-        toast.success(`Impresora configurada: ${selectedPrinter || 'Default del OS'}`);
-        setTimeout(() => setIsPrinterModalOpen(false), 800);
+
+        // Save HW
+        if (hwConfig && window.electronAPI?.setHardwareConfig) {
+            try {
+                await window.electronAPI.setHardwareConfig(hwConfig);
+            } catch (err) {
+                toast.error('Error al guardar HW');
+                return;
+            }
+        }
+
+        setConfigSaved(true);
+        toast.success(`Configuración guardada correctamente`);
+        setTimeout(() => setIsConfigModalOpen(false), 800);
     };
 
     return (
@@ -355,7 +474,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                         />
                         <NavButton
                             active={false}
-                            onClick={handleOpenPrinterModal}
+                            onClick={handleOpenConfigModal}
                             icon={<Settings className="w-4 h-4" />}
                             label="Config"
                         />
@@ -447,77 +566,246 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                 </div>
             )}
 
-            {/* --- PRINTER CONFIG MODAL --- */}
-            {isPrinterModalOpen && (
+            {/* --- CONFIG MODAL --- */}
+            {isConfigModalOpen && (
                 <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-                    <div className="w-full max-w-md bg-gray-950 border border-gray-800 rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+                    <div className="w-full max-w-2xl bg-gray-950 border border-gray-800 rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
                         <div className="px-6 py-4 border-b border-gray-800 flex items-center gap-3">
                             <div className="p-2 bg-emerald-900/20 rounded-lg">
-                                <Printer className="w-5 h-5 text-emerald-500" />
+                                <Settings className="w-5 h-5 text-emerald-500" />
                             </div>
-                            <h2 className="text-lg font-bold text-white uppercase tracking-tight">Configurar Impresora</h2>
+                            <h2 className="text-lg font-bold text-white uppercase tracking-tight">Configuración de Hardware</h2>
                         </div>
 
-                        <div className="p-6 space-y-5">
-                            {/* Printer Selector */}
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500 px-1">
-                                    Impresora
-                                </label>
-                                {isLoadingPrinters ? (
-                                    <div className="flex items-center gap-2 p-3 bg-gray-900 border border-gray-800 rounded-lg">
-                                        <Loader2 className="w-4 h-4 text-emerald-500 animate-spin" />
-                                        <span className="text-xs text-gray-400">Cargando impresoras...</span>
+                        <div className="p-6 h-[480px] overflow-y-auto space-y-6">
+
+                            {/* ══ IMPRESORA SECTION ══ */}
+                            <div className="space-y-3">
+                                <div className="flex items-center gap-2 border-b border-gray-800 pb-2">
+                                    <Printer className="w-4 h-4 text-emerald-500" />
+                                    <h3 className="text-xs font-bold uppercase tracking-widest text-emerald-500">Impresora</h3>
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500 px-1">
+                                        Impresora Activa
+                                    </label>
+                                    {isLoadingPrinters ? (
+                                        <div className="flex items-center gap-2 p-3 bg-gray-900 border border-gray-800 rounded-lg">
+                                            <Loader2 className="w-4 h-4 text-emerald-500 animate-spin" />
+                                            <span className="text-xs text-gray-400">Cargando impresoras...</span>
+                                        </div>
+                                    ) : (
+                                        <select
+                                            value={selectedPrinter}
+                                            onChange={(e) => setSelectedPrinter(e.target.value)}
+                                            className="w-full bg-gray-900 border border-gray-800 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all appearance-none cursor-pointer"
+                                        >
+                                            <option value="">🖥️ Usar default del Sistema Operativo</option>
+                                            {printerList.map((p) => (
+                                                <option key={p.name} value={p.name}>
+                                                    {p.name} {p.status === 0 ? '✅' : ''}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    )}
+                                    {printerList.length === 0 && !isLoadingPrinters && (
+                                        <p className="text-[10px] text-amber-500/80 px-1">No se detectaron impresoras en el sistema.</p>
+                                    )}
+                                </div>
+                                <div className="flex items-center gap-2 p-3 bg-gray-900/50 rounded-lg border border-gray-800/50 text-[10px] text-gray-400">
+                                    <span className="font-bold uppercase tracking-tight shrink-0">Resumen:</span>
+                                    <span className="font-mono text-emerald-500 truncate">
+                                        {selectedPrinter || 'OS Default'}
+                                    </span>
+                                </div>
+                            </div>
+
+                            {/* ══ BARRERAS SECTION ══ */}
+                            {isLoadingHw ? (
+                                <div className="flex items-center justify-center p-8">
+                                    <Loader2 className="w-6 h-6 text-emerald-500 animate-spin" />
+                                </div>
+                            ) : hwConfig ? (
+                                <>
+                                    <div className="space-y-3 relative">
+                                        <div className="flex items-center justify-between border-b border-gray-800 pb-2">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-sm">🚧</span>
+                                                <h3 className="text-xs font-bold uppercase tracking-widest text-emerald-500">Barreras</h3>
+                                            </div>
+                                            {!mockMode && (
+                                                <div className="flex items-center gap-1.5">
+                                                    {hwStatus.barrierOnline ? (
+                                                        <Wifi className="w-3.5 h-3.5 text-emerald-500" />
+                                                    ) : (
+                                                        <WifiOff className="w-3.5 h-3.5 text-red-500" />
+                                                    )}
+                                                    <span className={`text-[9px] font-bold uppercase tracking-wider ${hwStatus.barrierOnline ? 'text-emerald-500' : 'text-red-500'}`}>
+                                                        {hwStatus.barrierOnline ? 'Online' : 'Offline'}
+                                                    </span>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {mockMode ? (
+                                            /* ── Mock Lock Overlay ── */
+                                            <div className="relative">
+                                                <div className="p-4 bg-amber-950/20 border border-amber-500/20 rounded-lg flex items-center gap-3">
+                                                    <div className="p-2 bg-amber-900/30 rounded-lg shrink-0">
+                                                        <Lock className="w-4 h-4 text-amber-500" />
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-xs font-bold text-amber-500 uppercase tracking-wide">Modo Simulación Activo</p>
+                                                        <p className="text-[10px] text-amber-500/60 mt-0.5">
+                                                            Desactive el modo Mock desde el Simulador (Ctrl+Shift+D) para configurar barreras reales.
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            /* ── Real Config Fields ── */
+                                            <div className="space-y-3">
+                                                <div className="grid grid-cols-2 gap-4 p-3 bg-gray-900/50 border border-emerald-900/30 rounded-lg">
+                                                    <div className="space-y-1">
+                                                        <label className="text-[9px] font-bold uppercase text-gray-500">IP Módulo Relé</label>
+                                                        <input
+                                                            type="text"
+                                                            value={hwConfig.barrier.ethernet?.host || '192.168.1.100'}
+                                                            onChange={(e) => setHwConfig({ ...hwConfig, barrier: { ...hwConfig.barrier, driver: 'ETHERNET_RELAY', ethernet: { ...hwConfig.barrier.ethernet, host: e.target.value } } })}
+                                                            className="w-full bg-gray-950 border border-gray-800 rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                                                            placeholder="192.168.1.100"
+                                                        />
+                                                    </div>
+                                                    <div className="space-y-1">
+                                                        <label className="text-[9px] font-bold uppercase text-gray-500">Puerto TCP</label>
+                                                        <input
+                                                            type="number"
+                                                            value={hwConfig.barrier.ethernet?.port || 23}
+                                                            onChange={(e) => setHwConfig({ ...hwConfig, barrier: { ...hwConfig.barrier, driver: 'ETHERNET_RELAY', ethernet: { ...hwConfig.barrier.ethernet, port: parseInt(e.target.value) } } })}
+                                                            className="w-full bg-gray-950 border border-gray-800 rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                                                        />
+                                                    </div>
+                                                </div>
+                                                {!hwStatus.barrierOnline && hwConfig.barrier.driver === 'ETHERNET_RELAY' && (
+                                                    <p className="text-[10px] text-red-400/80 px-1 flex items-center gap-1">
+                                                        <WifiOff className="w-3 h-3" /> No se detecta el módulo relé en la red. Verifique la IP y el puerto.
+                                                    </p>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
-                                ) : (
-                                    <select
-                                        value={selectedPrinter}
-                                        onChange={(e) => setSelectedPrinter(e.target.value)}
-                                        className="w-full bg-gray-900 border border-gray-800 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all appearance-none cursor-pointer"
-                                    >
-                                        <option value="">🖥️ Usar default del Sistema Operativo</option>
-                                        {printerList.map((p) => (
-                                            <option key={p.name} value={p.name}>
-                                                {p.name} {p.status === 0 ? '✅' : ''}
-                                            </option>
-                                        ))}
-                                    </select>
-                                )}
-                                {printerList.length === 0 && !isLoadingPrinters && (
-                                    <p className="text-[10px] text-amber-500/80 px-1">No se detectaron impresoras en el sistema.</p>
-                                )}
-                            </div>
 
-                            {/* Current Config Summary */}
-                            <div className="flex items-center gap-2 p-3 bg-gray-900/50 rounded-lg border border-gray-800/50 text-[10px] text-gray-400">
-                                <span className="font-bold uppercase tracking-tight shrink-0">Impresora activa:</span>
-                                <span className="font-mono text-emerald-500 truncate">
-                                    {selectedPrinter || 'Default del Sistema Operativo'}
-                                </span>
-                            </div>
+                                    {/* ══ CÁMARA SECTION ══ */}
+                                    <div className="space-y-3 relative">
+                                        <div className="flex items-center justify-between border-b border-gray-800 pb-2">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-sm">📷</span>
+                                                <h3 className="text-xs font-bold uppercase tracking-widest text-emerald-500">Cámara</h3>
+                                            </div>
+                                            {!mockMode && (
+                                                <div className="flex items-center gap-1.5">
+                                                    {hwStatus.cameraOnline ? (
+                                                        <Wifi className="w-3.5 h-3.5 text-emerald-500" />
+                                                    ) : (
+                                                        <WifiOff className="w-3.5 h-3.5 text-red-500" />
+                                                    )}
+                                                    <span className={`text-[9px] font-bold uppercase tracking-wider ${hwStatus.cameraOnline ? 'text-emerald-500' : 'text-red-500'}`}>
+                                                        {hwStatus.cameraOnline ? 'Online' : 'Offline'}
+                                                    </span>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {mockMode ? (
+                                            /* ── Mock Lock Overlay ── */
+                                            <div className="relative">
+                                                <div className="p-4 bg-amber-950/20 border border-amber-500/20 rounded-lg flex items-center gap-3">
+                                                    <div className="p-2 bg-amber-900/30 rounded-lg shrink-0">
+                                                        <Lock className="w-4 h-4 text-amber-500" />
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-xs font-bold text-amber-500 uppercase tracking-wide">Modo Simulación Activo</p>
+                                                        <p className="text-[10px] text-amber-500/60 mt-0.5">
+                                                            Desactive el modo Mock desde el Simulador (Ctrl+Shift+D) para configurar la cámara real.
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            /* ── Real Config Fields ── */
+                                            <div className="space-y-3">
+                                                <div className="grid grid-cols-2 gap-4 p-3 bg-gray-900/50 border border-emerald-900/30 rounded-lg">
+                                                    <div className="space-y-1">
+                                                        <label className="text-[9px] font-bold uppercase text-gray-500">Puerto Webhook (Listener)</label>
+                                                        <input
+                                                            type="number"
+                                                            value={hwConfig.camera.webhook?.listenPort || 8080}
+                                                            onChange={(e) => setHwConfig({ ...hwConfig, camera: { ...hwConfig.camera, driver: 'ANPR_WEBHOOK', webhook: { ...hwConfig.camera.webhook, listenPort: parseInt(e.target.value) } } })}
+                                                            className="w-full bg-gray-950 border border-gray-800 rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                                                        />
+                                                    </div>
+                                                    <div className="space-y-1">
+                                                        <label className="text-[9px] font-bold uppercase text-gray-500">Auth Token (opcional)</label>
+                                                        <input
+                                                            type="text"
+                                                            value={hwConfig.camera.webhook?.authToken || ''}
+                                                            onChange={(e) => setHwConfig({ ...hwConfig, camera: { ...hwConfig.camera, driver: 'ANPR_WEBHOOK', webhook: { ...hwConfig.camera.webhook, authToken: e.target.value } } })}
+                                                            className="w-full bg-gray-950 border border-gray-800 rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                                                            placeholder="opcional"
+                                                        />
+                                                    </div>
+                                                </div>
+                                                {!hwStatus.cameraOnline && hwConfig.camera.driver === 'ANPR_WEBHOOK' && (
+                                                    <p className="text-[10px] text-red-400/80 px-1 flex items-center gap-1">
+                                                        <WifiOff className="w-3 h-3" /> Listener webhook no activo. Verifique el puerto.
+                                                    </p>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                </>
+                            ) : (
+                                <p className="text-xs text-red-400">Error al cargar la configuración de hardware.</p>
+                            )}
+
                         </div>
 
-                        <div className="px-6 py-4 bg-gray-900/30 border-t border-gray-800 flex items-center justify-end gap-3">
-                            <button
-                                onClick={() => setIsPrinterModalOpen(false)}
-                                className="px-4 py-2 text-xs font-bold uppercase tracking-widest text-gray-500 hover:text-white transition-colors"
-                            >
-                                Cancelar
-                            </button>
-                            <button
-                                onClick={handleSavePrinterConfig}
-                                disabled={printerSaved}
-                                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-800 text-white text-xs font-bold uppercase tracking-widest rounded-lg shadow-lg shadow-emerald-900/20 transition-all flex items-center gap-2"
-                            >
-                                {printerSaved ? (
+                        <div className="px-6 py-4 bg-gray-900/30 border-t border-gray-800 flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-[10px] text-gray-500">
+                                {mockMode ? (
                                     <>
-                                        <Check className="w-3 h-3" />
-                                        Guardado
+                                        <Lock className="w-3 h-3 text-amber-500" />
+                                        <span className="text-amber-500/80 uppercase tracking-wider font-bold">Mock Activo</span>
                                     </>
                                 ) : (
-                                    'Guardar'
+                                    <>
+                                        <Wifi className="w-3 h-3 text-emerald-500" />
+                                        <span className="text-emerald-500/80 uppercase tracking-wider font-bold">Drivers Reales</span>
+                                    </>
                                 )}
-                            </button>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <button
+                                    onClick={() => setIsConfigModalOpen(false)}
+                                    className="px-4 py-2 text-xs font-bold uppercase tracking-widest text-gray-500 hover:text-white transition-colors"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    onClick={handleSaveConfig}
+                                    disabled={configSaved}
+                                    className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-800 text-white text-xs font-bold uppercase tracking-widest rounded-lg shadow-lg shadow-emerald-900/20 transition-all flex items-center gap-2"
+                                >
+                                    {configSaved ? (
+                                        <>
+                                            <Check className="w-3 h-3" />
+                                            Guardado
+                                        </>
+                                    ) : (
+                                        'Guardar Cambios'
+                                    )}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>

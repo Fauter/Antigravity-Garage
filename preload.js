@@ -65,15 +65,43 @@ contextBridge.exposeInMainWorld('electronAPI', {
         return () => ipcRenderer.removeListener('hw:barrier-auth-result', handler);
     },
 
-    /** Obtener estado del hardware (online/offline) */
+    /** Listener: cambios generales de estado online/offline del HW */
+    onHardwareStatusChanged: (callback) => {
+        const handler = (_event, payload) => callback(payload);
+        ipcRenderer.on('hw:status-changed', handler);
+        return () => ipcRenderer.removeListener('hw:status-changed', handler);
+    },
+
+    /** Obtener estado actual del hardware */
     getHardwareStatus: () => ipcRenderer.invoke('hw:get-status'),
 
-    /** Abrir ventana del simulador de hardware */
+    /** Obtener y guardar configuración de hardware */
+    getHardwareConfig: () => ipcRenderer.invoke('hw:get-config'),
+    setHardwareConfig: (config) => ipcRenderer.invoke('hw:set-config', config),
+
+    /** Mock Mode control */
+    getMockMode: () => ipcRenderer.invoke('hw:get-mock-mode'),
+    setMockMode: (enabled) => ipcRenderer.invoke('hw:set-mock-mode', enabled),
+
+    /** Listener: mock mode changed (from Simulator toggle) */
+    onMockModeChanged: (callback) => {
+        const handler = (_event, payload) => callback(payload);
+        ipcRenderer.on('hw:mock-mode-changed', handler);
+        return () => ipcRenderer.removeListener('hw:mock-mode-changed', handler);
+    },
+
+    /** Listener: driver connection status toast (online/offline notifications) */
+    onDriverStatusToast: (callback) => {
+        const handler = (_event, payload) => callback(payload);
+        ipcRenderer.on('hw:driver-status-toast', handler);
+        return () => ipcRenderer.removeListener('hw:driver-status-toast', handler);
+    },
+
+    /** Control manual */
+    openBarrier: (type) => ipcRenderer.invoke('hw:open-barrier', type),
     openHardwareSimulator: () => ipcRenderer.invoke('hw:open-simulator'),
 
-    /** DEV: Simular entrada de vehículo */
+    /** DEV / Simulación */
     simulateEntry: () => ipcRenderer.invoke('hw:simulate-entry'),
-
-    /** DEV: Simular escaneo de barcode en salida */
     simulateBarcodeScan: (code) => ipcRenderer.invoke('hw:simulate-barcode', code),
 });
