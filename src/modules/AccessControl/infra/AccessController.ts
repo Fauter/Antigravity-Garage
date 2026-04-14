@@ -139,6 +139,17 @@ export class AccessController {
             (entry as any).vehicleId = vehicleId;
             if (garageId) (entry as any).garageId = garageId;
 
+            // 🔓 HARDWARE: Explicitly reset/ensure hardware fields for new entry
+            Object.assign(entry as any, {
+                exit_authorized: false,
+                barrier_exit_used: false,
+                is_pending_processing: false,
+                anpr_suggested_plate: null,
+                entry_photo_path: null,
+                exit_authorized_at: null,
+                barrier_exit_at: null
+            });
+
             const savedStay = await this.stayRepository.save(entry as any);
             res.json(savedStay);
         } catch (error: any) {
@@ -214,7 +225,18 @@ export class AccessController {
                 Number(promoPercentage) || 0
             );
 
+            // 🔓 HARDWARE: Inject exit authorization BEFORE save()
+            // This ensures the full document replacement in save() includes exit_authorized: true,
+            // and the sync mutation payload also carries the correct value.
+            Object.assign(closedStay as any, {
+                exit_authorized: true,
+                exit_authorized_at: new Date(),
+                exit_authorized_by: userOperator
+            });
+            console.log(`🔓 Exit: Barrier authorized for ${closedStay.plate} (ticket: ${(closedStay as any).ticket_code})`);
+
             await this.stayRepository.save(closedStay as any);
+
             if (exitMovement) {
                 // Inject correlative receipt_number and ticket_code
                 (exitMovement as any).receipt_number = receiptNumber;
@@ -222,39 +244,12 @@ export class AccessController {
                 await this.movementRepository.save(exitMovement);
             }
 
-            // 🚀 SYNC: Enqueue Changes for Cloud
-            try {
-                // Fix: Strip internal _id to prevent conflicts during Sync/Upsert
-                const { _id: sId, ...stayPayload } = closedStay as any;
-
-                await db.mutations.insert({
-                    id: uuidv4(),
-                    entityType: 'Stay',
-                    operation: 'UPDATE',
-                    entityId: closedStay.id,
-                    payload: stayPayload,
-                    timestamp: new Date(),
-                    synced: false
-                });
-
-                if (exitMovement) {
-                    const { _id: mId, ...movementPayload } = exitMovement as any;
-                    await db.mutations.insert({
-                        id: uuidv4(),
-                        entityType: 'Movement',
-                        operation: 'CREATE',
-                        entityId: exitMovement.id,
-                        payload: movementPayload,
-                        timestamp: new Date(),
-                        synced: false
-                    });
-                    console.log(`📡 Exit: Queued mutations for Stay ${closedStay.id} and Movement ${exitMovement.id}`);
-                } else {
-                    console.log(`📡 Exit: Queued mutation for Stay ${closedStay.id} (Subscriber, no movement generated)`);
-                }
-            } catch (syncErr) {
-                console.error('⚠️ Exit: Failed to queue mutations via AccessController', syncErr);
-                // Non-blocking: We proceed to respond success to frontend
+            // 🧟 ZOMBIE CLEANUP: Close any other open stays for this plate
+            // This ensures the HardwareService finds the SAME stay the cashier authorized
+            const stayId = closedStay.id || (closedStay as any)._id;
+            const zombiesClosed = await this.stayRepository.closeZombieStays(plate, stayId, garageId);
+            if (zombiesClosed > 0) {
+                console.log(`🧟 Exit: Cleaned up ${zombiesClosed} zombie stays for ${plate}`);
             }
 
             res.json({ stay: closedStay, movement: exitMovement, price });

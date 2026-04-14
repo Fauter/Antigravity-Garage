@@ -35,6 +35,10 @@ export class AccessManager {
             isSubscriber,
             subscriptionId: subscriptionId || null,
             ticket_code: finalTicketCode,
+            // Hardware Integration defaults
+            exit_authorized: false,
+            is_pending_processing: false,
+            barrier_exit_used: false,
             createdAt: new Date(),
         };
 

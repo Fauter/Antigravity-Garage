@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { HardwareProvider } from './context/HardwareContext';
 import MainLayout from './components/layout/MainLayout';
 import OperatorDashboard from './pages/OperatorDashboard';
 import LoginPage from './pages/LoginPage';
@@ -27,26 +28,29 @@ const ProtectedRoute = () => {
 function App() {
     return (
         <AuthProvider>
-            <Router>
-                <Routes>
-                    <Route path="/login" element={<LoginPage />} />
+            <HardwareProvider>
+                <Router>
+                    <Routes>
+                        <Route path="/login" element={<LoginPage />} />
 
-                    {/* Protected Routes */}
-                    <Route element={<ProtectedRoute />}>
-                        <Route path="/" element={<OperatorDashboard />} />
-                        <Route path="/abonos" element={<GestorAbonos />} />
-                        <Route path="/abonos/alta" element={<AltaSuscriptor />} />
-                        <Route path="/caja" element={<CajaPage />} />
-                        <Route path="/audit" element={<AuditoriaVehiculos />} />
-                        <Route path="/config" element={<ConfigAuditPage />} />
-                    </Route>
+                        {/* Protected Routes */}
+                        <Route element={<ProtectedRoute />}>
+                            <Route path="/" element={<OperatorDashboard />} />
+                            <Route path="/abonos" element={<GestorAbonos />} />
+                            <Route path="/abonos/alta" element={<AltaSuscriptor />} />
+                            <Route path="/caja" element={<CajaPage />} />
+                            <Route path="/audit" element={<AuditoriaVehiculos />} />
+                            <Route path="/config" element={<ConfigAuditPage />} />
+                        </Route>
 
-                    {/* Fallback */}
-                    <Route path="*" element={<Navigate to="/" replace />} />
-                </Routes>
-            </Router>
+                        {/* Fallback */}
+                        <Route path="*" element={<Navigate to="/" replace />} />
+                    </Routes>
+                </Router>
+            </HardwareProvider>
         </AuthProvider>
     );
 }
 
 export default App;
+

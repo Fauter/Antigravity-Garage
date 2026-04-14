@@ -48,4 +48,32 @@ contextBridge.exposeInMainWorld('electronAPI', {
      * @returns {Promise<Array<{name: string, isDefault: boolean, status: number}>>}
      */
     getPrinters: () => ipcRenderer.invoke('print:get-printers'),
+
+    // ── Hardware Integration ──────────────────────────────────
+
+    /** Listener: evento de entrada detectado por hardware/simulador */
+    onHardwareEntry: (callback) => {
+        const handler = (_event, payload) => callback(payload);
+        ipcRenderer.on('hw:entry-detected', handler);
+        return () => ipcRenderer.removeListener('hw:entry-detected', handler);
+    },
+
+    /** Listener: resultado de autorización de barrera de salida */
+    onBarrierAuthResult: (callback) => {
+        const handler = (_event, payload) => callback(payload);
+        ipcRenderer.on('hw:barrier-auth-result', handler);
+        return () => ipcRenderer.removeListener('hw:barrier-auth-result', handler);
+    },
+
+    /** Obtener estado del hardware (online/offline) */
+    getHardwareStatus: () => ipcRenderer.invoke('hw:get-status'),
+
+    /** Abrir ventana del simulador de hardware */
+    openHardwareSimulator: () => ipcRenderer.invoke('hw:open-simulator'),
+
+    /** DEV: Simular entrada de vehículo */
+    simulateEntry: () => ipcRenderer.invoke('hw:simulate-entry'),
+
+    /** DEV: Simular escaneo de barcode en salida */
+    simulateBarcodeScan: (code) => ipcRenderer.invoke('hw:simulate-barcode', code),
 });

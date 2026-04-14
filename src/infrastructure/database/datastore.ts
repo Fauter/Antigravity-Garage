@@ -3,16 +3,19 @@ import path from 'path';
 import fs from 'fs';
 
 // Ensure data directory exists
-let DATA_DIR: string;
+export let DATA_DIR: string;
 
 try {
     const { app } = require('electron');
-    if (app) {
+    // Si estamos en Electron Y está empaquetado (PROD), usamos userData
+    if (app && app.isPackaged) {
         DATA_DIR = path.join(app.getPath('userData'), 'database');
     } else {
+        // En DEV (tsx watch o Electron des-empaquetado), usamos siempre .data/
         DATA_DIR = path.resolve(process.cwd(), '.data');
     }
 } catch (e) {
+    // Si falla el require (backend tsx independiente), usamos .data/
     DATA_DIR = path.resolve(process.cwd(), '.data');
 }
 
@@ -70,7 +73,10 @@ export const db = {
 
     // Sync Queue
     mutations: createStore('mutations'),
-    syncConflicts: createStore('sync_conflicts')
+    syncConflicts: createStore('sync_conflicts'),
+
+    // Hardware Integration
+    hardwareEvents: createStore('hardware_events'),
 };
 
 console.log('📦 Local Datastore (NeDB) Initialized in ./.data/');

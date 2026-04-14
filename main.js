@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Menu, ipcMain } = require('electron');
 const path = require('path');
 const { initPrintManager } = require('./PrintManager');
+const { initHardwareService } = require('./HardwareService');
 
 // Blindaje Total de DPI (Nivel Engine)
 app.commandLine.appendSwitch('high-dpi-support', '1');
@@ -114,6 +115,7 @@ function createWindow() {
 app.whenReady().then(() => {
     createWindow();
     initPrintManager();
+    initHardwareService(mainWindow, isDev);
 
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();

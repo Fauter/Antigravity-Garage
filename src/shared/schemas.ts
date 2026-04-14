@@ -146,6 +146,15 @@ export const StaySchema = z.object({
   isSubscriber: z.boolean().default(false),
   subscriptionId: UuidSchema.optional().nullable(),
   ticket_code: z.string().optional(),
+  // --- Hardware Integration Fields ---
+  exit_authorized: z.boolean().default(false),
+  exit_authorized_at: TimestampSchema.optional().nullable(),
+  exit_authorized_by: z.string().optional().nullable(),
+  entry_photo_path: z.string().optional().nullable(),
+  is_pending_processing: z.boolean().default(false),
+  anpr_suggested_plate: z.string().optional().nullable(),
+  barrier_exit_used: z.boolean().default(false),
+  barrier_exit_at: TimestampSchema.optional().nullable(),
   createdAt: TimestampSchema.default(() => new Date()),
 });
 export type Stay = z.infer<typeof StaySchema>;

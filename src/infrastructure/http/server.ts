@@ -127,6 +127,24 @@ export const startServer = async () => {
             res.status(404).send('Method not found');
         });
 
+        // Recent Stays (for Reprint Center — returns last 20 stays, active OR closed)
+        app.get('/api/estadias/recientes', async (req, res) => {
+            try {
+                const garageId = (req.headers['x-garage-id'] as string);
+                if (!garageId) return res.status(400).json({ error: 'x-garage-id header required' });
+
+                const allStays: any[] = await db.stays.find({ garageId });
+                const sorted = allStays
+                    .sort((a: any, b: any) => new Date(b.entryTime).getTime() - new Date(a.entryTime).getTime())
+                    .slice(0, 20);
+
+                res.json(sorted);
+            } catch (error: any) {
+                console.error('Error fetching recent stays:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
         // Garage Management
         app.get('/api/cocheras', (req, res) => {
             if (garageController?.getAllCocheras) return garageController.getAllCocheras(req, res);
@@ -330,6 +348,64 @@ export const startServer = async () => {
         // Check Sync Status Endpoint
         app.get('/api/sync/check', (req, res) => {
             res.json({ syncing: syncService?.isGlobalSyncing || false });
+        });
+
+        // ── Hardware Integration Routes ──────────────────────────
+        
+        // Check exit authorization (used by barrier driver / simulator)
+        app.get('/api/hardware/check-exit/:ticketCode', async (req, res) => {
+            try {
+                const normalizedCode = req.params.ticketCode.trim().toUpperCase();
+                
+                // Search ALL stays with this ticket_code (not just active ones!)
+                // After payment: active=false, exit_authorized=true
+                let candidates: any[] = await db.stays.find({ ticket_code: normalizedCode } as any);
+                
+                // Fallback: case-insensitive search
+                if (candidates.length === 0) {
+                    const allStays: any[] = await db.stays.find({});
+                    candidates = allStays.filter((s: any) =>
+                        s.ticket_code && s.ticket_code.toUpperCase() === normalizedCode
+                    );
+                }
+                
+                if (candidates.length === 0) {
+                    return res.json({ authorized: false, reason: 'NOT_FOUND', ticketCode: normalizedCode });
+                }
+                
+                // Most recent stay wins (prevents old ticket reuse)
+                const stay: any = candidates.sort((a: any, b: any) =>
+                    new Date(b.entryTime).getTime() - new Date(a.entryTime).getTime()
+                )[0];
+                
+                if (stay.barrier_exit_used === true) {
+                    return res.json({ authorized: false, reason: 'ALREADY_USED', ticketCode: normalizedCode, plate: stay.plate });
+                }
+                
+                if (stay.exit_authorized === true || stay.isSubscriber || stay.is_subscriber) {
+                    const reason = (stay.isSubscriber || stay.is_subscriber) ? 'SUBSCRIBER' : 'PAID';
+                    return res.json({ authorized: true, reason, ticketCode: normalizedCode, stayId: stay.id, plate: stay.plate });
+                }
+                
+                res.json({ authorized: false, reason: 'NOT_PAID', ticketCode: normalizedCode, plate: stay.plate });
+            } catch (error: any) {
+                console.error('❌ Hardware check-exit error:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Get pending hardware entries
+        app.get('/api/hardware/pending-entries', async (req, res) => {
+            try {
+                const garageId = (req.headers['x-garage-id'] as string);
+                const query: any = { is_pending_processing: true };
+                if (garageId) query.garageId = garageId;
+                
+                const pending = await db.stays.find(query);
+                res.json(pending);
+            } catch (error: any) {
+                res.status(500).json({ error: error.message });
+            }
         });
 
         // --- 2. Production Static Files & Robust Path Resolution (Moved to after API) ---

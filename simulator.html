@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GarageIA — Hardware Simulator</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', -apple-system, sans-serif;
+            background: #0a0a0f;
+            color: #e0e0e0;
+            height: 100vh;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            padding: 14px 20px;
+            border-bottom: 1px solid #2a2a4a;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .header-icon {
+            font-size: 20px;
+        }
+
+        .header h1 {
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            color: #a78bfa;
+        }
+
+        .header .badge {
+            background: #7c3aed;
+            color: white;
+            font-size: 9px;
+            font-weight: 800;
+            padding: 2px 8px;
+            border-radius: 10px;
+            letter-spacing: 1px;
+        }
+
+        .container {
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            height: calc(100vh - 52px);
+            overflow-y: auto;
+        }
+
+        .section {
+            background: #111118;
+            border: 1px solid #1e1e30;
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .section-title {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .section-title.entry { color: #34d399; }
+        .section-title.exit { color: #60a5fa; }
+        .section-title.log { color: #a78bfa; }
+
+        .btn {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn:active { transform: scale(0.97); }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        .btn-entry {
+            background: linear-gradient(135deg, #059669, #10b981);
+            color: white;
+            box-shadow: 0 4px 15px rgba(16, 185, 129, 0.25);
+        }
+
+        .btn-entry:hover:not(:disabled) {
+            background: linear-gradient(135deg, #10b981, #34d399);
+            box-shadow: 0 4px 20px rgba(16, 185, 129, 0.4);
+        }
+
+        .btn-exit {
+            background: linear-gradient(135deg, #2563eb, #3b82f6);
+            color: white;
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.25);
+        }
+
+        .btn-exit:hover:not(:disabled) {
+            background: linear-gradient(135deg, #3b82f6, #60a5fa);
+        }
+
+        .input-group {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .input-group input {
+            flex: 1;
+            padding: 12px 16px;
+            background: #0a0a12;
+            border: 1px solid #2a2a40;
+            border-radius: 8px;
+            color: white;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 16px;
+            font-weight: 700;
+            text-align: center;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .input-group input:focus {
+            border-color: #3b82f6;
+        }
+
+        .input-group input::placeholder {
+            color: #333;
+            letter-spacing: 1px;
+            font-weight: 400;
+        }
+
+        /* Result Display */
+        .result {
+            margin-top: 12px;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            display: none;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .result.visible { display: block; }
+
+        .result.success {
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: #34d399;
+        }
+
+        .result.error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #f87171;
+        }
+
+        .result.info {
+            background: rgba(96, 165, 250, 0.1);
+            border: 1px solid rgba(96, 165, 250, 0.3);
+            color: #60a5fa;
+        }
+
+        /* Log */
+        .log-container {
+            max-height: 160px;
+            overflow-y: auto;
+            font-family: 'Consolas', monospace;
+            font-size: 11px;
+            line-height: 1.8;
+            color: #666;
+        }
+
+        .log-entry {
+            padding: 2px 0;
+            border-bottom: 1px solid #1a1a25;
+        }
+
+        .log-entry .time { color: #444; }
+        .log-entry .msg-ok { color: #34d399; }
+        .log-entry .msg-err { color: #f87171; }
+        .log-entry .msg-info { color: #60a5fa; }
+
+        /* Status bar */
+        .status-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 6px 16px;
+            background: #08080e;
+            border-top: 1px solid #1a1a25;
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            color: #444;
+        }
+
+        .status-dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #34d399;
+            margin-right: 4px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <span class="header-icon">🎮</span>
+        <h1>Hardware Simulator</h1>
+        <span class="badge">MOCK</span>
+    </div>
+
+    <div class="container">
+
+        <!-- ENTRY SIMULATION -->
+        <div class="section">
+            <div class="section-title entry">🚗 Simular Entrada (Barrera + ANPR)</div>
+            <p style="font-size: 11px; color: #555; margin-bottom: 14px; line-height: 1.6;">
+                Simula: botón físico presionado → cámara captura foto → barrera se abre → evento enviado a la app.
+            </p>
+            <button class="btn btn-entry" id="btnEntry" onclick="handleSimulateEntry()">
+                ⚡ Simular Ingreso de Vehículo
+            </button>
+            <div class="result" id="entryResult"></div>
+        </div>
+
+        <!-- EXIT SIMULATION -->
+        <div class="section">
+            <div class="section-title exit">🚧 Simular Escaneo de Salida (Barcode)</div>
+            <p style="font-size: 11px; color: #555; margin-bottom: 14px; line-height: 1.6;">
+                Simula: cliente escanea ticket en la barrera de salida. La app verifica si el cobro fue realizado.
+            </p>
+            <div class="input-group">
+                <input type="text" id="ticketInput" placeholder="TICKET CODE (ej: E0000001)" maxlength="12" />
+            </div>
+            <button class="btn btn-exit" id="btnExit" onclick="handleSimulateExit()">
+                🔍 Verificar Autorización
+            </button>
+            <div class="result" id="exitResult"></div>
+        </div>
+
+        <!-- EVENT LOG -->
+        <div class="section">
+            <div class="section-title log">📋 Log de Eventos</div>
+            <div class="log-container" id="logContainer">
+                <div class="log-entry">
+                    <span class="time">[INIT]</span>
+                    <span class="msg-info">Simulador inicializado. MockDriver activo.</span>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="status-bar">
+        <span><span class="status-dot"></span> MOCK DRIVER ACTIVE</span>
+        <span>Ctrl+Shift+D</span>
+    </div>
+
+    <script>
+        const logContainer = document.getElementById('logContainer');
+
+        function addLog(type, message) {
+            const time = new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const colorClass = type === 'ok' ? 'msg-ok' : type === 'err' ? 'msg-err' : 'msg-info';
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `<span class="time">[${time}]</span> <span class="${colorClass}">${message}</span>`;
+            logContainer.appendChild(entry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        function showResult(elementId, type, message) {
+            const el = document.getElementById(elementId);
+            el.className = `result visible ${type}`;
+            el.textContent = message;
+            // Auto-hide after 8s
+            setTimeout(() => { el.classList.remove('visible'); }, 8000);
+        }
+
+        async function handleSimulateEntry() {
+            const btn = document.getElementById('btnEntry');
+            btn.disabled = true;
+            btn.textContent = '⏳ Simulando...';
+
+            try {
+                const result = await window.simulatorAPI.simulateEntry();
+                addLog('ok', `Entrada simulada → Patente: ${result.suggestedPlate}`);
+                showResult('entryResult', 'success',
+                    `✅ Evento enviado → Patente: ${result.suggestedPlate} | ID: ${result.id.slice(0, 8)}`);
+            } catch (err) {
+                addLog('err', `Error: ${err.message}`);
+                showResult('entryResult', 'error', `❌ Error: ${err.message}`);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '⚡ Simular Ingreso de Vehículo';
+            }
+        }
+
+        async function handleSimulateExit() {
+            const ticketCode = document.getElementById('ticketInput').value.trim();
+            if (!ticketCode) {
+                showResult('exitResult', 'error', '⚠️ Ingrese un ticket code');
+                return;
+            }
+
+            const btn = document.getElementById('btnExit');
+            btn.disabled = true;
+            btn.textContent = '⏳ Consultando...';
+
+            try {
+                const result = await window.simulatorAPI.simulateBarcodeScan(ticketCode);
+                if (result.authorized) {
+                    addLog('ok', `BARRERA ABIERTA → ${ticketCode} (${result.reason}) | ${result.plate || ''}`);
+                    showResult('exitResult', 'success',
+                        `🟢 BARRERA ABIERTA — Motivo: ${result.reason} | Patente: ${result.plate || 'N/A'}`);
+                } else {
+                    addLog('err', `BARRERA CERRADA → ${ticketCode} (${result.reason})`);
+                    const reasonText = {
+                        'NOT_FOUND': 'Ticket no encontrado en base de datos',
+                        'NOT_PAID': 'Cobro no realizado — Barrera bloqueada',
+                        'ALREADY_USED': 'Ticket ya fue utilizado (anti-passback)'
+                    };
+                    showResult('exitResult', 'error',
+                        `🔴 BARRERA CERRADA — ${reasonText[result.reason] || result.reason}`);
+                }
+            } catch (err) {
+                addLog('err', `Error: ${err.message}`);
+                showResult('exitResult', 'error', `❌ Error: ${err.message}`);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '🔍 Verificar Autorización';
+            }
+        }
+
+        // Listen for results from main process
+        window.simulatorAPI.onEntryResult((data) => {
+            if (data.success) {
+                addLog('info', `Confirmación → Pestaña creada para ${data.plate}`);
+            }
+        });
+
+        window.simulatorAPI.onExitResult((data) => {
+            // Already handled in handleSimulateExit
+        });
+
+        // Enter key on ticket input
+        document.getElementById('ticketInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') handleSimulateExit();
+        });
+    </script>
+</body>
+</html>

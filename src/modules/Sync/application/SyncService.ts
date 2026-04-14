@@ -43,7 +43,16 @@ export class SyncService {
 
             console.log(`📡 Sync: Processing ${pending.length} pending mutations...`);
 
+            const MAX_RETRIES = 5;
+
             for (const mutation of pending) {
+                // 🛡️ MAX RETRY CAP: Discard mutations stuck in retry loop
+                if (mutation.retryCount >= MAX_RETRIES) {
+                    console.warn(`☣️ Sync: Mutación ${mutation.id} [${mutation.entityType}] descartada tras ${mutation.retryCount} reintentos.`);
+                    await this.queue.markSynced(mutation.id);
+                    continue;
+                }
+
                 try {
                     await this.pushToCloud(mutation);
                     await this.queue.markSynced(mutation.id);
@@ -54,35 +63,10 @@ export class SyncService {
                     // POISON PILL: Integrity Violations (Foreign Key, Unique, Check) + Missing Table + Extra Columns
                     // 23505: Unique Violation, 23514: Check Violation
                     // PGRST205: Relation not found (Table missing)
-                    if (['23505', '23514', 'PGRST205', '42P01'].includes(err?.code) || err?.message?.includes('vehicles_type_check')) {
+                    if (['23505', '23514', 'PGRST205', 'PGRST204', '42P01'].includes(err?.code) || err?.message?.includes('vehicles_type_check')) {
+                        // PGRST204 is now a poison pill — column cleanup is handled at the mapping layer
                         console.warn(`☣️ Sync: Mutación ${mutation.id} descartada por Error Irrecuperable (Error ${err?.code}).`);
                         await this.queue.markSynced(mutation.id); // Mark as synced effectively "skips" it
-                    } else if (err?.code === 'PGRST204') {
-                        console.warn(`⚠️ Sync: Error PGRST204 en mutación ${mutation.id}. Intentando limpiar columnas desconocidas del payload...`);
-                        try {
-                            const match = err?.message?.match(/Could not find the '([^']+)' column/);
-                            if (match && match[1] && mutation.payload) {
-                                const badCol = match[1];
-                                console.log(`🛠️ Sync: Removiendo columna conflictiva '${badCol}' del payload de ${mutation.entityType}`);
-                                delete mutation.payload[badCol];
-                                // Eliminar también versión camelCase por si acaso
-                                const camelCase = badCol.replace(/_([a-z])/g, (g: string) => g[1].toUpperCase());
-                                if (mutation.payload[camelCase] !== undefined) delete mutation.payload[camelCase];
-
-                                await db.mutations.update({ id: mutation.id }, { $set: { payload: mutation.payload } }, {});
-                            } else {
-                                // Fallback extremo: dejar solo lo esencial
-                                console.log(`🛠️ Sync: No se pudo parsear la columna. Aplicando limpieza extrema al payload.`);
-                                const safeKeys = ['id', 'garage_id', 'garageId', 'owner_id', 'ownerId', 'status', 'active', 'vehiculos', 'cliente_id', 'clienteId'];
-                                const cleanPayload: any = {};
-                                safeKeys.forEach(k => { if (mutation.payload && mutation.payload[k] !== undefined) cleanPayload[k] = mutation.payload[k]; });
-                                await db.mutations.update({ id: mutation.id }, { $set: { payload: cleanPayload } }, {});
-                            }
-                            await this.queue.incrementRetry(mutation.id);
-                        } catch (e) {
-                            console.error(`❌ Sync: Fallo al intentar salvar mutación ${mutation.id}`, e);
-                            await this.queue.markSynced(mutation.id);
-                        }
                     } else {
                         await this.queue.incrementRetry(mutation.id);
                     }
@@ -426,19 +410,28 @@ export class SyncService {
                 vType = 'Auto';
             }
 
-            return {
+            const stayPayload: any = {
                 id: item.id,
                 garage_id: item.garageId || item.garage_id,
                 plate: item.plate,
                 vehicle_type: vType,
-                vehicle_id: item.vehicleId || item.vehicle_id, // Added vehicle_id logic
+                vehicle_id: item.vehicleId || item.vehicle_id,
                 active: item.active,
                 is_subscriber: item.isSubscriber || false,
                 subscription_id: item.subscriptionId || item.subscription_id || null,
                 ticket_code: item.ticket_code || null,
                 entry_time: item.entryTime ? new Date(item.entryTime).toISOString() : (item.entry_time || null),
-                exit_time: item.exitTime ? new Date(item.exitTime).toISOString() : (item.exit_time || null)
+                exit_time: item.exitTime ? new Date(item.exitTime).toISOString() : (item.exit_time || null),
+                // 🔓 HARDWARE: Only sync fields that EXIST in the Supabase 'stays' table.
+                // exit_authorized is the core flag. All other hardware fields
+                // (exit_authorized_at, authorized_at, exit_authorized_by, barrier_exit_*,
+                //  is_pending_processing, anpr_suggested_plate, entry_photo_path)
+                // are LOCAL-ONLY (NeDB). Sending them causes PGRST204 infinite retry loops.
+                exit_authorized: item.exit_authorized ?? false,
             };
+
+            console.log(`📡 DEBUG SYNC [Stay]: exit_authorized=${stayPayload.exit_authorized}, ticket=${stayPayload.ticket_code}`);
+            return stayPayload;
         }
 
         // 2. Generic Base Mappings for others

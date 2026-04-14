@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import { toast } from 'sonner';
-import { Wallet, TrendingUp, Calendar, User, ArrowDownRight, LogOut, FileText, CheckCircle, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Wallet, TrendingUp, Calendar, User, ArrowDownRight, LogOut, FileText, CheckCircle, AlertCircle, CheckCircle2, Printer, Search, X, Loader2, RotateCcw } from 'lucide-react';
 import { PrinterService } from '../services/PrinterService';
 
 interface Movement {
@@ -15,6 +15,10 @@ interface Movement {
     operator: string;
     timestamp: string;
     type: string;
+    notes?: string;
+    relatedEntityId?: string;
+    receipt_number?: string;
+    ticket_code?: string;
 }
 
 interface PartialClose {
@@ -26,9 +30,39 @@ interface PartialClose {
     notes?: string;
 }
 
+interface RecentStay {
+    id?: string;
+    _id?: string;
+    plate: string;
+    entryTime: string;
+    exitTime?: string;
+    vehicleType?: string;
+    active?: boolean;
+    isSubscriber?: boolean;
+    is_subscriber?: boolean;
+    ticket_code?: string;
+    garageId?: string;
+}
+
+// Unified Row for the main Caja movements table
 type UnifiedRow =
     | (Movement & { _kind: 'movement' })
     | (PartialClose & { _kind: 'partial_close' });
+
+// Unified Reprint Item — normalizes stays + movements into a single reprintable list
+interface ReprintItem {
+    id: string;
+    type: 'Entrada' | 'CobroEstadia' | 'CobroAbono' | 'Upgrade';
+    plate: string;
+    timestamp: string;
+    amount?: number;
+    paymentMethod?: string;
+    operator?: string;
+    notes?: string;
+    // Source data for reconstruction
+    _stay?: RecentStay;
+    _movement?: Movement;
+}
 
 const CajaPage: React.FC = () => {
     const { user, operatorName, logout } = useAuth();
@@ -39,6 +73,7 @@ const CajaPage: React.FC = () => {
     // Modals state
     const [isShiftCloseModalOpen, setIsShiftCloseModalOpen] = useState(false);
     const [isPartialCloseModalOpen, setIsPartialCloseModalOpen] = useState(false);
+    const [isReprintModalOpen, setIsReprintModalOpen] = useState(false);
 
     // Shift close form state
     const [shiftCloseStep, setShiftCloseStep] = useState<1 | 2>(1);
@@ -52,6 +87,16 @@ const CajaPage: React.FC = () => {
     const [partialAmount, setPartialAmount] = useState<number | ''>('');
     const [recipientName, setRecipientName] = useState('');
     const [partialNotes, setPartialNotes] = useState('');
+
+    // Reprint Center state
+    const [reprintItems, setReprintItems] = useState<ReprintItem[]>([]);
+    const [reprintLoading, setReprintLoading] = useState(false);
+    const [reprintSearch, setReprintSearch] = useState('');
+    const [reprintingId, setReprintingId] = useState<string | null>(null);
+
+    // Keep raw movements for reprint cross-reference
+    const [rawMovements, setRawMovements] = useState<Movement[]>([]);
+    const [recentStays, setRecentStays] = useState<RecentStay[]>([]);
 
     useEffect(() => {
         loadMovements();
@@ -106,6 +151,9 @@ const CajaPage: React.FC = () => {
 
             setUnifiedRows(combined);
 
+            // Guardar movimientos raw para reprint cross-reference
+            setRawMovements(movRes.data || []);
+
             // Fondo Inicial: staying_in_cash del último cierre global (cualquier operador)
             // Nota: los registros locales usan staying_in_cash (snake_case),
             // pero los sincronizados desde Supabase usan stayingInCash (camelCase)
@@ -135,6 +183,245 @@ const CajaPage: React.FC = () => {
             setLoading(false);
         }
     };
+
+    // Fetch recent stays for Reprint Center
+    useEffect(() => {
+        if (isReprintModalOpen) {
+            loadReprintData();
+        }
+    }, [isReprintModalOpen]);
+
+    const loadReprintData = async () => {
+        setReprintLoading(true);
+        try {
+            const staysRes = await api.get('/estadias/recientes');
+            setRecentStays(staysRes.data || []);
+        } catch (error) {
+            console.error('Error loading recent stays for reprint:', error);
+            toast.error('Error al cargar estadías recientes');
+        } finally {
+            setReprintLoading(false);
+        }
+    };
+
+    // Build unified reprint list from stays + movements
+    useEffect(() => {
+        const items: ReprintItem[] = [];
+        const seenIds = new Set<string>();
+
+        // 1. Add Entry tickets from recent stays (entries that have NO corresponding CobroEstadia movement)
+        for (const stay of recentStays) {
+            const stayId = stay.id || stay._id || '';
+            if (!stayId || seenIds.has(`entry-${stayId}`)) continue;
+
+            // Every stay is a potential Entry ticket reprint
+            items.push({
+                id: `entry-${stayId}`,
+                type: 'Entrada',
+                plate: stay.plate,
+                timestamp: stay.entryTime,
+                _stay: stay,
+            });
+            seenIds.add(`entry-${stayId}`);
+        }
+
+        // 2. Add Exit/Abono/Upgrade tickets from movements
+        for (const mov of rawMovements) {
+            const movId = mov.id || '';
+            if (!movId) continue;
+
+            if (mov.type === 'CobroEstadia') {
+                if (seenIds.has(`exit-${movId}`)) continue;
+                items.push({
+                    id: `exit-${movId}`,
+                    type: 'CobroEstadia',
+                    plate: mov.plate,
+                    timestamp: mov.timestamp,
+                    amount: mov.amount,
+                    paymentMethod: mov.paymentMethod || mov.payment_method,
+                    operator: mov.operator,
+                    notes: mov.notes,
+                    _movement: mov,
+                });
+                seenIds.add(`exit-${movId}`);
+            } else if (mov.type === 'CobroAbono') {
+                // Distinguish Upgrade vs regular Abono based on notes
+                const isUpgrade = mov.notes && mov.notes.toLowerCase().includes('upgrade');
+                if (seenIds.has(`abono-${movId}`)) continue;
+                items.push({
+                    id: isUpgrade ? `upgrade-${movId}` : `abono-${movId}`,
+                    type: isUpgrade ? 'Upgrade' : 'CobroAbono',
+                    plate: mov.plate,
+                    timestamp: mov.timestamp,
+                    amount: mov.amount,
+                    paymentMethod: mov.paymentMethod || mov.payment_method,
+                    operator: mov.operator,
+                    notes: mov.notes,
+                    _movement: mov,
+                });
+                seenIds.add(isUpgrade ? `upgrade-${movId}` : `abono-${movId}`);
+            }
+        }
+
+        // Sort by timestamp descending
+        items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+        setReprintItems(items);
+    }, [recentStays, rawMovements]);
+
+    // --- Reprint Handlers ---
+
+    const handleReprint = async (item: ReprintItem) => {
+        setReprintingId(item.id);
+        try {
+            switch (item.type) {
+                case 'Entrada':
+                    handleReprintEntry(item);
+                    break;
+                case 'CobroEstadia':
+                    handleReprintExit(item);
+                    break;
+                case 'CobroAbono':
+                    handleReprintSubscription(item);
+                    break;
+                case 'Upgrade':
+                    handleReprintUpgrade(item);
+                    break;
+            }
+        } catch (error) {
+            console.error('Error reprinting ticket:', error);
+            toast.error('Error al reimprimir ticket');
+        } finally {
+            // Small delay to show spinner feedback
+            setTimeout(() => setReprintingId(null), 800);
+        }
+    };
+
+    const handleReprintEntry = (item: ReprintItem) => {
+        const stay = item._stay;
+        if (!stay) {
+            toast.error('Datos de estadía no disponibles para reimpresión');
+            return;
+        }
+
+        PrinterService.printEntryTicket({
+            id: stay.id || stay._id,
+            plate: stay.plate,
+            entryTime: stay.entryTime,
+            entry_time: stay.entryTime,
+            vehicleType: stay.vehicleType || 'Auto',
+            ticket_code: stay.ticket_code,
+        });
+        toast.success(`Reimprimiendo Ticket Entrada: ${stay.plate}`);
+    };
+
+    const handleReprintExit = (item: ReprintItem) => {
+        const mov = item._movement;
+        if (!mov) {
+            toast.error('Datos de movimiento no disponibles para reimpresión');
+            return;
+        }
+
+        // Find matching stay for this exit movement (by plate, closest timestamp)
+        const matchingStay = recentStays.find(s =>
+            s.plate === mov.plate && s.exitTime
+        ) || recentStays.find(s => s.plate === mov.plate);
+
+        // Reconstruct the stay object for printExitTicket
+        const stayForPrint: any = {
+            id: matchingStay?.id || matchingStay?._id || 'UNKNOWN',
+            plate: mov.plate,
+            entryTime: matchingStay?.entryTime || mov.timestamp,
+            entry_time: matchingStay?.entryTime || mov.timestamp,
+            exitTime: matchingStay?.exitTime || mov.timestamp,
+            exit_time: matchingStay?.exitTime || mov.timestamp,
+            isSubscriber: matchingStay?.isSubscriber || matchingStay?.is_subscriber || false,
+            is_subscriber: matchingStay?.isSubscriber || matchingStay?.is_subscriber || false,
+            ticket_code: matchingStay?.ticket_code,
+        };
+
+        // Parse duration from notes if contains "Por Xhs" pattern
+        let durationNote = mov.notes || 'N/A';
+        const durationMatch = mov.notes?.match(/Por\s+(\d+[\w\s]*)/i);
+        if (durationMatch) {
+            durationNote = durationMatch[0];
+        }
+
+        const movementForPrint: any = {
+            ...mov,
+            notes: durationNote,
+            amount: mov.amount,
+            paymentMethod: mov.paymentMethod || mov.payment_method || 'N/A',
+            operator: mov.operator || 'Sys',
+            receipt_number: mov.receipt_number || mov.ticket_code,
+        };
+
+        PrinterService.printExitTicket(stayForPrint, movementForPrint);
+        toast.success(`Reimprimiendo Ticket Salida: ${mov.plate}`);
+    };
+
+    const handleReprintSubscription = (item: ReprintItem) => {
+        const mov = item._movement;
+        if (!mov) {
+            toast.error('Datos de movimiento no disponibles para reimpresión');
+            return;
+        }
+
+        // Reconstruct from movement notes + available data
+        // Notes typically contain: "Pago Total por Renovación - Cochera #X" or "Renovación Abono Anticipada"
+        const cocheraMatch = mov.notes?.match(/Cochera\s+([#\d\w]+|Móvil)/i);
+        const cocheraText = cocheraMatch ? cocheraMatch[1] : 'Móvil';
+
+        PrinterService.printSubscriptionTicket({
+            nombreApellido: mov.operator || 'Cliente',
+            patente: mov.plate || '---',
+            tipoCochera: cocheraText.includes('Móvil') ? 'Movil' : 'Fija',
+            numeroCochera: cocheraText.replace('#', ''),
+            metodoPago: mov.paymentMethod || mov.payment_method || 'Efectivo',
+            basePriceDisplay: mov.amount,
+            proratedPrice: mov.amount,
+            montoRecibido: mov.amount,
+            tipoVehiculo: 'Auto',
+            marca: '',
+            modelo: '',
+            ticket_code: mov.receipt_number || mov.ticket_code || null,
+            // Minimal fields — the ticket renders what's available
+            dni: '',
+        });
+        toast.success(`Reimprimiendo Ticket Abono: ${mov.plate}`);
+    };
+
+    const handleReprintUpgrade = (item: ReprintItem) => {
+        const mov = item._movement;
+        if (!mov) {
+            toast.error('Datos de movimiento no disponibles para reimpresión');
+            return;
+        }
+
+        // Parse upgrade details from notes: "Upgrade de vehículo: AAA111 (Lista: Standard)"
+        const vehicleTypeMatch = mov.notes?.match(/Lista:\s*(\w+)/i);
+        const listType = vehicleTypeMatch ? vehicleTypeMatch[1] : 'Standard';
+
+        PrinterService.printUpgradeTicket({
+            titular: mov.operator || 'Cliente',
+            patente: mov.plate || '---',
+            precioAnterior: 0, // Not available from movement alone
+            precioNuevo: mov.amount,
+            montoCobrado: mov.amount,
+            metodoPago: mov.paymentMethod || mov.payment_method || 'Efectivo',
+            operador: mov.operator || 'Sys',
+            tipoVehiculo: listType === 'Electronic' ? 'Auto' : 'Auto',
+            ticket_code: mov.receipt_number || mov.ticket_code || null,
+        });
+        toast.success(`Reimprimiendo Ticket Upgrade: ${mov.plate}`);
+    };
+
+    // Filtered reprint items by search
+    const filteredReprintItems = reprintSearch.trim()
+        ? reprintItems.filter(item =>
+            item.plate?.toLowerCase().includes(reprintSearch.toLowerCase().trim())
+        )
+        : reprintItems;
 
     const handleShiftClose = async () => {
         try {
@@ -189,6 +476,20 @@ const CajaPage: React.FC = () => {
         }
     };
 
+    // --- Helpers ---
+    const getReprintTypeBadge = (type: ReprintItem['type']) => {
+        switch (type) {
+            case 'Entrada':
+                return <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase bg-sky-500/15 border border-sky-500/30 text-sky-400">Entrada</span>;
+            case 'CobroEstadia':
+                return <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase bg-emerald-500/15 border border-emerald-500/30 text-emerald-400">Salida</span>;
+            case 'CobroAbono':
+                return <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase bg-violet-500/15 border border-violet-500/30 text-violet-400">Abono</span>;
+            case 'Upgrade':
+                return <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase bg-amber-500/15 border border-amber-500/30 text-amber-400">Upgrade</span>;
+        }
+    };
+
     return (
         <div className="p-6 h-full flex flex-col bg-slate-950 text-gray-200 font-sans">
 
@@ -219,13 +520,21 @@ const CajaPage: React.FC = () => {
             </div>
 
             {/* Acciones Rápidas */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                 <button
                     onClick={() => setIsPartialCloseModalOpen(true)}
                     className="flex justify-center items-center gap-3 bg-slate-800 hover:bg-slate-700 text-white p-4 rounded-xl border border-slate-700 transition-colors shadow-lg group"
                 >
                     <ArrowDownRight className="w-6 h-6 text-amber-500 group-hover:scale-110 transition-transform" />
                     <span className="font-semibold text-lg">Retiro Parcial</span>
+                </button>
+
+                <button
+                    onClick={() => setIsReprintModalOpen(true)}
+                    className="flex justify-center items-center gap-3 bg-slate-800 hover:bg-slate-700 text-white p-4 rounded-xl border border-slate-700 transition-colors shadow-lg group"
+                >
+                    <Printer className="w-6 h-6 text-sky-400 group-hover:scale-110 transition-transform" />
+                    <span className="font-semibold text-lg">Reimprimir Tickets</span>
                 </button>
 
                 <button
@@ -538,6 +847,161 @@ const CajaPage: React.FC = () => {
                                 </div>
                             </>
                         )}
+                    </div>
+                </div>
+            )}
+
+            {/* Modal Reimprimir Tickets */}
+            {isReprintModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+                    <div className="bg-slate-900 border border-slate-700 w-full max-w-2xl rounded-2xl shadow-2xl flex flex-col relative" style={{ maxHeight: '85vh' }}>
+                        {/* Header */}
+                        <div className="p-6 pb-4 border-b border-slate-800 flex items-center justify-between shrink-0">
+                            <h3 className="text-2xl font-bold text-white flex items-center gap-3">
+                                <div className="bg-sky-500/20 p-2 rounded-xl">
+                                    <Printer className="text-sky-400 w-6 h-6" />
+                                </div>
+                                Centro de Reimpresión
+                            </h3>
+                            <button
+                                onClick={() => {
+                                    setIsReprintModalOpen(false);
+                                    setReprintSearch('');
+                                }}
+                                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        {/* Search */}
+                        <div className="px-6 py-3 border-b border-slate-800/50 shrink-0">
+                            <div className="relative">
+                                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                                <input
+                                    type="text"
+                                    value={reprintSearch}
+                                    onChange={e => setReprintSearch(e.target.value)}
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 pl-10 text-white text-sm focus:border-sky-500 focus:ring-1 focus:ring-sky-500 outline-none placeholder-slate-600"
+                                    placeholder="Buscar por patente..."
+                                    autoFocus
+                                />
+                                {reprintSearch && (
+                                    <button
+                                        onClick={() => setReprintSearch('')}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-slate-800 text-slate-500 hover:text-white transition-colors"
+                                    >
+                                        <X className="w-3.5 h-3.5" />
+                                    </button>
+                                )}
+                            </div>
+                            <div className="flex items-center justify-between mt-2">
+                                <p className="text-slate-500 text-xs">
+                                    {filteredReprintItems.length} ticket{filteredReprintItems.length !== 1 ? 's' : ''} disponible{filteredReprintItems.length !== 1 ? 's' : ''}
+                                </p>
+                                <button
+                                    onClick={loadReprintData}
+                                    disabled={reprintLoading}
+                                    className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-sky-400 transition-colors disabled:opacity-50"
+                                >
+                                    <RotateCcw className={`w-3 h-3 ${reprintLoading ? 'animate-spin' : ''}`} />
+                                    Actualizar
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* List */}
+                        <div className="overflow-auto flex-1 px-2">
+                            {reprintLoading ? (
+                                <div className="flex flex-col items-center justify-center py-16 gap-3 text-slate-500">
+                                    <Loader2 className="w-8 h-8 animate-spin text-sky-500" />
+                                    <span className="text-sm font-medium">Cargando tickets...</span>
+                                </div>
+                            ) : filteredReprintItems.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center py-16 gap-2 text-slate-500">
+                                    <Printer className="w-10 h-10 opacity-30" />
+                                    <span className="text-sm font-medium">
+                                        {reprintSearch ? 'Sin resultados para esta patente' : 'Sin tickets disponibles'}
+                                    </span>
+                                </div>
+                            ) : (
+                                <div className="py-2 space-y-1">
+                                    {filteredReprintItems.map(item => (
+                                        <div
+                                            key={item.id}
+                                            className="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-slate-800/60 transition-colors group"
+                                        >
+                                            {/* Time */}
+                                            <div className="w-[52px] shrink-0 text-center">
+                                                <span className="font-mono text-xs text-slate-500">
+                                                    {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                </span>
+                                                <div className="font-mono text-[10px] text-slate-600">
+                                                    {new Date(item.timestamp).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' })}
+                                                </div>
+                                            </div>
+
+                                            {/* Badge */}
+                                            <div className="w-[80px] shrink-0">
+                                                {getReprintTypeBadge(item.type)}
+                                            </div>
+
+                                            {/* Plate */}
+                                            <div className="flex-1 min-w-0">
+                                                <span className="font-mono font-bold text-white text-sm">
+                                                    {item.plate || '---'}
+                                                </span>
+                                                {item.notes && (
+                                                    <p className="text-[10px] text-slate-600 truncate mt-0.5">
+                                                        {item.notes}
+                                                    </p>
+                                                )}
+                                            </div>
+
+                                            {/* Amount (if applicable) */}
+                                            <div className="w-[80px] text-right shrink-0">
+                                                {item.amount !== undefined && item.amount > 0 ? (
+                                                    <span className="font-mono font-bold text-emerald-400 text-sm">
+                                                        ${item.amount.toLocaleString()}
+                                                    </span>
+                                                ) : item.type === 'Entrada' ? (
+                                                    <span className="text-[10px] text-slate-600">---</span>
+                                                ) : (
+                                                    <span className="font-mono text-slate-500 text-sm">$0</span>
+                                                )}
+                                            </div>
+
+                                            {/* Reprint Button */}
+                                            <button
+                                                onClick={() => handleReprint(item)}
+                                                disabled={reprintingId === item.id}
+                                                className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-400 text-xs font-bold hover:bg-sky-500/20 hover:border-sky-500/40 transition-all disabled:opacity-50 disabled:cursor-not-allowed group-hover:bg-sky-500/20"
+                                            >
+                                                {reprintingId === item.id ? (
+                                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                ) : (
+                                                    <Printer className="w-3.5 h-3.5" />
+                                                )}
+                                                Reimprimir
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Footer */}
+                        <div className="p-4 border-t border-slate-800 shrink-0">
+                            <button
+                                onClick={() => {
+                                    setIsReprintModalOpen(false);
+                                    setReprintSearch('');
+                                }}
+                                className="w-full bg-slate-800 text-slate-300 py-3 rounded-xl font-bold hover:bg-slate-700 transition"
+                            >
+                                Cerrar
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
