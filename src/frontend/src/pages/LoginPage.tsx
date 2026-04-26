@@ -222,7 +222,7 @@ const LoginPage: React.FC = () => {
                 {/* Footer */}
                 <div className="mt-8 text-center">
                     <p className="text-[10px] text-gray-600 uppercase tracking-widest">
-                        Antigravity Garage v2.0
+                        GarageIA v3.3.2
                     </p>
                 </div>
             </div>

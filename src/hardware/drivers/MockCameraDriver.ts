@@ -84,7 +84,10 @@ export class MockCameraDriver implements ICameraDriver {
             source: 'SIMULATOR',
         };
 
-        this._plateCallbacks.forEach(cb => cb(event));
+        // NOTE: Do NOT fire _plateCallbacks here.
+        // The Orchestrator calls handleEntryEvent(event) directly for simulate-entry.
+        // Firing callbacks here would cause a DUPLICATE entry (one from callback,
+        // one from the direct handleEntryEvent call).
         return event;
     }
 }

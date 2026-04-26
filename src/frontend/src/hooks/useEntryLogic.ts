@@ -59,13 +59,25 @@ export const useEntryLogic = () => {
             const response = await api.post('/estadias/entrada', data);
             return response.data;
         },
-        onSuccess: (data) => {
+        onSuccess: async (data) => {
             // Invalidate active stays query to refresh list
             queryClient.invalidateQueries({ queryKey: ['stays'] });
             queryClient.invalidateQueries({ queryKey: ['activeStays'] });
             toast.success(`Ingreso registrado: ${data.plate || 'Vehículo'}`, {
                 description: 'Entrada autorizada correctamente'
             });
+
+            // ── Open physical entry barrier via ESP32 ──
+            try {
+                if (window.electronAPI?.openBarrier) {
+                    console.log('[useEntryLogic] Sending OPEN:ENTRY to barrier...');
+                    await window.electronAPI.openBarrier('ENTRY');
+                    console.log('[useEntryLogic] ✅ Entry barrier opened');
+                }
+            } catch (barrierErr) {
+                console.warn('[useEntryLogic] ⚠️ Barrier open failed (entry still processed):', barrierErr);
+            }
+
             // TICKET
             PrinterService.printEntryTicket(data);
 

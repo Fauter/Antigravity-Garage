@@ -54,6 +54,11 @@ const initialState: HardwareState = {
 function hardwareReducer(state: HardwareState, action: HardwareAction): HardwareState {
     switch (action.type) {
         case 'ADD_PENDING_ENTRY': {
+            // ── Deduplication guard: ignore if ID already in queue ──
+            if (state.pendingEntries.some(e => e.id === action.payload.id)) {
+                console.warn(`⚠️ [HardwareContext] Duplicate entry suppressed: ${action.payload.id}`);
+                return state;
+            }
             const newEntries = [...state.pendingEntries, action.payload];
             return {
                 ...state,

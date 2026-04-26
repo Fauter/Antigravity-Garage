@@ -671,7 +671,10 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                                                         <input
                                                             type="text"
                                                             value={hwConfig.barrier.ethernet?.host || '192.168.1.100'}
-                                                            onChange={(e) => setHwConfig({ ...hwConfig, barrier: { ...hwConfig.barrier, driver: 'ETHERNET_RELAY', ethernet: { ...hwConfig.barrier.ethernet, host: e.target.value } } })}
+                                                            onChange={(e) => {
+                                                                const prevEth = hwConfig.barrier.ethernet || { host: '', port: 23, relayEntryChannel: 0, relayExitChannel: 1, pulseDurationMs: 1000 };
+                                                                setHwConfig({ ...hwConfig, barrier: { ...hwConfig.barrier, driver: 'ETHERNET_RELAY', ethernet: { ...prevEth, host: e.target.value } } });
+                                                            }}
                                                             className="w-full bg-gray-950 border border-gray-800 rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
                                                             placeholder="192.168.1.100"
                                                         />
@@ -681,7 +684,10 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                                                         <input
                                                             type="number"
                                                             value={hwConfig.barrier.ethernet?.port || 23}
-                                                            onChange={(e) => setHwConfig({ ...hwConfig, barrier: { ...hwConfig.barrier, driver: 'ETHERNET_RELAY', ethernet: { ...hwConfig.barrier.ethernet, port: parseInt(e.target.value) } } })}
+                                                            onChange={(e) => {
+                                                                const prevEth = hwConfig.barrier.ethernet || { host: '', port: 23, relayEntryChannel: 0, relayExitChannel: 1, pulseDurationMs: 1000 };
+                                                                setHwConfig({ ...hwConfig, barrier: { ...hwConfig.barrier, driver: 'ETHERNET_RELAY', ethernet: { ...prevEth, port: parseInt(e.target.value) || 23 } } });
+                                                            }}
                                                             className="w-full bg-gray-950 border border-gray-800 rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
                                                         />
                                                     </div>
@@ -696,6 +702,10 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                                     </div>
 
                                     {/* ══ CÁMARA SECTION ══ */}
+                                    {/* Hidden: cameras are not used in this phase.
+                                        Set `false` → `true` below to re-enable the UI.
+                                        The config state and save handler remain intact. */}
+                                    {false && (
                                     <div className="space-y-3 relative">
                                         <div className="flex items-center justify-between border-b border-gray-800 pb-2">
                                             <div className="flex items-center gap-2">
@@ -763,6 +773,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                                             </div>
                                         )}
                                     </div>
+                                    )}
                                 </>
                             ) : (
                                 <p className="text-xs text-red-400">Error al cargar la configuración de hardware.</p>

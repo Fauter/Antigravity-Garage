@@ -1,7 +1,14 @@
 {
-  "mockMode": true,
+  "mockMode": false,
   "barrier": {
-    "driver": "MOCK"
+    "driver": "ETHERNET_RELAY",
+    "ethernet": {
+      "host": "192.168.100.175",
+      "port": 23,
+      "relayEntryChannel": 0,
+      "relayExitChannel": 1,
+      "pulseDurationMs": 1000
+    }
   },
   "camera": {
     "driver": "MOCK"

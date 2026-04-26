@@ -1,15 +1,20 @@
 /**
  * EthernetRelayDriver.ts — Controls barriers via TCP/IP relay module.
  *
- * Supports relay modules with simple TCP text protocol (Numato, HW-group, etc).
- * Protocol: send a text command over a raw TCP socket, relay toggles.
+ * Connects to an ESP32 via raw TCP socket. The connection is PERSISTENT:
+ * the socket stays open as long as the driver is alive, and Keep-Alive
+ * packets prevent the Wi-Fi stack from dropping it.
+ *
+ * Protocol (ESP32):
+ *   OPEN:ENTRY\n  →  opens entry barrier
+ *   OPEN:EXIT\n   →  opens exit barrier
  *
  * ZERO native dependencies — uses Node.js built-in `net` module.
  *
  * Connection lifecycle:
- *   connect() → TCP socket to relay module IP:port
- *   openBarrier() → send "relay <channel> on", wait pulseDurationMs, send "relay <channel> off"
- *   disconnect() → close TCP socket
+ *   connect()       → TCP socket to ESP32 IP:port (with Keep-Alive)
+ *   openBarrier()   → send "OPEN:ENTRY\n" or "OPEN:EXIT\n"
+ *   disconnect()    → graceful close of TCP socket
  *
  * If the cable is unplugged, the 'close'/'error' events on the socket trigger
  * reconnection logic via the ConnectionMonitor.
@@ -27,6 +32,7 @@ export class EthernetRelayDriver implements IBarrierDriver {
     private _connectedAt: Date | null = null;
     private _lastError: string | null = null;
     private _reconnectAttempts = 0;
+    private _intentionalDisconnect = false;
 
     private _buttonCallbacks: ((type: 'ENTRY' | 'EXIT') => void)[] = [];
     private _vehicleCallbacks: ((type: 'ENTRY' | 'EXIT') => void)[] = [];
@@ -37,20 +43,74 @@ export class EthernetRelayDriver implements IBarrierDriver {
     constructor(private config: EthernetRelayConfig) {}
 
     async connect(): Promise<void> {
-        return new Promise<void>((resolve, reject) => {
-            this.socket = new net.Socket();
-            this.socket.setTimeout(5000);
+        const host = this.config?.host;
+        const port = this.config?.port;
 
-            this.socket.connect(this.config.port, this.config.host, () => {
+        // ── Guard: Validate host & port BEFORE calling socket.connect ──
+        if (!host || !port) {
+            const msg = `[EthernetRelay] FATAL: host=${host}, port=${port} — cannot connect with undefined parameters. Check config.barrier.ethernet in HardwareConfig.`;
+            console.error(`❌ ${msg}`);
+            this._lastError = msg;
+            throw new Error(msg);
+        }
+
+        // Clean up any pre-existing socket (prevents listener leaks on reconnect)
+        this.destroySocket();
+
+        this._intentionalDisconnect = false;
+
+        console.log(`[TCP-DEBUG] Intentando conectar a ${host}:${port}`);
+        console.log(`[TCP-DEBUG] Config completo:`, JSON.stringify(this.config));
+
+        return new Promise<void>((resolve, reject) => {
+            const socket = new net.Socket();
+            this.socket = socket;
+
+            // ── Connection timeout (only for the handshake, NOT idle) ──
+            // 10s is generous for Wi-Fi on a local LAN
+            const connectTimeout = setTimeout(() => {
+                if (!this._connected) {
+                    this._lastError = 'Connection timeout (10s)';
+                    console.error(`❌ [EthernetRelay] Connection timeout to ${host}:${port}`);
+                    socket.destroy();
+                    reject(new Error(this._lastError));
+                }
+            }, 10_000);
+
+            socket.connect(port, host, () => {
+                clearTimeout(connectTimeout);
+
                 this._connected = true;
                 this._connectedAt = new Date();
                 this._lastError = null;
                 this._reconnectAttempts = 0;
-                console.log(`🔌 [EthernetRelay] Connected to ${this.config.host}:${this.config.port}`);
+
+                // ── Enable TCP Keep-Alive ──
+                // This sends periodic probes to keep the connection alive
+                // and detect dead peers (ESP32 power loss, Wi-Fi drop, etc.)
+                socket.setKeepAlive(true, 15_000); // Probe every 15s
+                socket.setNoDelay(true); // Disable Nagle for instant command delivery
+
+                // ── Remove the idle timeout ──
+                // The socket should stay open indefinitely. Keep-Alive handles
+                // dead peer detection. A blanket setTimeout destroys healthy
+                // idle connections — that was the root cause of the flapping.
+                socket.setTimeout(0);
+
+                console.log(`🔌 [EthernetRelay] Connected to ${host}:${port} (Keep-Alive ON)`);
                 resolve();
             });
 
-            this.socket.on('error', (err) => {
+            // ── Data from ESP32 (ACK, heartbeat, etc.) ──
+            socket.on('data', (data) => {
+                const msg = data.toString().trim();
+                if (msg) {
+                    console.log(`📨 [EthernetRelay] ESP32 says: "${msg}"`);
+                }
+            });
+
+            socket.on('error', (err) => {
+                clearTimeout(connectTimeout);
                 this._lastError = err.message;
                 console.error(`❌ [EthernetRelay] Socket error: ${err.message}`);
                 if (!this._connected) {
@@ -58,41 +118,46 @@ export class EthernetRelayDriver implements IBarrierDriver {
                 }
             });
 
-            this.socket.on('close', () => {
+            socket.on('close', (hadError) => {
+                clearTimeout(connectTimeout);
                 const wasConnected = this._connected;
                 this._connected = false;
-                console.warn('⚠️ [EthernetRelay] Socket closed');
+
+                if (this._intentionalDisconnect) {
+                    console.log('🔌 [EthernetRelay] Socket closed (intentional)');
+                    return;
+                }
+
+                console.warn(`⚠️ [EthernetRelay] Socket closed unexpectedly (hadError=${hadError})`);
                 if (wasConnected && this._onDisconnect) {
                     this._onDisconnect();
                 }
             });
 
-            this.socket.on('timeout', () => {
-                this._lastError = 'Connection timeout';
-                this.socket?.destroy();
-            });
+            // NOTE: We do NOT set socket.setTimeout() here. 
+            // The old 5s timeout was destroying the socket after 5s of idle,
+            // which is *normal* between barrier commands. Keep-Alive handles
+            // dead-peer detection at the TCP level.
         });
     }
 
     async disconnect(): Promise<void> {
+        this._intentionalDisconnect = true;
         this._onDisconnect = null; // Prevent reconnect on intentional disconnect
-        if (this.socket) {
-            this.socket.destroy();
-            this.socket = null;
-        }
+        this.destroySocket();
         this._connected = false;
         this._connectedAt = null;
         console.log('🔌 [EthernetRelay] Disconnected');
     }
 
     isConnected(): boolean {
-        return this._connected;
+        return this._connected && this.socket !== null && !this.socket.destroyed;
     }
 
     getHealth(): DriverHealth {
         return {
-            online: this._connected,
-            lastHeartbeat: this._connected ? new Date() : null,
+            online: this.isConnected(),
+            lastHeartbeat: this.isConnected() ? new Date() : null,
             lastError: this._lastError,
             reconnectAttempts: this._reconnectAttempts,
             uptimeMs: this._connectedAt ? Date.now() - this._connectedAt.getTime() : 0,
@@ -107,30 +172,18 @@ export class EthernetRelayDriver implements IBarrierDriver {
     }
 
     async openBarrier(type: 'ENTRY' | 'EXIT'): Promise<boolean> {
-        if (!this._connected || !this.socket) {
+        if (!this.isConnected() || !this.socket) {
             console.error('❌ [EthernetRelay] Cannot open barrier: not connected');
             return false;
         }
 
-        const channel = type === 'ENTRY'
-            ? this.config.relayEntryChannel
-            : this.config.relayExitChannel;
-
-        const pulseDuration = this.config.pulseDurationMs || 1000;
+        // ESP32 protocol: send "OPEN:ENTRY\n" or "OPEN:EXIT\n"
+        const command = `OPEN:${type}\n`;
 
         try {
-            // Send "ON" command
-            await this.sendCommand(`relay on ${channel}\r\n`);
-            console.log(`🔓 [EthernetRelay] Relay ${channel} ON (${type})`);
-
-            // Schedule "OFF" after pulse duration
-            setTimeout(() => {
-                this.sendCommand(`relay off ${channel}\r\n`).catch(err =>
-                    console.error(`⚠️ [EthernetRelay] Error closing relay:`, err)
-                );
-                console.log(`🔒 [EthernetRelay] Relay ${channel} OFF (pulse ${pulseDuration}ms)`);
-            }, pulseDuration);
-
+            console.log(`[TCP-DEBUG] Enviando comando: ${JSON.stringify(command)}`);
+            await this.sendCommand(command);
+            console.log(`🔓 [EthernetRelay] Barrier ${type} OPEN command sent`);
             return true;
         } catch (err: any) {
             this._lastError = err.message;
@@ -170,6 +223,19 @@ export class EthernetRelayDriver implements IBarrierDriver {
                 else resolve();
             });
         });
+    }
+
+    /**
+     * Safely destroy the socket and remove all listeners to prevent leaks.
+     */
+    private destroySocket(): void {
+        if (this.socket) {
+            this.socket.removeAllListeners();
+            if (!this.socket.destroyed) {
+                this.socket.destroy();
+            }
+            this.socket = null;
+        }
     }
 
     /** Track reconnect attempts (called by ConnectionMonitor) */

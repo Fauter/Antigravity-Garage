@@ -196,6 +196,17 @@ const PanelSalida: React.FC = () => {
             const backendAmount = result.movement?.amount ?? 0;
             setPrice(backendAmount);
 
+            // ── Open physical exit barrier via ESP32 ──
+            try {
+                if (window.electronAPI?.openBarrier) {
+                    console.log('[PanelSalida] Sending OPEN:EXIT to barrier...');
+                    await window.electronAPI.openBarrier('EXIT');
+                    console.log('[PanelSalida] ✅ Exit barrier opened');
+                }
+            } catch (barrierErr) {
+                console.warn('[PanelSalida] ⚠️ Barrier open failed (exit still processed):', barrierErr);
+            }
+
             // TICKET LOGIC: Trust backend objects entirely
             const exitStay = result.stay ?? { ...stay, exitTime: new Date() };
             const exitMovement = result.movement ?? null;

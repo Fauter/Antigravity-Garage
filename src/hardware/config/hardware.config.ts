@@ -45,8 +45,22 @@ export function loadHardwareConfig(): HardwareConfig {
             // Deep merge with defaults to handle missing keys after upgrades
             return {
                 mockMode: parsed.mockMode ?? DEFAULT_HARDWARE_CONFIG.mockMode,
-                barrier: { ...DEFAULT_HARDWARE_CONFIG.barrier, ...parsed.barrier },
-                camera: { ...DEFAULT_HARDWARE_CONFIG.camera, ...parsed.camera },
+                barrier: {
+                    ...DEFAULT_HARDWARE_CONFIG.barrier,
+                    ...parsed.barrier,
+                    // Preserve nested ethernet config
+                    ethernet: parsed.barrier?.ethernet
+                        ? { host: '', port: 23, relayEntryChannel: 0, relayExitChannel: 1, pulseDurationMs: 1000, ...parsed.barrier.ethernet }
+                        : undefined,
+                },
+                camera: {
+                    ...DEFAULT_HARDWARE_CONFIG.camera,
+                    ...parsed.camera,
+                    // Preserve nested webhook config
+                    webhook: parsed.camera?.webhook
+                        ? { listenPort: 8080, ...parsed.camera.webhook }
+                        : undefined,
+                },
                 scanner: { ...DEFAULT_HARDWARE_CONFIG.scanner, ...parsed.scanner },
                 reconnect: { ...DEFAULT_HARDWARE_CONFIG.reconnect, ...parsed.reconnect },
             };

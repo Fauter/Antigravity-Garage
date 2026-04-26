@@ -116,6 +116,10 @@ export class HardwareOrchestrator {
     private _ipcRegistered = false;
     private _shortcutRegistered = false;
 
+    // ── Deduplication: track recent event IDs to prevent double-processing ──
+    private _recentEventIds: Set<string> = new Set();
+    private _dedupeWindowMs = 3000; // 3 second window
+
     constructor() {
         this.registry = new DriverRegistry();
         this.config = DEFAULT_HARDWARE_CONFIG;
@@ -135,6 +139,42 @@ export class HardwareOrchestrator {
             };
         }
         return this.config;
+    }
+
+    /**
+     * Wire camera events to the entry handler.
+     * IMPORTANT: Must be called only ONCE after each driver init/reconfigure,
+     * and only after the previous listeners were cleaned up by the registry.
+     */
+    private wireCameraEvents(): void {
+        try {
+            this.registry.camera.onPlateDetected((event) => {
+                this.handleEntryEvent(event);
+            });
+        } catch (err: any) {
+            console.warn(`[HW-DEBUG] wireCameraEvents failed (camera may not be initialized): ${err.message}`);
+        }
+    }
+
+    /**
+     * Create a status change callback for driver state events.
+     */
+    private createStatusChangeCallback(): (driverType: string, online: boolean) => void {
+        return (driverType: string, online: boolean) => {
+            this.emitStatusToRenderer();
+            console.log(`${online ? '✅' : '❌'} [HardwareOrchestrator] ${driverType} is now ${online ? 'ONLINE' : 'OFFLINE'}`);
+
+            // Emit connection toast to renderer
+            if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                this.mainWindow.webContents.send('hw:driver-status-toast', {
+                    driverType,
+                    online,
+                    message: online 
+                        ? `${driverType === 'ETHERNET_RELAY' ? 'Barreras' : driverType === 'ANPR_WEBHOOK' ? 'Cámara' : driverType} conectado` 
+                        : `${driverType === 'ETHERNET_RELAY' ? 'Barreras' : driverType === 'ANPR_WEBHOOK' ? 'Cámara' : driverType} desconectado`,
+                });
+            }
+        };
     }
 
     /**
@@ -164,26 +204,13 @@ export class HardwareOrchestrator {
         // ── Step 4: Initialize drivers (async, may fail — system stays functional) ──
         // Use effective config (respects mockMode override)
         try {
-            await this.registry.initialize(this.getEffectiveConfig(), (driverType, online) => {
-                this.emitStatusToRenderer();
-                console.log(`${online ? '✅' : '❌'} [HardwareOrchestrator] ${driverType} is now ${online ? 'ONLINE' : 'OFFLINE'}`);
-
-                // Emit connection toast to renderer
-                if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-                    this.mainWindow.webContents.send('hw:driver-status-toast', {
-                        driverType,
-                        online,
-                        message: online 
-                            ? `${driverType === 'ETHERNET_RELAY' ? 'Barreras' : driverType === 'ANPR_WEBHOOK' ? 'Cámara' : driverType} conectado` 
-                            : `${driverType === 'ETHERNET_RELAY' ? 'Barreras' : driverType === 'ANPR_WEBHOOK' ? 'Cámara' : driverType} desconectado`,
-                    });
-                }
-            });
+            await this.registry.initialize(
+                this.getEffectiveConfig(),
+                this.createStatusChangeCallback()
+            );
 
             // Wire up camera events → forward to renderer
-            this.registry.camera.onPlateDetected((event) => {
-                this.handleEntryEvent(event);
-            });
+            this.wireCameraEvents();
 
             const status = this.registry.getStatus();
             console.log(`[HW-DEBUG] Drivers initialized. Driver: ${status.driverType}. Ctrl+Shift+D → Simulator`);
@@ -207,6 +234,8 @@ export class HardwareOrchestrator {
             // If mock, use simulateDetection() to generate full event
             if (camera instanceof MockCameraDriver) {
                 const event = camera.simulateDetection();
+                // handleEntryEvent has deduplication, so even if onPlateDetected
+                // fires separately (which it shouldn't for Mock), it won't duplicate.
                 this.handleEntryEvent(event);
                 return event;
             }
@@ -262,6 +291,7 @@ export class HardwareOrchestrator {
 
         // ── Open barrier manually ──
         ipcMain.handle('hw:open-barrier', async (_event, type: 'ENTRY' | 'EXIT') => {
+            console.log(`[HW-DEBUG] hw:open-barrier called with type=${type}`);
             return safeDriverCall(
                 () => this.registry.barrier.openBarrier(type),
                 3000,
@@ -289,27 +319,11 @@ export class HardwareOrchestrator {
                 // Hot-swap drivers based on new effective config
                 await this.registry.reconfigure(
                     this.getEffectiveConfig(),
-                    (driverType, online) => {
-                        this.emitStatusToRenderer();
-                        console.log(`${online ? '✅' : '❌'} [HardwareOrchestrator] ${driverType} is now ${online ? 'ONLINE' : 'OFFLINE'}`);
-
-                        // Emit connection status toast
-                        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-                            this.mainWindow.webContents.send('hw:driver-status-toast', {
-                                driverType,
-                                online,
-                                message: online
-                                    ? `${driverType === 'ETHERNET_RELAY' ? 'Barreras' : driverType === 'ANPR_WEBHOOK' ? 'Cámara' : driverType} conectado`
-                                    : `${driverType === 'ETHERNET_RELAY' ? 'Barreras' : driverType === 'ANPR_WEBHOOK' ? 'Cámara' : driverType} desconectado`,
-                            });
-                        }
-                    }
+                    this.createStatusChangeCallback()
                 );
 
                 // Re-wire camera events after swap
-                this.registry.camera.onPlateDetected((event) => {
-                    this.handleEntryEvent(event);
-                });
+                this.wireCameraEvents();
 
                 // Notify main renderer to update config modal lock state
                 if (this.mainWindow && !this.mainWindow.isDestroyed()) {
@@ -337,26 +351,39 @@ export class HardwareOrchestrator {
                     return { success: false, error: 'Invalid config structure' };
                 }
 
-                // Save to disk
+                // Deep merge — preserve nested objects (ethernet, webhook)
                 this.config = {
                     mockMode: newConfig.mockMode ?? this.config.mockMode,
-                    barrier: { ...DEFAULT_HARDWARE_CONFIG.barrier, ...newConfig.barrier },
-                    camera: { ...DEFAULT_HARDWARE_CONFIG.camera, ...newConfig.camera },
+                    barrier: {
+                        ...DEFAULT_HARDWARE_CONFIG.barrier,
+                        ...newConfig.barrier,
+                        // Deep merge ethernet sub-config
+                        ethernet: newConfig.barrier.ethernet
+                            ? { ...DEFAULT_HARDWARE_CONFIG.barrier.ethernet, ...newConfig.barrier.ethernet }
+                            : this.config.barrier.ethernet,
+                    },
+                    camera: {
+                        ...DEFAULT_HARDWARE_CONFIG.camera,
+                        ...newConfig.camera,
+                        // Deep merge webhook sub-config
+                        webhook: newConfig.camera.webhook
+                            ? { ...DEFAULT_HARDWARE_CONFIG.camera.webhook, ...newConfig.camera.webhook }
+                            : this.config.camera.webhook,
+                    },
                     scanner: { ...DEFAULT_HARDWARE_CONFIG.scanner, ...newConfig.scanner },
                     reconnect: { ...DEFAULT_HARDWARE_CONFIG.reconnect, ...newConfig.reconnect },
                 };
+                console.log(`[HW-DEBUG] Config after merge: barrier.ethernet =`, JSON.stringify(this.config.barrier.ethernet));
                 saveHardwareConfig(this.config);
 
                 // Hot-swap drivers using effective config (respects mockMode)
-                await this.registry.reconfigure(this.getEffectiveConfig(), (driverType, online) => {
-                    this.emitStatusToRenderer();
-                    console.log(`${online ? '✅' : '❌'} [HardwareOrchestrator] ${driverType} is now ${online ? 'ONLINE' : 'OFFLINE'}`);
-                });
+                await this.registry.reconfigure(
+                    this.getEffectiveConfig(),
+                    this.createStatusChangeCallback()
+                );
 
                 // Re-wire camera events
-                this.registry.camera.onPlateDetected((event) => {
-                    this.handleEntryEvent(event);
-                });
+                this.wireCameraEvents();
 
                 // Emit new status
                 this.emitStatusToRenderer();
@@ -373,9 +400,25 @@ export class HardwareOrchestrator {
 
     // ── Event Handling ───────────────────────────────────────────────
 
+    /**
+     * Process an entry event with deduplication.
+     * Events with the same ID within a 3-second window are suppressed.
+     */
     private handleEntryEvent(event: HardwareEntryEvent): void {
+        // ── Deduplication guard ──
+        if (this._recentEventIds.has(event.id)) {
+            console.warn(`⚠️ [HardwareOrchestrator] DUPLICATE entry event suppressed: ${event.id}`);
+            return;
+        }
+
+        // Track this event ID and auto-expire after the dedup window
+        this._recentEventIds.add(event.id);
+        setTimeout(() => {
+            this._recentEventIds.delete(event.id);
+        }, this._dedupeWindowMs);
+
         this.lastEventAt = event.timestamp;
-        console.log(`📥 [HardwareOrchestrator] Entry event: plate=${event.suggestedPlate}, source=${event.source}`);
+        console.log(`📥 [HardwareOrchestrator] Entry event: plate=${event.suggestedPlate}, source=${event.source}, id=${event.id}`);
 
         // Forward to main renderer (creates PendingEntry tab)
         if (this.mainWindow && !this.mainWindow.isDestroyed()) {

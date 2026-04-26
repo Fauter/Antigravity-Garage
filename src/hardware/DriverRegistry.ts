@@ -125,6 +125,7 @@ export class DriverRegistry {
                     console.warn('⚠️ [DriverRegistry] ETHERNET_RELAY selected but no ethernet config provided. Falling back to MOCK.');
                     return new MockBarrierDriver();
                 }
+                console.log(`[TCP-DEBUG] Creando EthernetRelayDriver con config:`, JSON.stringify(config.barrier.ethernet));
                 return new EthernetRelayDriver(config.barrier.ethernet);
             }
             default:
