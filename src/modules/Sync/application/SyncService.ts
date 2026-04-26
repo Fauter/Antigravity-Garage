@@ -186,22 +186,44 @@ export class SyncService {
         try {
             console.log(`🔍 Sync: Fetching table [${tableName}] para [${garageId}]...`);
 
-            let query = supabase.from(tableName).select('*');
-            if (tableName === 'garages') {
-                query = query.eq('id', garageId);
-            } else {
-                query = query.eq('garage_id', garageId);
+            // --- PAGINATED FETCH: Loop de 1000 en 1000 para superar el límite de Supabase ---
+            const PAGE_SIZE = 1000;
+            let allData: any[] = [];
+            let from = 0;
+
+            while (true) {
+                const to = from + PAGE_SIZE - 1;
+                let query = supabase.from(tableName).select('*');
+
+                if (tableName === 'garages') {
+                    query = query.eq('id', garageId);
+                } else {
+                    query = query.eq('garage_id', garageId);
+                }
+
+                const { data: pageData, error } = await query.range(from, to);
+                if (error) throw error;
+
+                if (pageData && pageData.length > 0) {
+                    allData = allData.concat(pageData);
+                }
+
+                // Si la página trajo menos de PAGE_SIZE, ya no hay más datos
+                if (!pageData || pageData.length < PAGE_SIZE) {
+                    break;
+                }
+
+                from += PAGE_SIZE;
             }
 
-            const { data, error } = await query;
-            if (error) throw error;
-
-            if (!data || data.length === 0) {
+            if (allData.length === 0) {
                 console.log(`⚠️ Sync: No records found for ${entityType} in Supabase.`);
+            } else {
+                console.log(`📥 Sync: Fetched ${allData.length} total records for [${entityType}] (paginated).`);
             }
 
             // Mapeo Local (Descartar _id interno para inserción masiva)
-            const localItems = (data || []).map(item => {
+            const localItems = allData.map(item => {
                 const localItem = this.mapRemoteToLocalImport(item, entityType);
                 if (localItem._id) delete localItem._id;
                 return localItem;
@@ -239,6 +261,24 @@ export class SyncService {
                     throw new Error(`NeDB Store for [${entityType}] is NOT LOADED, operation rejected.`);
                 }
 
+                // --- MUTATION GUARD: Preservar salidas recientes antes del Wipe (Solo para Stay) ---
+                let preservedStays: any[] = [];
+                if (entityType === 'Stay') {
+                    const now = Date.now();
+                    const GUARD_WINDOW_MS = 60_000; // 60 segundos
+                    const allLocalStays: any[] = await collection.find({});
+                    preservedStays = allLocalStays.filter((s: any) => {
+                        if (s.active !== false) return false; // Solo preservar cerradas
+                        if (!s.exitTime) return false;
+                        const exitTs = new Date(s.exitTime).getTime();
+                        return (now - exitTs) <= GUARD_WINDOW_MS;
+                    });
+
+                    if (preservedStays.length > 0) {
+                        console.log(`🛡️ Sync Guard: Preservando ${preservedStays.length} salidas recientes (<60s) antes del Wipe.`);
+                    }
+                }
+
                 console.log(`📥 Sync: Wipe & Load iniciado para [${entityType}] (${localItems.length} registros)...`);
 
                 // --- Watchdog General ---
@@ -273,7 +313,22 @@ export class SyncService {
                     await withTimeout(collection.insert(localItems), 15000, `Load ${entityType}`);
                 }
 
-                console.log(`✅ Sync: [${entityType}] Sincronizado OK. (Borrados: ${numRemoved} | Insertados: ${localItems.length})`);
+                // --- 3. RE-INSERT PRESERVED STAYS (Mutation Guard) ---
+                if (entityType === 'Stay' && preservedStays.length > 0) {
+                    for (const preserved of preservedStays) {
+                        // VITAL: Limpiar _id de NeDB para evitar conflictos de llave primaria
+                        const { _id, ...cleanPreserved } = preserved;
+                        try {
+                            // Upsert por id público para no duplicar si la nube ya lo tenía
+                            await collection.update({ id: cleanPreserved.id }, cleanPreserved, { upsert: true });
+                            console.log(`🛡️ Sync Guard: Re-insertada salida preservada: ${cleanPreserved.plate} (${cleanPreserved.id})`);
+                        } catch (upsertErr: any) {
+                            console.warn(`⚠️ Sync Guard: Error al re-insertar stay preservada ${cleanPreserved.id}:`, upsertErr.message);
+                        }
+                    }
+                }
+
+                console.log(`✅ Sync: [${entityType}] Sincronizado OK. (Borrados: ${numRemoved} | Insertados: ${localItems.length}${preservedStays.length > 0 ? ` | Preservados: ${preservedStays.length}` : ''})`);
             }
 
         } catch (err: any) {

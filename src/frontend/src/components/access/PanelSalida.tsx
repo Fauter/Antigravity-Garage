@@ -104,6 +104,7 @@ const PanelSalida: React.FC = () => {
     const { searchStay, stay, price, setPrice, error, isSubscriber, quotePrice, processExit, resetLogic } = useExitLogic();
     const { isGlobalSyncing } = useAuth();
     const [isCalculating, setIsCalculating] = useState(false);
+    const [isProcessing, setIsProcessing] = useState(false);
 
     const isGracePeriod = Boolean(stay && !isSubscriber && stay.is_grace_period && price === 0);
 
@@ -173,7 +174,10 @@ const PanelSalida: React.FC = () => {
 
     // ... inside handleExit
     const handleExit = async () => {
-        if (!stay) return;
+        if (!stay || isProcessing) return;
+        setIsProcessing(true);
+
+        try {
 
         let method = paymentMethod || 'Efectivo';
         let invoice = invoiceType || 'Final';
@@ -213,10 +217,17 @@ const PanelSalida: React.FC = () => {
                 setSelectedPromo(null);
                 setInvoiceType(null);
                 resetLogic();
+                setIsProcessing(false);
             }, 2500);
 
         } else {
             toast.error('Error al registrar salida');
+            setIsProcessing(false);
+        }
+        } catch (err) {
+            console.error('❌ [PanelSalida] Error en handleExit:', err);
+            toast.error('Error inesperado al procesar salida');
+            setIsProcessing(false);
         }
     };
 
@@ -327,13 +338,13 @@ const PanelSalida: React.FC = () => {
                     <div className="px-4 py-3 bg-gray-900/50 border-t border-gray-800 shrink-0">
                         <button
                             onClick={handleExit}
-                            disabled={isGlobalSyncing || showSuccess}
-                            className={`w-full h-14 rounded-xl font-bold text-2xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(isGlobalSyncing || showSuccess)
+                            disabled={isGlobalSyncing || showSuccess || isProcessing}
+                            className={`w-full h-14 rounded-xl font-bold text-2xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(isGlobalSyncing || showSuccess || isProcessing)
                                 ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
                                 : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/30'
                                 }`}
                         >
-                            {isGlobalSyncing ? 'Sincronizando...' : showSuccess ? 'Confirmando...' : 'Liberar Salida'}
+                            {isProcessing ? 'Procesando...' : isGlobalSyncing ? 'Sincronizando...' : showSuccess ? 'Confirmando...' : 'Liberar Salida'}
                         </button>
                     </div>
                 </>
@@ -350,13 +361,13 @@ const PanelSalida: React.FC = () => {
                     <div className="px-4 py-3 bg-gray-900/50 border-t border-gray-800 shrink-0">
                         <button
                             onClick={handleExit}
-                            disabled={isGlobalSyncing || showSuccess}
-                            className={`w-full h-14 rounded-xl font-bold text-2xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(isGlobalSyncing || showSuccess)
+                            disabled={isGlobalSyncing || showSuccess || isProcessing}
+                            className={`w-full h-14 rounded-xl font-bold text-2xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(isGlobalSyncing || showSuccess || isProcessing)
                                 ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
                                 : 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-cyan-900/30 ring-1 ring-white/10'
                                 }`}
                         >
-                            {isGlobalSyncing ? 'Sincronizando...' : showSuccess ? 'Confirmando...' : 'Confirmar Salida Gratis'}
+                            {isProcessing ? 'Procesando...' : isGlobalSyncing ? 'Sincronizando...' : showSuccess ? 'Confirmando...' : 'Confirmar Salida Gratis'}
                         </button>
                     </div>
                 </>
@@ -448,13 +459,13 @@ const PanelSalida: React.FC = () => {
 
                         <button
                             onClick={handleExit}
-                            disabled={!paymentMethod || !invoiceType || isGlobalSyncing || showSuccess || isCalculating}
-                            className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(!paymentMethod || !invoiceType || isGlobalSyncing || showSuccess || isCalculating)
+                            disabled={!paymentMethod || !invoiceType || isGlobalSyncing || showSuccess || isCalculating || isProcessing}
+                            className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(!paymentMethod || !invoiceType || isGlobalSyncing || showSuccess || isCalculating || isProcessing)
                                 ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
                                 : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/30 ring-1 ring-white/10'
                                 }`}
                         >
-                            {isGlobalSyncing ? 'Sincronizando...' : showSuccess ? 'Confirmando...' : isCalculating ? 'Calculando...' : 'Registrar Salida'}
+                            {isProcessing ? 'Procesando...' : isGlobalSyncing ? 'Sincronizando...' : showSuccess ? 'Confirmando...' : isCalculating ? 'Calculando...' : 'Registrar Salida'}
                         </button>
                     </div>
                 </>

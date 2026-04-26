@@ -301,11 +301,11 @@ export class AccessController {
             const rawPlate = req.params.plate;
             const garageId = (req.headers['x-garage-id'] as string) || '';
             const plate = String(rawPlate).trim().toUpperCase().replace(/[\s\-_]/g, '');
-            const stay = await this.stayRepository.findActiveByPlateOrTicket(plate);
+            const stay = await this.stayRepository.findActiveByPlateOrTicket(plate, garageId);
             if (!stay) return res.status(404).json({ error: 'Stay not found' });
 
             // CRÍTICO: Garantía de datos directos de la tabla Vehicle
-            const vehicle = await this.vehicleRepository.findByPlate(plate);
+            const vehicle = await this.vehicleRepository.findByPlate(plate, garageId);
             if (vehicle) {
                 const subStatus = vehicle.isSubscriber || (vehicle as any).is_subscriber;
                 stay.isSubscriber = subStatus;

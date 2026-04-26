@@ -163,7 +163,8 @@ export const PrinterService = {
 
                 <div style="margin-bottom: 5px;">
                     ${movement?.receipt_number ? `<div style="font-size: 11px; margin-top: 2px;">Ticket: <b>${movement.receipt_number}</b></div>` : ''}
-                    <div style="font-size: 14px; font-weight: bold; margin-top: 3px;">${title}</div>
+                    <div style="font-size: 11px; margin-top: 1px;">Ingreso: <b>${shortId}</b></div>
+                    <div style="font-size: 14px; font-weight: bold; margin-top: 4px;">${title}</div>
                 </div>
 
                 ${barcodeDataUrl ? `
@@ -612,7 +613,7 @@ export const PrinterService = {
 
         const original = generateTicket('ORIGINAL');
         const duplicado = generateTicket('DUPLICADO');
-        
+
         printHtml(original + duplicado, config.paperWidth);
         toast.info('🖨️ Imprimiendo Retiro Parcial');
     },
@@ -809,7 +810,7 @@ const printHtml = async (html: string, paperWidth: number, isVirtual: boolean = 
     if (window.electronAPI?.silentPrint) {
         const savedPrinter = localStorage.getItem('selected_printer_name') || undefined;
         // Prioridad Absoluta de config manual. Se inyectan las dimensiones en micrones.
-        const printerConfig = { 
+        const printerConfig = {
             deviceName: savedPrinter,
             dimensions: {
                 width: paperWidth === 80 ? 80000 : 58000,
