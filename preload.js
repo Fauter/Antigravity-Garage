@@ -104,4 +104,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** DEV / Simulación */
     simulateEntry: () => ipcRenderer.invoke('hw:simulate-entry'),
     simulateBarcodeScan: (code) => ipcRenderer.invoke('hw:simulate-barcode', code),
+
+    // ── Bidirectional ESP32 Events ──────────────────────────────
+
+    /** Listener: RFID authorization result (auto-exit flow) */
+    onRfidAuthResult: (callback) => {
+        const handler = (_event, payload) => callback(payload);
+        ipcRenderer.on('hw:rfid-auth-result', handler);
+        return () => ipcRenderer.removeListener('hw:rfid-auth-result', handler);
+    },
+
+    /** Listener: anti-crush sensor state changes (OCCUPIED/CLEAR) */
+    onSensorStateChanged: (callback) => {
+        const handler = (_event, payload) => callback(payload);
+        ipcRenderer.on('hw:sensor-state-changed', handler);
+        return () => ipcRenderer.removeListener('hw:sensor-state-changed', handler);
+    },
 });

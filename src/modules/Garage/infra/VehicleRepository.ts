@@ -12,9 +12,34 @@ export class VehicleRepository {
             vehicle.id = uuidv4();
         }
 
+        // ── RFID IMMUTABILITY GUARD ──
+        // If rfid_tag is being set to null/undefined but the existing record has one,
+        // preserve the existing tag to prevent accidental data loss.
+        const existing = await db.vehicles.findOne({ id: vehicle.id }) as any;
+        if (existing && existing.rfid_tag) {
+            const incomingTag = (vehicle as any).rfid_tag;
+            if (!incomingTag || String(incomingTag).trim() === '') {
+                // Preserve existing tag — never overwrite with null
+                (vehicle as any).rfid_tag = existing.rfid_tag;
+                console.log(`🛡️ Repo: Preserved existing rfid_tag "${existing.rfid_tag}" for vehicle ${vehicle.plate}`);
+            }
+        }
+
+        // ── RFID UNIQUENESS GUARD ──
+        // If an rfid_tag is being set, ensure no OTHER vehicle has it
+        const rfidTag = (vehicle as any).rfid_tag;
+        if (rfidTag && String(rfidTag).trim() !== '') {
+            const normalizedTag = String(rfidTag).trim().toUpperCase();
+            (vehicle as any).rfid_tag = normalizedTag; // Normalize
+            const conflict = await db.vehicles.findOne({ rfid_tag: normalizedTag }) as any;
+            if (conflict && conflict.id !== vehicle.id) {
+                const errorMsg = `RFID Tag "${normalizedTag}" ya está asignado al vehículo ${conflict.plate}. No se puede duplicar.`;
+                console.error(`❌ Repo: ${errorMsg}`);
+                throw new Error(errorMsg);
+            }
+        }
+
         // 1. Save to Local Datastore (NeDB) - Zero-Install, works offline
-        // NeDB uses _id by default, but we can query by id. 
-        // upsert: true equivalent in NeDB is update with upsert: true
         try {
             await db.vehicles.update(
                 { id: vehicle.id },
@@ -28,10 +53,6 @@ export class VehicleRepository {
         }
 
         // 2. Enqueue for Sync (Background Push)
-        // We queue specific operation. Here effectively CREATE or UPDATE.
-        // We can check if it existed? For simplicity, we can use UPSERT logic in queue or just UPDATE.
-        // Let's assume UPDATE implies Create if not exists for Sync logic often.
-        // Or cleaner: Queue logic will handle it.
         await this.queue.enqueue('Vehicle', 'UPDATE', vehicle);
 
         return vehicle;

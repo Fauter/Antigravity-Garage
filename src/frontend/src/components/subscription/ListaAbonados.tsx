@@ -12,6 +12,7 @@ interface Debt {
     remaining_amount?: number | string | null;
     amount_paid?: number | string | null;
     status: string;
+    type?: string;
     dueDate: string;
 }
 
@@ -134,15 +135,7 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                 const email = sub.customerData?.email || sub.email || '';
                 const phone = sub.customerData?.phone || sub.phone || '';
 
-                // --- Balance Calculation ---
-                const customerDebts = debts.filter(d => d.customerId === customerId && d.status === 'PENDING');
-                const balance = customerDebts.reduce((sum, d) => {
-                    const rem = Number(d.remaining_amount);
-                    const debtValue = (!isNaN(rem) && d.remaining_amount != null) ? rem : Number(d.amount || 0);
-                    return sum + debtValue;
-                }, 0);
-
-                // --- Plate Mapping from Cocheras ---
+                // --- Plate Mapping from Cocheras (MUST run before balance) ---
                 const clientCocheras = cocheras.filter(c => c.clienteId === customerId && c.status === 'Ocupada');
                 const uniquePlates = new Set<string>();
                 clientCocheras.forEach(c => {
@@ -158,6 +151,20 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                 });
 
                 const plates = Array.from(uniquePlates);
+                const isEmptyClient = uniquePlates.size === 0;
+
+                // --- Balance Calculation ---
+                // REGLA: Si el cliente está "vacío" (sin vehículos/cocheras), se ignoran
+                // las deudas tipo CANON. Solo persisten deudas MANUAL_MIGRATION u otros tipos.
+                const allCustomerDebts = debts.filter(d => d.customerId === customerId && d.status === 'PENDING');
+                const customerDebts = isEmptyClient
+                    ? allCustomerDebts.filter((d: any) => d.type !== 'CANON')
+                    : allCustomerDebts;
+                const balance = customerDebts.reduce((sum, d) => {
+                    const rem = Number(d.remaining_amount);
+                    const debtValue = (!isNaN(rem) && d.remaining_amount != null) ? rem : Number(d.amount || 0);
+                    return sum + debtValue;
+                }, 0);
 
                 map.set(customerId, {
                     ...sub,

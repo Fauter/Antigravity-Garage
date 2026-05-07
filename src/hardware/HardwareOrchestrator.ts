@@ -9,6 +9,7 @@
  *  5. Propagates driver state changes to the renderer
  *  6. Delegates exit-authorization queries to the backend HTTP API
  *     (eliminates the duplicate NeDB instance)
+ *  7. Handles bidirectional ESP32 flows: RFID auto-exit, sensor telemetry
  *
  * CRITICAL: This module runs in the Electron Main Process.
  * All async operations have timeouts to prevent event-loop blocking.
@@ -19,11 +20,20 @@ import path from 'path';
 import fs from 'fs';
 import http from 'http';
 
-import type { HardwareConfig, HardwareEntryEvent, HardwareStatus, BarrierAuthResult } from './HardwareAbstractionLayer';
+import type {
+    HardwareConfig,
+    HardwareEntryEvent,
+    HardwareStatus,
+    BarrierAuthResult,
+    RfidAuthResult,
+    RfidScanEvent,
+    SensorOccupancyState,
+} from './HardwareAbstractionLayer';
 import { DEFAULT_HARDWARE_CONFIG } from './HardwareAbstractionLayer';
 import { DriverRegistry } from './DriverRegistry';
 import { loadHardwareConfig, saveHardwareConfig } from './config/hardware.config';
 import { MockCameraDriver } from './drivers/MockCameraDriver';
+import { MockBarrierDriver } from './drivers/MockBarrierDriver';
 
 // ── Safe Driver Call Wrapper ─────────────────────────────────────────
 // Prevents hardware I/O from blocking the Electron event loop.
@@ -81,6 +91,39 @@ function checkExitAuthorizationViaAPI(ticketCode: string): Promise<BarrierAuthRe
     });
 }
 
+// ── RFID Authorization via Backend HTTP ──────────────────────────────
+// Checks if an RFID tag is associated with a paid/subscriber stay.
+
+function checkRfidAuthorizationViaAPI(rfidCode: string): Promise<RfidAuthResult> {
+    return new Promise((resolve) => {
+        const normalized = rfidCode.trim().toUpperCase();
+        const url = `http://localhost:3000/api/hardware/check-rfid/${encodeURIComponent(normalized)}`;
+
+        const req = http.get(url, (res) => {
+            let body = '';
+            res.on('data', (chunk) => { body += chunk; });
+            res.on('end', () => {
+                try {
+                    const result = JSON.parse(body);
+                    resolve(result);
+                } catch {
+                    resolve({ authorized: false, reason: 'ERROR', rfidCode: normalized, error: 'Invalid API response' });
+                }
+            });
+        });
+
+        req.on('error', (err) => {
+            console.error('❌ [HardwareOrchestrator] RFID API unreachable:', err.message);
+            resolve({ authorized: false, reason: 'ERROR', rfidCode: normalized, error: err.message });
+        });
+
+        req.setTimeout(5000, () => {
+            req.destroy();
+            resolve({ authorized: false, reason: 'ERROR', rfidCode: normalized, error: 'API timeout' });
+        });
+    });
+}
+
 // ── Mark barrier exit as used via Backend ────────────────────────────
 // POST to mark the stay as barrier_exit_used (so anti-passback works)
 
@@ -120,6 +163,14 @@ export class HardwareOrchestrator {
     private _recentEventIds: Set<string> = new Set();
     private _dedupeWindowMs = 3000; // 3 second window
 
+    // ── RFID deduplication: prevent rapid-fire scans of the same tag ──
+    private _lastRfidCode: string | null = null;
+    private _lastRfidAt = 0;
+    private _rfidDedupeMs = 5000; // 5 second cooldown per tag
+
+    // ── Sensor telemetry state (latest known from ESP32 / mock) ──
+    private _sensorState: SensorOccupancyState = 'UNKNOWN';
+
     constructor() {
         this.registry = new DriverRegistry();
         this.config = DEFAULT_HARDWARE_CONFIG;
@@ -157,6 +208,36 @@ export class HardwareOrchestrator {
     }
 
     /**
+     * Wire barrier bidirectional events: RFID scans and sensor telemetry.
+     * Called once after each driver init/reconfigure.
+     */
+    private wireBarrierEvents(): void {
+        try {
+            // ── RFID: ESP32 scanned a tag at exit barrier ──
+            this.registry.barrier.onRfidScanned((event: RfidScanEvent) => {
+                this.handleRfidScan(event);
+            });
+
+            // ── Sensor: Anti-crush radar state changes ──
+            this.registry.barrier.onSensorStateChanged((state: SensorOccupancyState) => {
+                this.handleSensorStateChange(state);
+            });
+
+            // ── Barrier State: Propagate open/close to frontend for LED indicators ──
+            const barrier = this.registry.barrier as any;
+            if (typeof barrier.onBarrierStateChanged === 'function') {
+                barrier.onBarrierStateChanged((_type: 'ENTRY' | 'EXIT', _state: 'OPEN' | 'CLOSED') => {
+                    this.emitStatusToRenderer();
+                });
+            }
+
+            console.log('[HW-DEBUG] ✅ Barrier bidirectional events wired');
+        } catch (err: any) {
+            console.warn(`[HW-DEBUG] wireBarrierEvents failed: ${err.message}`);
+        }
+    }
+
+    /**
      * Create a status change callback for driver state events.
      */
     private createStatusChangeCallback(): (driverType: string, online: boolean) => void {
@@ -169,8 +250,8 @@ export class HardwareOrchestrator {
                 this.mainWindow.webContents.send('hw:driver-status-toast', {
                     driverType,
                     online,
-                    message: online 
-                        ? `${driverType === 'ETHERNET_RELAY' ? 'Barreras' : driverType === 'ANPR_WEBHOOK' ? 'Cámara' : driverType} conectado` 
+                    message: online
+                        ? `${driverType === 'ETHERNET_RELAY' ? 'Barreras' : driverType === 'ANPR_WEBHOOK' ? 'Cámara' : driverType} conectado`
                         : `${driverType === 'ETHERNET_RELAY' ? 'Barreras' : driverType === 'ANPR_WEBHOOK' ? 'Cámara' : driverType} desconectado`,
                 });
             }
@@ -190,8 +271,6 @@ export class HardwareOrchestrator {
         console.log(`[HW-DEBUG] Config loaded: barrier=${this.config.barrier.driver}, camera=${this.config.camera.driver}`);
 
         // ── Step 2: Register IPC handlers IMMEDIATELY (synchronous) ──
-        // This ensures the renderer can call hw:get-config from the very first frame,
-        // even while drivers are still connecting asynchronously.
         if (!this._ipcRegistered) {
             this.registerIPCHandlers();
             this._ipcRegistered = true;
@@ -202,7 +281,6 @@ export class HardwareOrchestrator {
         this.registerSimulatorShortcut();
 
         // ── Step 4: Initialize drivers (async, may fail — system stays functional) ──
-        // Use effective config (respects mockMode override)
         try {
             await this.registry.initialize(
                 this.getEffectiveConfig(),
@@ -212,12 +290,13 @@ export class HardwareOrchestrator {
             // Wire up camera events → forward to renderer
             this.wireCameraEvents();
 
+            // Wire up barrier bidirectional events (RFID + sensor)
+            this.wireBarrierEvents();
+
             const status = this.registry.getStatus();
             console.log(`[HW-DEBUG] Drivers initialized. Driver: ${status.driverType}. Ctrl+Shift+D → Simulator`);
         } catch (err: any) {
             console.error(`[HW-DEBUG] ❌ Driver initialization failed (system continues in degraded mode): ${err.message}`);
-            // IPC handlers are already registered, so the frontend will get
-            // the config and a default offline status. The system is usable.
         }
 
         console.log('[HW-DEBUG] ✅ Orchestrator initialization complete');
@@ -231,16 +310,12 @@ export class HardwareOrchestrator {
         ipcMain.handle('hw:simulate-entry', async () => {
             const camera = this.registry.camera;
 
-            // If mock, use simulateDetection() to generate full event
             if (camera instanceof MockCameraDriver) {
                 const event = camera.simulateDetection();
-                // handleEntryEvent has deduplication, so even if onPlateDetected
-                // fires separately (which it shouldn't for Mock), it won't duplicate.
                 this.handleEntryEvent(event);
                 return event;
             }
 
-            // For real cameras, trigger a capture
             await safeDriverCall(() => camera.triggerCapture(), 5000, '');
             return { id: 'triggered', timestamp: new Date().toISOString() };
         });
@@ -249,26 +324,20 @@ export class HardwareOrchestrator {
         ipcMain.handle('hw:simulate-barcode', async (_event, ticketCode: string) => {
             const result = await checkExitAuthorizationViaAPI(ticketCode);
 
-            // If authorized, open the exit barrier
             if (result.authorized) {
                 await safeDriverCall(
                     () => this.registry.barrier.openBarrier('EXIT'),
                     3000,
                     false
                 );
-
-                // Mark as used (anti-passback)
                 if (result.stayId) {
                     markBarrierExitUsed(result.stayId);
                 }
             }
 
-            // Emit to simulator window
             if (this.simulatorWindow && !this.simulatorWindow.isDestroyed()) {
                 this.simulatorWindow.webContents.send('sim:exit-result', result);
             }
-
-            // Emit to main window for UI updates
             if (this.mainWindow && !this.mainWindow.isDestroyed()) {
                 this.mainWindow.webContents.send('hw:barrier-auth-result', result);
             }
@@ -276,10 +345,45 @@ export class HardwareOrchestrator {
             return result;
         });
 
+        // ── Simulate RFID scan (called from Simulator window) ──
+        ipcMain.handle('hw:simulate-rfid', async (_event, rfidCode: string) => {
+            const barrier = this.registry.barrier;
+
+            if (barrier instanceof MockBarrierDriver) {
+                const scanEvent = barrier.simulateRfidScan(rfidCode);
+                // handleRfidScan is triggered via the callback wired in wireBarrierEvents
+                return scanEvent;
+            }
+
+            // For real drivers, inject event manually
+            const scanEvent: RfidScanEvent = {
+                rfidCode: rfidCode.toUpperCase().trim(),
+                timestamp: new Date().toISOString(),
+                source: 'SIMULATOR',
+            };
+            this.handleRfidScan(scanEvent);
+            return scanEvent;
+        });
+
+        // ── Simulate sensor state (called from Simulator window) ──
+        ipcMain.handle('hw:simulate-sensor', async (_event, state: SensorOccupancyState) => {
+            const barrier = this.registry.barrier;
+
+            if (barrier instanceof MockBarrierDriver) {
+                barrier.simulateSensorState(state);
+                return { success: true, state };
+            }
+
+            // For real drivers, inject state manually
+            this.handleSensorStateChange(state);
+            return { success: true, state };
+        });
+
         // ── Get hardware status ──
         ipcMain.handle('hw:get-status', () => {
             const status = this.registry.getStatus();
             status.lastEventAt = this.lastEventAt;
+            status.sensorState = this._sensorState;
             return status;
         });
 
@@ -316,21 +420,18 @@ export class HardwareOrchestrator {
                 this.config.mockMode = enabled;
                 saveHardwareConfig(this.config);
 
-                // Hot-swap drivers based on new effective config
                 await this.registry.reconfigure(
                     this.getEffectiveConfig(),
                     this.createStatusChangeCallback()
                 );
 
-                // Re-wire camera events after swap
+                // Re-wire all events after swap
                 this.wireCameraEvents();
+                this.wireBarrierEvents();
 
-                // Notify main renderer to update config modal lock state
                 if (this.mainWindow && !this.mainWindow.isDestroyed()) {
                     this.mainWindow.webContents.send('hw:mock-mode-changed', enabled);
                 }
-
-                // Notify simulator window
                 if (this.simulatorWindow && !this.simulatorWindow.isDestroyed()) {
                     this.simulatorWindow.webContents.send('hw:mock-mode-changed', enabled);
                 }
@@ -346,18 +447,15 @@ export class HardwareOrchestrator {
         // ── Set hardware config (hot-swap) ──
         ipcMain.handle('hw:set-config', async (_event, newConfig: HardwareConfig) => {
             try {
-                // Validate
                 if (!newConfig || !newConfig.barrier || !newConfig.camera) {
                     return { success: false, error: 'Invalid config structure' };
                 }
 
-                // Deep merge — preserve nested objects (ethernet, webhook)
                 this.config = {
                     mockMode: newConfig.mockMode ?? this.config.mockMode,
                     barrier: {
                         ...DEFAULT_HARDWARE_CONFIG.barrier,
                         ...newConfig.barrier,
-                        // Deep merge ethernet sub-config
                         ethernet: newConfig.barrier.ethernet
                             ? { ...DEFAULT_HARDWARE_CONFIG.barrier.ethernet, ...newConfig.barrier.ethernet }
                             : this.config.barrier.ethernet,
@@ -365,7 +463,6 @@ export class HardwareOrchestrator {
                     camera: {
                         ...DEFAULT_HARDWARE_CONFIG.camera,
                         ...newConfig.camera,
-                        // Deep merge webhook sub-config
                         webhook: newConfig.camera.webhook
                             ? { ...DEFAULT_HARDWARE_CONFIG.camera.webhook, ...newConfig.camera.webhook }
                             : this.config.camera.webhook,
@@ -376,18 +473,15 @@ export class HardwareOrchestrator {
                 console.log(`[HW-DEBUG] Config after merge: barrier.ethernet =`, JSON.stringify(this.config.barrier.ethernet));
                 saveHardwareConfig(this.config);
 
-                // Hot-swap drivers using effective config (respects mockMode)
                 await this.registry.reconfigure(
                     this.getEffectiveConfig(),
                     this.createStatusChangeCallback()
                 );
 
-                // Re-wire camera events
                 this.wireCameraEvents();
+                this.wireBarrierEvents();
 
-                // Emit new status
                 this.emitStatusToRenderer();
-
                 return { success: true, config: this.config };
             } catch (err: any) {
                 console.error('❌ [HardwareOrchestrator] Config change failed:', err);
@@ -402,16 +496,15 @@ export class HardwareOrchestrator {
 
     /**
      * Process an entry event with deduplication.
-     * Events with the same ID within a 3-second window are suppressed.
+     * PARADIGM: Hardware detection → auto-open ENTRY barrier → notify frontend.
+     * The frontend registration ("Dar Entrada") does NOT open the barrier.
      */
     private handleEntryEvent(event: HardwareEntryEvent): void {
-        // ── Deduplication guard ──
         if (this._recentEventIds.has(event.id)) {
             console.warn(`⚠️ [HardwareOrchestrator] DUPLICATE entry event suppressed: ${event.id}`);
             return;
         }
 
-        // Track this event ID and auto-expire after the dedup window
         this._recentEventIds.add(event.id);
         setTimeout(() => {
             this._recentEventIds.delete(event.id);
@@ -420,12 +513,20 @@ export class HardwareOrchestrator {
         this.lastEventAt = event.timestamp;
         console.log(`📥 [HardwareOrchestrator] Entry event: plate=${event.suggestedPlate}, source=${event.source}, id=${event.id}`);
 
-        // Forward to main renderer (creates PendingEntry tab)
+        // ── AUTO-OPEN ENTRY BARRIER ──
+        // The hardware detected a vehicle → open the physical entry barrier immediately.
+        // This replaces the old flow where the frontend's "Dar Entrada" button opened the barrier.
+        safeDriverCall(
+            () => this.registry.barrier.openBarrier('ENTRY'),
+            3000,
+            false
+        ).then((opened) => {
+            console.log(`🔓 [HardwareOrchestrator] Entry barrier auto-open: ${opened ? 'SUCCESS' : 'FAILED'}`);
+        });
+
         if (this.mainWindow && !this.mainWindow.isDestroyed()) {
             this.mainWindow.webContents.send('hw:entry-detected', event);
         }
-
-        // Forward confirmation to simulator window
         if (this.simulatorWindow && !this.simulatorWindow.isDestroyed()) {
             this.simulatorWindow.webContents.send('sim:entry-result', {
                 success: true,
@@ -435,11 +536,101 @@ export class HardwareOrchestrator {
         }
     }
 
-    private emitStatusToRenderer(): void {
+    /**
+     * Process an RFID scan event from ESP32 or Simulator.
+     * Orchestrates: dedup → API check → barrier open → IPC notify.
+     */
+    private async handleRfidScan(event: RfidScanEvent): Promise<void> {
+        // ── Deduplication: same tag within cooldown window ──
+        const now = Date.now();
+        if (event.rfidCode === this._lastRfidCode && (now - this._lastRfidAt) < this._rfidDedupeMs) {
+            console.warn(`⚠️ [HardwareOrchestrator] RFID dedup: ${event.rfidCode} scanned ${now - this._lastRfidAt}ms ago, ignoring`);
+            return;
+        }
+        this._lastRfidCode = event.rfidCode;
+        this._lastRfidAt = now;
+
+        console.log(`🏷️ [HardwareOrchestrator] RFID scan received: ${event.rfidCode} (source=${event.source})`);
+
+        // ── Query backend for authorization ──
+        let result: RfidAuthResult;
+        try {
+            result = await checkRfidAuthorizationViaAPI(event.rfidCode);
+        } catch (err: any) {
+            console.error(`❌ [HardwareOrchestrator] RFID API call failed: ${err.message}`);
+            result = { authorized: false, reason: 'ERROR', rfidCode: event.rfidCode, error: err.message };
+        }
+
+        console.log(`🏷️ [HardwareOrchestrator] RFID auth result: authorized=${result.authorized}, reason=${result.reason}`);
+
+        // ── If authorized, open exit barrier ──
+        if (result.authorized) {
+            const opened = await safeDriverCall(
+                () => this.registry.barrier.openBarrier('EXIT'),
+                3000,
+                false
+            );
+            console.log(`🔓 [HardwareOrchestrator] RFID exit barrier ${opened ? 'OPENED' : 'FAILED TO OPEN'}`);
+
+            // Mark as used (anti-passback)
+            if (result.stayId) {
+                markBarrierExitUsed(result.stayId);
+            }
+        }
+
+        // ── Notify frontend ──
         if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-            const status = this.registry.getStatus();
-            status.lastEventAt = this.lastEventAt;
+            this.mainWindow.webContents.send('hw:rfid-auth-result', result);
+        }
+
+        // ── Notify simulator ──
+        if (this.simulatorWindow && !this.simulatorWindow.isDestroyed()) {
+            this.simulatorWindow.webContents.send('sim:rfid-result', result);
+        }
+    }
+
+    /**
+     * Process a sensor state change from ESP32 or Simulator.
+     * Updates internal state and propagates to frontend via IPC.
+     */
+    private handleSensorStateChange(state: SensorOccupancyState): void {
+        // Only propagate actual changes (avoid spamming IPC)
+        if (state === this._sensorState) return;
+
+        const prevState = this._sensorState;
+        this._sensorState = state;
+
+        console.log(`📡 [HardwareOrchestrator] Sensor state: ${prevState} → ${state}`);
+
+        // ── Notify frontend ──
+        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            this.mainWindow.webContents.send('hw:sensor-state-changed', {
+                state,
+                previousState: prevState,
+                timestamp: new Date().toISOString(),
+            });
+        }
+
+        // ── Notify simulator ──
+        if (this.simulatorWindow && !this.simulatorWindow.isDestroyed()) {
+            this.simulatorWindow.webContents.send('sim:sensor-state', { state });
+        }
+
+        // ── Also push full status update (so status polling gets the new state) ──
+        this.emitStatusToRenderer();
+    }
+
+    private emitStatusToRenderer(): void {
+        const status = this.registry.getStatus();
+        status.lastEventAt = this.lastEventAt;
+        status.sensorState = this._sensorState;
+
+        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
             this.mainWindow.webContents.send('hw:status-changed', status);
+        }
+        // Also propagate to simulator window (for barrier LED tracking)
+        if (this.simulatorWindow && !this.simulatorWindow.isDestroyed()) {
+            this.simulatorWindow.webContents.send('hw:status-changed', status);
         }
     }
 
@@ -454,9 +645,6 @@ export class HardwareOrchestrator {
             return;
         }
 
-        // __dirname in the orchestrator points to src/hardware/ (or dist_main/hardware/)
-        // The simulator files are in the project root, so we resolve relative to process.cwd()
-        // or relative to the app root when packaged.
         let rootDir: string;
         try {
             const { app } = require('electron');
@@ -483,7 +671,7 @@ export class HardwareOrchestrator {
 
         this.simulatorWindow = new BrowserWindow({
             width: 520,
-            height: 640,
+            height: 750,
             title: 'GarageIA — Hardware Simulator',
             alwaysOnTop: true,
             resizable: false,
@@ -505,10 +693,6 @@ export class HardwareOrchestrator {
     }
 
     // ── Keyboard Shortcut ────────────────────────────────────────────
-    // Uses Electron's globalShortcut API for reliability.
-    // before-input-event can silently fail if the webContents isn't fully
-    // loaded or if multiple listeners race. globalShortcut hooks at the OS
-    // level and is guaranteed to fire.
 
     private registerSimulatorShortcut(): void {
         if (this._shortcutRegistered) {
@@ -521,17 +705,14 @@ export class HardwareOrchestrator {
             return;
         }
 
-        // Register OS-level shortcut
         const accelerator = 'CommandOrControl+Shift+D';
         const registered = globalShortcut.register(accelerator, () => {
             console.log('[HW-DEBUG] 🎹 Ctrl+Shift+D pressed (globalShortcut fired)');
 
-            // Only respond when mainWindow is focused (not when other apps are active)
             if (this.mainWindow && !this.mainWindow.isDestroyed() && this.mainWindow.isFocused()) {
                 console.log('[HW-DEBUG] mainWindow is focused — opening simulator');
                 this.openSimulatorWindow();
             } else if (this.simulatorWindow && !this.simulatorWindow.isDestroyed() && this.simulatorWindow.isFocused()) {
-                // Also allow when simulator itself is focused (toggle behavior)
                 console.log('[HW-DEBUG] simulatorWindow is focused — focusing simulator');
                 this.simulatorWindow.focus();
             } else {
@@ -546,7 +727,6 @@ export class HardwareOrchestrator {
             console.error(`[HW-DEBUG] ❌ globalShortcut '${accelerator}' registration FAILED (may be taken by another app)`);
         }
 
-        // Cleanup: unregister when mainWindow closes to prevent dangling shortcuts
         this.mainWindow.on('closed', () => {
             console.log('[HW-DEBUG] mainWindow closed — unregistering globalShortcut');
             globalShortcut.unregister(accelerator);

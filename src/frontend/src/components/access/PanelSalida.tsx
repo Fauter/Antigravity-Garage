@@ -108,6 +108,35 @@ const PanelSalida: React.FC = () => {
 
     const isGracePeriod = Boolean(stay && !isSubscriber && stay.is_grace_period && price === 0);
 
+    // ── Anti-Crush Sensor State + Barrier LED ──
+    const [sensorState, setSensorState] = useState<'OCCUPIED' | 'CLEAR' | 'UNKNOWN'>('UNKNOWN');
+    const [barrierState, setBarrierState] = useState<'OPEN' | 'CLOSED' | 'UNKNOWN'>('CLOSED');
+    const isSensorBlocked = sensorState === 'OCCUPIED';
+
+    useEffect(() => {
+        const electronAPI = (window as any).electronAPI;
+        if (!electronAPI) return;
+
+        const cleanupSensor = electronAPI.onSensorStateChanged?.((payload: { state: string }) => {
+            setSensorState(payload.state as 'OCCUPIED' | 'CLEAR' | 'UNKNOWN');
+        });
+
+        const cleanupStatus = electronAPI.onHardwareStatusChanged?.((status: any) => {
+            if (status?.exitBarrierState) setBarrierState(status.exitBarrierState);
+            if (status?.sensorState) setSensorState(status.sensorState);
+        });
+
+        electronAPI.getHardwareStatus?.().then((status: any) => {
+            if (status?.sensorState) setSensorState(status.sensorState);
+            if (status?.exitBarrierState) setBarrierState(status.exitBarrierState);
+        });
+
+        return () => {
+            if (cleanupSensor) cleanupSensor();
+            if (cleanupStatus) cleanupStatus();
+        };
+    }, []);
+
     const handleCancel = () => {
         resetLogic(); // Limpia stay, price, error en el hook
         setPlate('');
@@ -179,62 +208,58 @@ const PanelSalida: React.FC = () => {
 
         try {
 
-        let method = paymentMethod || 'Efectivo';
-        let invoice = invoiceType || 'Final';
+            let method = paymentMethod || 'Efectivo';
+            let invoice = invoiceType || 'Final';
 
-        if (isSubscriber) {
-            method = 'Efectivo';
-            invoice = 'Final';
-        } else if (isGracePeriod) {
-            method = 'Efectivo';
-            invoice = 'Final';
-        }
+            if (isSubscriber) {
+                method = 'Efectivo';
+                invoice = 'Final';
+            } else if (isGracePeriod) {
+                method = 'Efectivo';
+                invoice = 'Final';
+            }
 
-        const result = await processExit(stay.plate, method, invoice, selectedPromo?.porcentaje || 0);
-        if (result) {
-            // SINGLE SOURCE OF TRUTH: Backend raw value, zero processing
-            const backendAmount = result.movement?.amount ?? 0;
-            setPrice(backendAmount);
+            const result = await processExit(stay.plate, method, invoice, selectedPromo?.porcentaje || 0);
+            if (result) {
+                // SINGLE SOURCE OF TRUTH: Backend raw value, zero processing
+                const backendAmount = result.movement?.amount ?? 0;
+                setPrice(backendAmount);
 
-            // ── Open physical exit barrier via ESP32 ──
-            try {
-                if (window.electronAPI?.openBarrier) {
-                    console.log('[PanelSalida] Sending OPEN:EXIT to barrier...');
-                    await window.electronAPI.openBarrier('EXIT');
-                    console.log('[PanelSalida] ✅ Exit barrier opened');
+                // ── SALIDA PRE-AUTORIZADA ──
+                // El cobro desde la caja ya NO abre la barrera físicamente.
+                // El flujo correcto es: cajero cobra → backend marca exit_authorized=true →
+                // cliente lleva vehículo a barrera → escanea tag RFID → ESP32 envía RFID:xxx →
+                // HardwareOrchestrator consulta API → si autorizado → OPEN:EXIT.
+                // Esto desacopla el pago de la apertura física y habilita anti-passback.
+
+                // TICKET LOGIC: Trust backend objects entirely
+                const exitStay = result.stay ?? { ...stay, exitTime: new Date() };
+                const exitMovement = result.movement ?? null;
+
+                if (!isSubscriber && exitMovement) {
+                    PrinterService.printExitTicket(exitStay, exitMovement);
                 }
-            } catch (barrierErr) {
-                console.warn('[PanelSalida] ⚠️ Barrier open failed (exit still processed):', barrierErr);
-            }
 
-            // TICKET LOGIC: Trust backend objects entirely
-            const exitStay = result.stay ?? { ...stay, exitTime: new Date() };
-            const exitMovement = result.movement ?? null;
+                toast.success(`Salida ok: ${stay.plate}`, {
+                    description: isGracePeriod ? 'Tiempo de Gracia (Sin Cargo)' : (isSubscriber ? 'Abonado (Sin Cargo)' : `Cobro: ${paymentMethod || 'Aut.'}`)
+                });
 
-            if (!isSubscriber && exitMovement) {
-                PrinterService.printExitTicket(exitStay, exitMovement);
-            }
+                setShowSuccess(true);
 
-            toast.success(`Salida ok: ${stay.plate}`, {
-                description: isGracePeriod ? 'Tiempo de Gracia (Sin Cargo)' : (isSubscriber ? 'Abonado (Sin Cargo)' : `Cobro: ${paymentMethod || 'Aut.'}`)
-            });
+                setTimeout(() => {
+                    setShowSuccess(false);
+                    setPlate('');
+                    setPaymentMethod(null);
+                    setSelectedPromo(null);
+                    setInvoiceType(null);
+                    resetLogic();
+                    setIsProcessing(false);
+                }, 2500);
 
-            setShowSuccess(true);
-
-            setTimeout(() => {
-                setShowSuccess(false);
-                setPlate('');
-                setPaymentMethod(null);
-                setSelectedPromo(null);
-                setInvoiceType(null);
-                resetLogic();
+            } else {
+                toast.error('Error al registrar salida');
                 setIsProcessing(false);
-            }, 2500);
-
-        } else {
-            toast.error('Error al registrar salida');
-            setIsProcessing(false);
-        }
+            }
         } catch (err) {
             console.error('❌ [PanelSalida] Error en handleExit:', err);
             toast.error('Error inesperado al procesar salida');
@@ -252,15 +277,26 @@ const PanelSalida: React.FC = () => {
                     <h2 className="text-sm font-bold tracking-wide uppercase">Salida & Cobro</h2>
                 </div>
 
-                {stay && (
-                    <button
-                        onClick={handleCancel}
-                        className="text-gray-500 hover:text-red-400 hover:bg-red-400/10 px-2 py-1 rounded-md transition-all flex items-center gap-1.5"
-                    >
-                        <X className="w-3.5 h-3.5" />
-                        <span className="text-[10px] font-bold uppercase">Cancelar</span>
-                    </button>
-                )}
+                <div className="flex items-center gap-2">
+                    {stay && (
+                        <button
+                            onClick={handleCancel}
+                            className="text-gray-500 hover:text-red-400 hover:bg-red-400/10 px-2 py-1 rounded-md transition-all flex items-center gap-1.5"
+                        >
+                            <X className="w-3.5 h-3.5" />
+                            <span className="text-[10px] font-bold uppercase">Cancelar</span>
+                        </button>
+                    )}
+                    {/* Status LED */}
+                    <div
+                        className={`w-2.5 h-2.5 rounded-full border transition-all duration-500 ${
+                            barrierState === 'OPEN'
+                                ? 'bg-emerald-500 border-emerald-400 shadow-[0_0_8px_2px_rgba(16,185,129,0.5)]'
+                                : 'bg-red-500/40 border-red-500/50'
+                        }`}
+                        title={`Barrera: ${barrierState}`}
+                    />
+                </div>
             </div>
 
             {/* --- TOP SECTION (Compact Split) --- */}
@@ -349,8 +385,8 @@ const PanelSalida: React.FC = () => {
                     <div className="px-4 py-3 bg-gray-900/50 border-t border-gray-800 shrink-0">
                         <button
                             onClick={handleExit}
-                            disabled={isGlobalSyncing || showSuccess || isProcessing}
-                            className={`w-full h-14 rounded-xl font-bold text-2xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(isGlobalSyncing || showSuccess || isProcessing)
+                            disabled={isGlobalSyncing || showSuccess || isProcessing || isSensorBlocked}
+                            className={`w-full h-14 rounded-xl font-bold text-2xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(isGlobalSyncing || showSuccess || isProcessing || isSensorBlocked)
                                 ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
                                 : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/30'
                                 }`}
@@ -372,8 +408,8 @@ const PanelSalida: React.FC = () => {
                     <div className="px-4 py-3 bg-gray-900/50 border-t border-gray-800 shrink-0">
                         <button
                             onClick={handleExit}
-                            disabled={isGlobalSyncing || showSuccess || isProcessing}
-                            className={`w-full h-14 rounded-xl font-bold text-2xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(isGlobalSyncing || showSuccess || isProcessing)
+                            disabled={isGlobalSyncing || showSuccess || isProcessing || isSensorBlocked}
+                            className={`w-full h-14 rounded-xl font-bold text-2xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(isGlobalSyncing || showSuccess || isProcessing || isSensorBlocked)
                                 ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
                                 : 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-cyan-900/30 ring-1 ring-white/10'
                                 }`}
@@ -470,8 +506,8 @@ const PanelSalida: React.FC = () => {
 
                         <button
                             onClick={handleExit}
-                            disabled={!paymentMethod || !invoiceType || isGlobalSyncing || showSuccess || isCalculating || isProcessing}
-                            className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(!paymentMethod || !invoiceType || isGlobalSyncing || showSuccess || isCalculating || isProcessing)
+                            disabled={!paymentMethod || !invoiceType || isGlobalSyncing || showSuccess || isCalculating || isProcessing || isSensorBlocked}
+                            className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(!paymentMethod || !invoiceType || isGlobalSyncing || showSuccess || isCalculating || isProcessing || isSensorBlocked)
                                 ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
                                 : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/30 ring-1 ring-white/10'
                                 }`}

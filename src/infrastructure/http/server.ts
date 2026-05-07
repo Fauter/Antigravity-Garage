@@ -351,16 +351,16 @@ export const startServer = async () => {
         });
 
         // ── Hardware Integration Routes ──────────────────────────
-        
+
         // Check exit authorization (used by barrier driver / simulator)
         app.get('/api/hardware/check-exit/:ticketCode', async (req, res) => {
             try {
                 const normalizedCode = req.params.ticketCode.trim().toUpperCase();
-                
+
                 // Search ALL stays with this ticket_code (not just active ones!)
                 // After payment: active=false, exit_authorized=true
                 let candidates: any[] = await db.stays.find({ ticket_code: normalizedCode } as any);
-                
+
                 // Fallback: case-insensitive search
                 if (candidates.length === 0) {
                     const allStays: any[] = await db.stays.find({});
@@ -368,29 +368,128 @@ export const startServer = async () => {
                         s.ticket_code && s.ticket_code.toUpperCase() === normalizedCode
                     );
                 }
-                
+
                 if (candidates.length === 0) {
                     return res.json({ authorized: false, reason: 'NOT_FOUND', ticketCode: normalizedCode });
                 }
-                
+
                 // Most recent stay wins (prevents old ticket reuse)
                 const stay: any = candidates.sort((a: any, b: any) =>
                     new Date(b.entryTime).getTime() - new Date(a.entryTime).getTime()
                 )[0];
-                
+
                 if (stay.barrier_exit_used === true) {
                     return res.json({ authorized: false, reason: 'ALREADY_USED', ticketCode: normalizedCode, plate: stay.plate });
                 }
-                
+
                 if (stay.exit_authorized === true || stay.isSubscriber || stay.is_subscriber) {
                     const reason = (stay.isSubscriber || stay.is_subscriber) ? 'SUBSCRIBER' : 'PAID';
                     return res.json({ authorized: true, reason, ticketCode: normalizedCode, stayId: stay.id, plate: stay.plate });
                 }
-                
+
                 res.json({ authorized: false, reason: 'NOT_PAID', ticketCode: normalizedCode, plate: stay.plate });
             } catch (error: any) {
                 console.error('❌ Hardware check-exit error:', error);
                 res.status(500).json({ error: error.message });
+            }
+        });
+
+        // ── RFID Authorization (Salida Pre-Autorizada) ─────────────────
+        // Flow: cashier processes payment → backend sets exit_authorized=true, active=false
+        //       → client drives to exit → scans RFID → this endpoint validates
+        //
+        // Logic:
+        //   1. Find vehicle by rfid_tag in vehicles table
+        //   2. If subscriber → auto-authorize (they have perpetual access)
+        //   3. If hourly → find MOST RECENT stay for that plate (may be active=false after payment)
+        //      → check exit_authorized=true AND barrier_exit_used != true
+        //   4. If not found → reject
+        app.get('/api/hardware/check-rfid/:rfidCode', async (req, res) => {
+            try {
+                const rfidCode = req.params.rfidCode.trim().toUpperCase();
+
+                // ── Step 1: Find vehicle by RFID tag ──
+                const vehicles: any[] = await db.vehicles?.find({ rfid_tag: rfidCode } as any) ?? [];
+
+                if (vehicles.length === 0) {
+                    // No vehicle registered with this RFID tag
+                    return res.json({ authorized: false, reason: 'NOT_FOUND', rfidCode });
+                }
+
+                const vehicle = vehicles[0];
+                const plate = vehicle.plate;
+
+                // ── Step 2: Subscribers auto-authorize ──
+                // Subscribers may or may not have an active stay, but their tag always works
+                if (vehicle.is_subscriber === true) {
+                    // Check for anti-passback: find any stay with barrier_exit_used
+                    const subscriberStays: any[] = await db.stays.find({
+                        plate,
+                        active: true,
+                    } as any);
+
+                    const activeStay = subscriberStays.sort((a: any, b: any) =>
+                        new Date(b.entryTime).getTime() - new Date(a.entryTime).getTime()
+                    )[0];
+
+                    if (activeStay?.barrier_exit_used === true) {
+                        return res.json({ authorized: false, reason: 'ALREADY_USED', rfidCode, plate });
+                    }
+
+                    return res.json({
+                        authorized: true,
+                        reason: 'SUBSCRIBER',
+                        rfidCode,
+                        stayId: activeStay?.id ?? null,
+                        plate,
+                    });
+                }
+
+                // ── Step 3: Hourly vehicle — find most recent stay (may be closed after payment) ──
+                // After payment: the backend sets active=false, exit_authorized=true
+                // We search ALL stays for this plate, sorted by entry time DESC
+                const allStays: any[] = await db.stays.find({ plate } as any);
+
+                if (allStays.length === 0) {
+                    return res.json({ authorized: false, reason: 'NOT_FOUND', rfidCode, plate });
+                }
+
+                const latestStay = allStays.sort((a: any, b: any) =>
+                    new Date(b.entryTime).getTime() - new Date(a.entryTime).getTime()
+                )[0];
+
+                // Anti-passback: already exited with this stay
+                if (latestStay.barrier_exit_used === true) {
+                    return res.json({ authorized: false, reason: 'ALREADY_USED', rfidCode, plate });
+                }
+
+                // Check if the stay was authorized for exit (payment processed)
+                if (latestStay.exit_authorized === true) {
+                    return res.json({
+                        authorized: true,
+                        reason: 'PAID',
+                        rfidCode,
+                        stayId: latestStay.id,
+                        plate,
+                    });
+                }
+
+                // Check legacy subscriber flags on the stay itself
+                if (latestStay.is_subscriber === true || latestStay.isSubscriber === true) {
+                    return res.json({
+                        authorized: true,
+                        reason: 'SUBSCRIBER',
+                        rfidCode,
+                        stayId: latestStay.id,
+                        plate,
+                    });
+                }
+
+                // Stay exists but not yet paid
+                return res.json({ authorized: false, reason: 'NOT_PAID', rfidCode, plate });
+            } catch (error: any) {
+                console.error('❌ Hardware check-rfid error:', error);
+                res.status(500).json({ authorized: false, reason: 'ERROR', rfidCode: req.params.rfidCode, error: error.message });
             }
         });
 
@@ -399,13 +498,13 @@ export const startServer = async () => {
             try {
                 const stayId = req.params.stayId;
                 const { barrier_exit_used, barrier_exit_at } = req.body;
-                
+
                 await db.stays.update(
                     { id: stayId } as any,
                     { $set: { barrier_exit_used, barrier_exit_at: barrier_exit_at ? new Date(barrier_exit_at) : new Date() } } as any,
                     {} as any
                 );
-                
+
                 res.json({ success: true, stayId });
             } catch (error: any) {
                 console.error('❌ Hardware mark-exit-used error:', error);
@@ -419,7 +518,7 @@ export const startServer = async () => {
                 const garageId = (req.headers['x-garage-id'] as string);
                 const query: any = { is_pending_processing: true };
                 if (garageId) query.garageId = garageId;
-                
+
                 const pending = await db.stays.find(query);
                 res.json(pending);
             } catch (error: any) {

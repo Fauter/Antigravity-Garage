@@ -315,7 +315,7 @@ export class AccessController {
             // --- NUEVO: Cotización Automática y Tiempo de Gracia ---
             const price = await AccessManager.quoteExit(stay as any, 'Efectivo', garageId, 0);
             (stay as any).price = price;
-            
+
             // Evaluamos is_grace_period
             let isGracePeriod = false;
             if (!stay.isSubscriber && price === 0) {

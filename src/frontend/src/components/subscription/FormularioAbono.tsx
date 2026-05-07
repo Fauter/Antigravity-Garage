@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../../services/api';
 import { toast } from 'sonner';
-import { Camera, Car, Check, User, Phone, AlertTriangle, Wallet } from 'lucide-react';
+import { Camera, Car, Check, User, Phone, AlertTriangle, Wallet, Tag } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { WebcamModal } from '../common/WebcamModal';
 import { PrinterService } from '../../services/PrinterService';
@@ -54,6 +54,20 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
         [vehicleTypes, getSortedVehicleTypes]
     );
 
+    // --- RFID Duplicate Validation ---
+    const [existingRfidTags, setExistingRfidTags] = useState<{ tag: string; plate: string }[]>([]);
+    const [isRfidDuplicate, setIsRfidDuplicate] = useState(false);
+    const [rfidDuplicatePlate, setRfidDuplicatePlate] = useState('');
+
+    useEffect(() => {
+        api.get('/vehiculos')
+            .then(res => {
+                const tags = (res.data || []).filter((v: any) => v.rfid_tag).map((v: any) => ({ tag: String(v.rfid_tag).toUpperCase(), plate: v.plate }));
+                setExistingRfidTags(tags);
+            })
+            .catch(e => console.error('RFID tag list load error:', e));
+    }, []);
+
     const [formData, setFormData] = useState({
         // Cochera
         tipoCochera: '',
@@ -80,6 +94,7 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
         anio: '',
         companiaSeguro: '',
         tipoVehiculo: '',
+        rfidTag: '',
 
         // Pago
         metodoPago: '',
@@ -89,6 +104,24 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
     useEffect(() => { loadConfig(); }, [formData.metodoPago]);
     useEffect(() => { calculatePrice(); }, [formData.tipoCochera, formData.exclusivaOverride, formData.tipoVehiculo, pricesMatrix, standardPricesMatrix]);
     useEffect(() => { setErrorMessage(null); }, [formData.numeroCochera, formData.tipoCochera, formData.tipoVehiculo, formData.patente]);
+
+    // --- RFID Duplicate Check (Real-Time) ---
+    useEffect(() => {
+        const cleanTag = formData.rfidTag.trim().toUpperCase();
+        if (cleanTag.length > 0) {
+            const match = existingRfidTags.find(t => t.tag === cleanTag && t.plate !== formData.patente.toUpperCase());
+            if (match) {
+                setIsRfidDuplicate(true);
+                setRfidDuplicatePlate(match.plate);
+            } else {
+                setIsRfidDuplicate(false);
+                setRfidDuplicatePlate('');
+            }
+        } else {
+            setIsRfidDuplicate(false);
+            setRfidDuplicatePlate('');
+        }
+    }, [formData.rfidTag, formData.patente, existingRfidTags]);
     // Sync montoAbonado whenever proratedPrice changes (default: full amount)
     useEffect(() => { setMontoAbonado(proratedPrice); }, [proratedPrice]);
 
@@ -244,6 +277,19 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
             return;
         }
 
+        // RFID Tag is MANDATORY for subscriber vehicles
+        if (!formData.rfidTag.trim()) {
+            toast.error('El RFID Tag es obligatorio para abonados.');
+            setLoading(false);
+            return;
+        }
+
+        if (isRfidDuplicate) {
+            toast.error(`El RFID ya está asignado a ${rfidDuplicatePlate}.`);
+            setLoading(false);
+            return;
+        }
+
         if (formData.tipoCochera !== 'Movil' && !formData.piso) {
             toast.error('Debe seleccionar un Piso para cocheras fijas o exclusivas');
             setLoading(false);
@@ -319,6 +365,7 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                     year: formData.anio,
                     insurance: formData.companiaSeguro,
                     type: formData.tipoVehiculo,
+                    rfid_tag: formData.rfidTag.trim().toUpperCase() || null,
                     photos: compressedPhotos
                 },
                 subscriptionType: finalType,
@@ -395,6 +442,7 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                     anio: '',
                     companiaSeguro: '',
                     tipoVehiculo: '',
+                    rfidTag: '',
 
                     metodoPago: '',
                     tipoFactura: '',
@@ -551,10 +599,28 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                                     </select>
                                 </div>
 
-                                {/* Row 2: Color, Año, Cia Seguro (span 2) */}
+                                {/* Row 2: Color, Año, RFID Tag, Cia Seguro */}
                                 <div><label className={labelStyle}>Color</label><input className={inputStyle} value={formData.color} onChange={e => setFormData({ ...formData, color: e.target.value })} /></div>
                                 <div><label className={labelStyle}>Año</label><input className={inputStyle} value={formData.anio} onChange={e => setFormData({ ...formData, anio: e.target.value })} /></div>
-                                <div className="col-span-2"><label className={labelStyle}>Cía. Seguro</label><input className={inputStyle} value={formData.companiaSeguro} onChange={e => setFormData({ ...formData, companiaSeguro: e.target.value })} placeholder="Ej. La Caja / Federación Patronal" /></div>
+                                <div>
+                                    <label className={labelStyle}>
+                                        <Tag className="w-2.5 h-2.5 inline mr-1 text-cyan-500" />RFID Tag
+                                    </label>
+                                    <input
+                                        className={`${inputStyle} font-mono tracking-wider uppercase border-l-[3px] ${isRfidDuplicate ? 'border-l-red-500 border-red-500 ring-1 ring-red-500/30' : !formData.rfidTag.trim() ? 'border-l-amber-500/50' : 'border-l-cyan-500'}`}
+                                        value={formData.rfidTag}
+                                        onChange={e => setFormData({ ...formData, rfidTag: e.target.value.toUpperCase() })}
+                                        placeholder="ABC123"
+                                        required
+                                    />
+                                    {isRfidDuplicate && (
+                                        <div className="flex items-center gap-1 mt-0.5">
+                                            <AlertTriangle className="w-2.5 h-2.5 text-red-500 shrink-0" />
+                                            <span className="text-[9px] text-red-500 font-medium">Tag asignado a {rfidDuplicatePlate}</span>
+                                        </div>
+                                    )}
+                                </div>
+                                <div><label className={labelStyle}>Cía. Seguro</label><input className={inputStyle} value={formData.companiaSeguro} onChange={e => setFormData({ ...formData, companiaSeguro: e.target.value })} placeholder="Ej. La Caja" /></div>
                             </div>
                         </div>
 
@@ -657,8 +723,8 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                                 </div>
                             )}
 
-                            <button form="abono-form" type="submit" disabled={loading || isDniDuplicate || !formData.tipoFactura || montoAbonado <= 0}
-                                className={`w-full py-3 text-xs font-black uppercase tracking-widest rounded shadow-lg flex items-center justify-center gap-2 mt-3 transition-all active:scale-95 ${(isDniDuplicate || !formData.tipoFactura || montoAbonado <= 0) ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : montoAbonado < proratedPrice ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-white hover:bg-gray-200 text-black'}`}>
+                            <button form="abono-form" type="submit" disabled={loading || isDniDuplicate || isRfidDuplicate || !formData.rfidTag.trim() || !formData.tipoFactura || montoAbonado <= 0}
+                                className={`w-full py-3 text-xs font-black uppercase tracking-widest rounded shadow-lg flex items-center justify-center gap-2 mt-3 transition-all active:scale-95 ${(isDniDuplicate || isRfidDuplicate || !formData.rfidTag.trim() || !formData.tipoFactura || montoAbonado <= 0) ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : montoAbonado < proratedPrice ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-white hover:bg-gray-200 text-black'}`}>
                                 {loading ? '...' : <><Check className="w-3.5 h-3.5" /> {montoAbonado < proratedPrice ? 'Confirmar (Parcial)' : 'Confirmar'}</>}
                             </button>
                         </div>

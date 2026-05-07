@@ -113,6 +113,9 @@ export class DriverRegistry {
             scannerOnline: true, // Scanner (USB HID) is always "online" since it's keyboard-mode
             driverType: this._barrier?.driverType ?? 'MOCK',
             lastEventAt: null,
+            sensorState: 'UNKNOWN',
+            entryBarrierState: this._barrier?.getBarrierState('ENTRY') ?? 'UNKNOWN',
+            exitBarrierState: this._barrier?.getBarrierState('EXIT') ?? 'UNKNOWN',
         };
     }
 

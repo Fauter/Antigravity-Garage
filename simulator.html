@@ -1,11 +1,16 @@
 <!DOCTYPE html>
 <html lang="es">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GarageIA — Hardware Simulator</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
         body {
             font-family: 'Segoe UI', -apple-system, sans-serif;
@@ -74,10 +79,21 @@
             gap: 8px;
         }
 
-        .section-title.entry { color: #34d399; }
-        .section-title.exit { color: #60a5fa; }
-        .section-title.log { color: #a78bfa; }
-        .section-title.mock { color: #fbbf24; }
+        .section-title.entry {
+            color: #34d399;
+        }
+
+        .section-title.exit {
+            color: #60a5fa;
+        }
+
+        .section-title.log {
+            color: #a78bfa;
+        }
+
+        .section-title.mock {
+            color: #fbbf24;
+        }
 
         .btn {
             width: 100%;
@@ -96,8 +112,14 @@
             gap: 8px;
         }
 
-        .btn:active { transform: scale(0.97); }
-        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .btn:active {
+            transform: scale(0.97);
+        }
+
+        .btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
 
         .btn-entry {
             background: linear-gradient(135deg, #059669, #10b981);
@@ -164,7 +186,9 @@
             animation: fadeIn 0.3s ease;
         }
 
-        .result.visible { display: block; }
+        .result.visible {
+            display: block;
+        }
 
         .result.success {
             background: rgba(16, 185, 129, 0.1);
@@ -228,7 +252,10 @@
         .toggle-slider {
             position: absolute;
             cursor: pointer;
-            top: 0; left: 0; right: 0; bottom: 0;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
             background: #333;
             border-radius: 28px;
             transition: all 0.3s ease;
@@ -245,16 +272,16 @@
             background: #888;
             border-radius: 50%;
             transition: all 0.3s ease;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
         }
 
-        .toggle-switch input:checked + .toggle-slider {
+        .toggle-switch input:checked+.toggle-slider {
             background: linear-gradient(135deg, #f59e0b, #fbbf24);
             border-color: #f59e0b;
             box-shadow: 0 0 20px rgba(245, 158, 11, 0.3);
         }
 
-        .toggle-switch input:checked + .toggle-slider:before {
+        .toggle-switch input:checked+.toggle-slider:before {
             transform: translateX(24px);
             background: white;
         }
@@ -279,11 +306,25 @@
             border-bottom: 1px solid #1a1a25;
         }
 
-        .log-entry .time { color: #444; }
-        .log-entry .msg-ok { color: #34d399; }
-        .log-entry .msg-err { color: #f87171; }
-        .log-entry .msg-info { color: #60a5fa; }
-        .log-entry .msg-warn { color: #fbbf24; }
+        .log-entry .time {
+            color: #444;
+        }
+
+        .log-entry .msg-ok {
+            color: #34d399;
+        }
+
+        .log-entry .msg-err {
+            color: #f87171;
+        }
+
+        .log-entry .msg-info {
+            color: #60a5fa;
+        }
+
+        .log-entry .msg-warn {
+            color: #fbbf24;
+        }
 
         /* Status bar */
         .status-bar {
@@ -311,20 +352,186 @@
             animation: pulse 2s infinite;
         }
 
-        .status-dot.mock-on { background: #fbbf24; }
-        .status-dot.mock-off { background: #34d399; }
+        .status-dot.mock-on {
+            background: #fbbf24;
+        }
+
+        .status-dot.mock-off {
+            background: #34d399;
+        }
 
         @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.3; }
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.3;
+            }
         }
 
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(-4px); }
-            to { opacity: 1; transform: translateY(0); }
+            from {
+                opacity: 0;
+                transform: translateY(-4px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* ── Sensor Toggle ── */
+        .sensor-switch-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px 16px;
+            border-radius: 10px;
+            transition: all 0.3s ease;
+        }
+
+        .sensor-switch-container.sensor-clear {
+            background: rgba(16, 185, 129, 0.08);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+
+        .sensor-switch-container.sensor-occupied {
+            background: rgba(239, 68, 68, 0.12);
+            border: 1px solid rgba(239, 68, 68, 0.4);
+            animation: sensorPulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes sensorPulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+            50% { box-shadow: 0 0 20px 4px rgba(239, 68, 68, 0.15); }
+        }
+
+        .sensor-label {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+
+        .sensor-label-title {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            transition: color 0.3s;
+        }
+
+        .sensor-label-title.clear { color: #34d399; }
+        .sensor-label-title.occupied { color: #f87171; }
+
+        .sensor-label-desc {
+            font-size: 10px;
+            color: #555;
+            line-height: 1.4;
+        }
+
+        .sensor-status-badge {
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            padding: 4px 10px;
+            border-radius: 6px;
+            transition: all 0.3s;
+        }
+
+        .sensor-status-badge.clear {
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .sensor-status-badge.occupied {
+            background: rgba(239, 68, 68, 0.15);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .toggle-switch.sensor input:checked+.toggle-slider {
+            background: linear-gradient(135deg, #dc2626, #ef4444);
+            border-color: #dc2626;
+            box-shadow: 0 0 20px rgba(220, 38, 38, 0.3);
+        }
+
+        .toggle-switch.sensor input:not(:checked)+.toggle-slider {
+            background: linear-gradient(135deg, #059669, #10b981);
+            border-color: #059669;
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.2);
+        }
+
+        .toggle-switch.sensor input:not(:checked)+.toggle-slider:before {
+            background: white;
+        }
+
+        /* ── Simulate Pass Button ── */
+        .btn-simulate-pass {
+            width: 100%;
+            height: 56px;
+            border: 2px solid rgba(251, 191, 36, 0.3);
+            border-radius: 12px;
+            background: linear-gradient(135deg, rgba(251, 191, 36, 0.08), rgba(245, 158, 11, 0.05));
+            color: #fbbf24;
+            font-size: 15px;
+            font-weight: 800;
+            letter-spacing: 1.5px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-simulate-pass:hover:not(:disabled) {
+            background: linear-gradient(135deg, rgba(251, 191, 36, 0.15), rgba(245, 158, 11, 0.1));
+            border-color: rgba(251, 191, 36, 0.5);
+            box-shadow: 0 4px 20px rgba(251, 191, 36, 0.15);
+            transform: translateY(-1px);
+        }
+
+        .btn-simulate-pass:active:not(:disabled) {
+            transform: scale(0.98);
+        }
+
+        .btn-simulate-pass:disabled {
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+
+        .btn-simulate-pass.running {
+            border-color: rgba(239, 68, 68, 0.5);
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.1), rgba(220, 38, 38, 0.05));
+            color: #f87171;
+        }
+
+        .btn-simulate-pass .progress-bar {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #f87171, #fbbf24, #34d399);
+            border-radius: 0 0 10px 10px;
+            transition: width 2s linear;
+            width: 0%;
+        }
+
+        .btn-simulate-pass.running .progress-bar {
+            width: 100%;
         }
     </style>
 </head>
+
 <body>
 
     <div class="header">
@@ -355,9 +562,9 @@
 
         <!-- ENTRY SIMULATION -->
         <div class="section">
-            <div class="section-title entry">🚗 Simular Entrada (Barrera + Cámara)</div>
+            <div class="section-title entry">🚗 Simular Entrada (Detección + Barrera)</div>
             <p style="font-size: 11px; color: #555; margin-bottom: 14px; line-height: 1.6;">
-                Simula: botón físico presionado → cámara captura foto → barrera se abre → evento enviado a la app.
+                Simula: detección de vehículo → cámara captura foto → <strong style="color: #34d399;">barrera se abre automáticamente</strong> → evento enviado a la app.
             </p>
             <button class="btn btn-entry" id="btnEntry" onclick="handleSimulateEntry()">
                 ⚡ Simular Ingreso de Vehículo
@@ -378,6 +585,43 @@
                 🔍 Verificar Autorización
             </button>
             <div class="result" id="exitResult"></div>
+        </div>
+
+        <!-- RFID SIMULATION (Salida Pre-Autorizada) -->
+        <div class="section">
+            <div class="section-title" style="color: #f472b6;">🏷️ Simular Lectura RFID (Salida Pre-Autorizada)</div>
+            <p style="font-size: 11px; color: #555; margin-bottom: 14px; line-height: 1.6;">
+                Simula el flujo real: cliente apoya tag RFID en la barrera de salida. El sistema verifica si el vehículo
+                tiene cobro realizado (exit_authorized) o es abonado. Si pasa → barrera se abre automáticamente.
+            </p>
+            <div class="input-group">
+                <input type="text" id="rfidInput" placeholder="RFID TAG (ej: A1B2C3D4)" maxlength="16" />
+            </div>
+            <button class="btn" id="btnRfid" onclick="handleSimulateRfid()" style="background: linear-gradient(135deg, #db2777, #f472b6); color: white; box-shadow: 0 4px 15px rgba(219, 39, 119, 0.25);">
+                🏷️ Simular Lectura RFID
+            </button>
+            <div class="result" id="rfidResult"></div>
+        </div>
+
+        <!-- SENSOR SIMULATION (Anti-Crush Radar LD2450) -->
+        <div class="section">
+            <div class="section-title" style="color: #fbbf24;">🚗 Simulación de Paso de Vehículo</div>
+            <p style="font-size: 11px; color: #555; margin-bottom: 14px; line-height: 1.6;">
+                Simula el flujo real del radar LD2450: solo funciona si la barrera de salida está <strong style="color: #60a5fa;">ABIERTA</strong>.
+                Al presionar: <strong style="color: #f87171;">OCCUPIED</strong> → espera 2s →
+                <strong style="color: #34d399;">CLEAR</strong> → barrera se cierra automáticamente (LED → rojo).
+            </p>
+            <div class="sensor-switch-container sensor-clear" id="sensorSwitchContainer">
+                <div class="sensor-label">
+                    <span class="sensor-label-title clear" id="sensorLabelTitle">ZONA LIBRE</span>
+                    <span class="sensor-label-desc" id="sensorLabelDesc">No hay vehículo bajo la barrera</span>
+                </div>
+                <span class="sensor-status-badge clear" id="sensorBadge">CLEAR</span>
+            </div>
+            <button class="btn-simulate-pass" id="btnSimulatePass" style="margin-top: 12px;">
+                🚗 SIMULAR PASO DE VEHÍCULO
+                <div class="progress-bar"></div>
+            </button>
         </div>
 
         <!-- EVENT LOG -->
@@ -538,6 +782,33 @@
             }
         }
 
+        // ── RFID Simulation Handler (Salida Pre-Autorizada) ──
+        async function handleSimulateRfid() {
+            const rfidCode = document.getElementById('rfidInput').value.trim();
+            if (!rfidCode) {
+                showResult('rfidResult', 'error', '⚠️ Ingrese un código RFID');
+                return;
+            }
+
+            const btn = document.getElementById('btnRfid');
+            btn.disabled = true;
+            btn.textContent = '⏳ Consultando API...';
+
+            try {
+                addLog('info', `🏷️ RFID enviado → ${rfidCode.toUpperCase()}`);
+                await window.simulatorAPI.simulateRfid(rfidCode);
+                // The actual result arrives asynchronously via onRfidResult
+                // Show interim feedback
+                showResult('rfidResult', 'info', `⏳ Tag ${rfidCode.toUpperCase()} enviado — esperando validación...`);
+            } catch (err) {
+                addLog('err', `Error RFID: ${err.message}`);
+                showResult('rfidResult', 'error', `❌ Error: ${err.message}`);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '🏷️ Simular Lectura RFID';
+            }
+        }
+
         // Listen for results from main process
         window.simulatorAPI.onEntryResult((data) => {
             if (data.success) {
@@ -549,10 +820,147 @@
             // Already handled in handleSimulateExit
         });
 
-        // Enter key on ticket input
+        // ── RFID result listener (async from Orchestrator) ──
+        window.simulatorAPI.onRfidResult((data) => {
+            if (data.authorized) {
+                addLog('ok', `🏷️ RFID AUTORIZADO → ${data.rfidCode} (${data.reason}) | Patente: ${data.plate || 'N/A'} → BARRERA ABIERTA`);
+                showResult('rfidResult', 'success',
+                    `🟢 BARRERA ABIERTA — ${data.reason === 'SUBSCRIBER' ? 'Abonado' : 'Cobro verificado'} | Patente: ${data.plate || 'N/A'}`);
+            } else {
+                const reasonText = {
+                    'NOT_FOUND': 'Tag RFID no registrado en el sistema',
+                    'NOT_PAID': 'Vehículo sin cobro realizado — barrera bloqueada',
+                    'ALREADY_USED': 'Tag ya fue utilizado (anti-passback)',
+                    'ERROR': `Error del sistema: ${data.error || 'desconocido'}`
+                };
+                addLog('err', `🏷️ RFID DENEGADO → ${data.rfidCode} (${data.reason})`);
+                showResult('rfidResult', 'error',
+                    `🔴 BARRERA CERRADA — ${reasonText[data.reason] || data.reason}`);
+            }
+        });
+
+        // Enter key handlers
         document.getElementById('ticketInput').addEventListener('keydown', (e) => {
             if (e.key === 'Enter') handleSimulateExit();
         });
+        document.getElementById('rfidInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') handleSimulateRfid();
+        });
+
+        // ── SIMULAR PASO DE VEHÍCULO (Automated 2s sequence) ──
+        // v4.0: Only allowed when EXIT barrier is OPEN. Sensor-Aware close.
+        const btnSimulatePass = document.getElementById('btnSimulatePass');
+        const sensorSwitchContainer = document.getElementById('sensorSwitchContainer');
+        const sensorLabelTitle = document.getElementById('sensorLabelTitle');
+        const sensorLabelDesc = document.getElementById('sensorLabelDesc');
+        const sensorBadge = document.getElementById('sensorBadge');
+
+        // ── Track EXIT barrier state for smart button gating ──
+        let exitBarrierOpen = false;
+
+        function updatePassButtonState() {
+            if (exitBarrierOpen && !btnSimulatePass.classList.contains('running')) {
+                btnSimulatePass.disabled = false;
+                btnSimulatePass.style.opacity = '1';
+                btnSimulatePass.title = 'Simular paso de vehículo por la barrera de salida';
+            } else if (!exitBarrierOpen && !btnSimulatePass.classList.contains('running')) {
+                btnSimulatePass.disabled = true;
+                btnSimulatePass.style.opacity = '0.35';
+                btnSimulatePass.title = 'La barrera de salida debe estar ABIERTA para simular un paso';
+            }
+        }
+
+        // Initialize as disabled (barrier starts closed)
+        updatePassButtonState();
+
+        // Track barrier state from hardware status updates
+        if (window.simulatorAPI.onHardwareStatus) {
+            window.simulatorAPI.onHardwareStatus((status) => {
+                if (status && status.exitBarrierState) {
+                    exitBarrierOpen = status.exitBarrierState === 'OPEN';
+                    updatePassButtonState();
+                }
+            });
+        }
+
+        function updateSensorUI(isOccupied) {
+            if (isOccupied) {
+                sensorSwitchContainer.className = 'sensor-switch-container sensor-occupied';
+                sensorLabelTitle.className = 'sensor-label-title occupied';
+                sensorLabelTitle.textContent = '⚠️ VEHÍCULO DETECTADO';
+                sensorLabelDesc.textContent = 'Barrera de salida BLOQUEADA';
+                sensorBadge.className = 'sensor-status-badge occupied';
+                sensorBadge.textContent = 'OCCUPIED';
+            } else {
+                sensorSwitchContainer.className = 'sensor-switch-container sensor-clear';
+                sensorLabelTitle.className = 'sensor-label-title clear';
+                sensorLabelTitle.textContent = 'ZONA LIBRE';
+                sensorLabelDesc.textContent = 'No hay vehículo bajo la barrera';
+                sensorBadge.className = 'sensor-status-badge clear';
+                sensorBadge.textContent = 'CLEAR';
+            }
+        }
+
+        btnSimulatePass.addEventListener('click', async () => {
+            if (btnSimulatePass.disabled) return;
+
+            // Double-check: only proceed if exit barrier is open
+            if (!exitBarrierOpen) {
+                addLog('warn', '⚠️ La barrera de salida debe estar ABIERTA para simular paso');
+                return;
+            }
+
+            btnSimulatePass.disabled = true;
+
+            // Step 1: OCCUPIED (vehicle enters under barrier arm)
+            try {
+                await window.simulatorAPI.simulateSensor('OCCUPIED');
+                updateSensorUI(true);
+                addLog('warn', '🚗 Paso iniciado → SENSOR: OCCUPIED (vehículo bajo brazo)');
+                btnSimulatePass.classList.add('running');
+                btnSimulatePass.innerHTML = '⚠️ VEHÍCULO CRUZANDO... (2s)<div class="progress-bar"></div>';
+
+                // Force reflow to start CSS transition
+                void btnSimulatePass.offsetWidth;
+                btnSimulatePass.querySelector('.progress-bar').style.width = '100%';
+
+            } catch (err) {
+                addLog('err', `Error sensor: ${err.message}`);
+                btnSimulatePass.disabled = false;
+                return;
+            }
+
+            // Step 2: Wait 2 seconds (vehicle crossing)
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // Step 3: CLEAR (vehicle has passed)
+            // The MockBarrierDriver will detect CLEAR and trigger auto-close → LED turns red
+            try {
+                await window.simulatorAPI.simulateSensor('CLEAR');
+                updateSensorUI(false);
+                addLog('ok', '✅ Paso completado → SENSOR: CLEAR (zona libre) — barrera se cerrará automáticamente');
+            } catch (err) {
+                addLog('err', `Error sensor clear: ${err.message}`);
+            }
+
+            btnSimulatePass.classList.remove('running');
+            btnSimulatePass.innerHTML = '🚗 SIMULAR PASO DE VEHÍCULO<div class="progress-bar"></div>';
+
+            // After CLEAR, the barrier will auto-close via MockBarrierDriver smart-close.
+            // The exitBarrierOpen state will be updated via the next status event.
+            // Small delay before re-evaluating button state
+            setTimeout(() => {
+                updatePassButtonState();
+            }, 500);
+        });
+
+        // Listen for external sensor state changes (e.g., from ESP32)
+        window.simulatorAPI.onSensorState((data) => {
+            const isOccupied = data.state === 'OCCUPIED';
+            updateSensorUI(isOccupied);
+            addLog('info', `📡 Sensor actualizado externamente → ${data.state}`);
+        });
     </script>
 </body>
+
 </html>

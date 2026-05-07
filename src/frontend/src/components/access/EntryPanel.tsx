@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useEntryLogic } from '../../hooks/useEntryLogic';
 import { useAuth } from '../../context/AuthContext';
 import { useHardware, type PendingEntry } from '../../context/HardwareContext';
@@ -21,6 +21,38 @@ const EntryPanel: React.FC = () => {
 
     const { isGlobalSyncing } = useAuth();
     const { state, activeEntry, removeEntry, updateEntry, pendingCount } = useHardware();
+
+    // ── Anti-Crush Sensor State + Barrier LED ──
+    const [sensorState, setSensorState] = useState<'OCCUPIED' | 'CLEAR' | 'UNKNOWN'>('UNKNOWN');
+    const [barrierState, setBarrierState] = useState<'OPEN' | 'CLOSED' | 'UNKNOWN'>('CLOSED');
+    const isSensorBlocked = sensorState === 'OCCUPIED';
+
+    useEffect(() => {
+        const electronAPI = (window as any).electronAPI;
+        if (!electronAPI) return;
+
+        // Listen for sensor state changes
+        const cleanupSensor = electronAPI.onSensorStateChanged?.((payload: { state: string }) => {
+            setSensorState(payload.state as 'OCCUPIED' | 'CLEAR' | 'UNKNOWN');
+        });
+
+        // Listen for hardware status changes (includes barrier state)
+        const cleanupStatus = electronAPI.onHardwareStatusChanged?.((status: any) => {
+            if (status?.entryBarrierState) setBarrierState(status.entryBarrierState);
+            if (status?.sensorState) setSensorState(status.sensorState);
+        });
+
+        // Fetch initial state
+        electronAPI.getHardwareStatus?.().then((status: any) => {
+            if (status?.sensorState) setSensorState(status.sensorState);
+            if (status?.entryBarrierState) setBarrierState(status.entryBarrierState);
+        });
+
+        return () => {
+            if (cleanupSensor) cleanupSensor();
+            if (cleanupStatus) cleanupStatus();
+        };
+    }, []);
 
     // ── Sync form fields with active tab ──
     useEffect(() => {
@@ -75,14 +107,25 @@ const EntryPanel: React.FC = () => {
 
             {/* COMPACT HEADER */}
             <div className="px-3 py-2 bg-gray-950 border-b border-gray-800 shrink-0">
-                <div className="flex items-center gap-2 text-emerald-500">
-                    <Car className="w-4 h-4" />
-                    <h2 className="text-sm font-bold tracking-wide uppercase">Ingreso</h2>
-                    {pendingCount > 0 && (
-                        <span className="bg-amber-500/20 text-amber-400 text-[10px] font-black px-1.5 py-0.5 rounded-full min-w-[20px] text-center animate-pulse">
-                            {pendingCount}
-                        </span>
-                    )}
+                <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-emerald-500">
+                        <Car className="w-4 h-4" />
+                        <h2 className="text-sm font-bold tracking-wide uppercase">Ingreso</h2>
+                        {pendingCount > 0 && (
+                            <span className="bg-amber-500/20 text-amber-400 text-[10px] font-black px-1.5 py-0.5 rounded-full min-w-[20px] text-center animate-pulse">
+                                {pendingCount}
+                            </span>
+                        )}
+                    </div>
+                    {/* Status LED */}
+                    <div
+                        className={`w-2.5 h-2.5 rounded-full border transition-all duration-500 ${
+                            barrierState === 'OPEN'
+                                ? 'bg-emerald-500 border-emerald-400 shadow-[0_0_8px_2px_rgba(16,185,129,0.5)]'
+                                : 'bg-red-500/40 border-red-500/50'
+                        }`}
+                        title={`Barrera: ${barrierState}`}
+                    />
                 </div>
             </div>
 
@@ -172,8 +215,8 @@ const EntryPanel: React.FC = () => {
                         <div className="pt-2">
                             <button
                                 type="submit"
-                                disabled={!plate || plate.trim().length < 3 || !vehicleType || isLoading || isGlobalSyncing}
-                                className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-wide flex items-center justify-center gap-3 transition-all ${(!plate || plate.trim().length < 3 || !vehicleType || isGlobalSyncing)
+                                disabled={!plate || plate.trim().length < 3 || !vehicleType || isLoading || isGlobalSyncing || isSensorBlocked}
+                                className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-wide flex items-center justify-center gap-3 transition-all ${(!plate || plate.trim().length < 3 || !vehicleType || isGlobalSyncing || isSensorBlocked)
                                     ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
                                     : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-900/30'
                                     }`}

@@ -56,6 +56,7 @@ export const VehicleSchema = z.object({
   color: z.string().optional(),
   year: z.string().optional(),
   insurance: z.string().optional(),
+  rfid_tag: z.string().optional().nullable(),
   description: z.string().optional(),
   customerId: UuidSchema.optional().nullable(),
   isSubscriber: z.boolean().default(false),

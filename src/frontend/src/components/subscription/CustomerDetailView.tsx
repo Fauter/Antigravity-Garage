@@ -14,7 +14,8 @@ import {
     AlertCircle,
     Edit2,
     X,
-    Camera
+    Camera,
+    Tag
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { toast } from 'sonner';
@@ -76,6 +77,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         color: '',
         anio: '',
         companiaSeguro: '',
+        rfidTag: '',
         metodoPago: 'Efectivo',
         tipoFactura: 'Final'
     });
@@ -103,6 +105,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         color: '',
         anio: '',
         seguro: '',
+        rfidTag: '',
         // Billing
         metodoPago: 'Efectivo',
         tipoFactura: 'Final'
@@ -370,6 +373,13 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     const handleCreateCochera = async () => {
         if (!clientId) { toast.error("Error: Cliente no identificado"); return; }
         if (!newCocheraData.patente || !newCocheraData.tipoVehiculo) { toast.error("Patente y Tipo de Vehículo obligatorios"); return; }
+        if (!newCocheraData.rfidTag.trim()) { toast.error("RFID Tag obligatorio para abonados"); return; }
+
+        // RFID Duplicate Check
+        const cleanRfid = newCocheraData.rfidTag.trim().toUpperCase();
+        const rfidConflict = realVehicles.find(v => v.rfid_tag && String(v.rfid_tag).toUpperCase() === cleanRfid && v.plate !== newCocheraData.patente.toUpperCase());
+        if (rfidConflict) { toast.error(`RFID "${cleanRfid}" ya asignado a ${rfidConflict.plate}`); return; }
+
         if ((newCocheraData.tipo === 'Fija' || newCocheraData.exclusiva) && !newCocheraData.numero) { toast.error("Número de cochera obligatorio"); return; }
         if (newCocheraData.tipo !== 'Movil' && !newCocheraData.piso) { toast.error("Debe seleccionar un Piso para cocheras fijas o exclusivas"); return; }
 
@@ -414,6 +424,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                     year: newCocheraData.anio,
                     insurance: newCocheraData.seguro,
                     type: newCocheraData.tipoVehiculo,
+                    rfid_tag: newCocheraData.rfidTag.trim().toUpperCase() || null,
                     photos: compressedPhotos
                 },
                 subscriptionType: finalType,
@@ -514,6 +525,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             color: '',
             anio: '',
             companiaSeguro: '',
+            rfidTag: '',
             metodoPago: 'Efectivo',
             tipoFactura: 'Final'
         });
@@ -524,6 +536,20 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         if (!selectedCochera) return;
         if (!newVehicleData.patente || !newVehicleData.tipoVehiculo) {
             toast.error("Patente y Tipo son obligatorios");
+            return;
+        }
+
+        // RFID Tag mandatory for subscriber vehicles
+        if (!newVehicleData.rfidTag.trim()) {
+            toast.error("RFID Tag obligatorio para abonados");
+            return;
+        }
+
+        // RFID Duplicate Check
+        const cleanRfid = newVehicleData.rfidTag.trim().toUpperCase();
+        const rfidConflict = realVehicles.find(v => v.rfid_tag && String(v.rfid_tag).toUpperCase() === cleanRfid && v.plate !== newVehicleData.patente.toUpperCase());
+        if (rfidConflict) {
+            toast.error(`RFID "${cleanRfid}" ya asignado a ${rfidConflict.plate}`);
             return;
         }
 
@@ -547,6 +573,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 year: newVehicleData.anio,
                 insurance: newVehicleData.companiaSeguro,
                 type: newVehicleData.tipoVehiculo,
+                rfid_tag: newVehicleData.rfidTag.trim().toUpperCase() || null,
                 photos: compressedPhotos
             };
 
@@ -952,7 +979,10 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     const inputStyle = "bg-gray-950/40 border border-gray-800/60 rounded-lg px-2.5 py-1.5 text-sm text-white outline-none focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/5 transition-all w-full placeholder-gray-700/50 font-medium h-9 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
     const labelStyle = "block text-[10px] uppercase text-gray-500 font-bold mb-0.5 tracking-wider";
 
-    const canonDebts = debts.filter((d: any) => d.type === 'CANON');
+    // --- "Cliente Vacío" check: cocheras vacías → ocultar deudas CANON ---
+    const isEmptyClient = cocheras.length === 0;
+
+    const canonDebts = isEmptyClient ? [] : debts.filter((d: any) => d.type === 'CANON');
     const otherDebts = debts.filter((d: any) => d.type !== 'CANON');
     const manualDebtsPending = debts.filter((d: any) => d.status === 'PENDING' && d.type === 'MANUAL_MIGRATION');
     // Use remaining_amount for real pending balance (supports partial payments)
@@ -961,9 +991,15 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         const rem = Number(d.remaining_amount);
         return (typeof d.remaining_amount === 'number' && !isNaN(rem)) ? rem : Number(d.amount) || 0;
     };
-    const totalCanon = canonDebts.reduce((sum: number, d: any) => sum + getRemaining(d), 0);
+    const totalCanon = isEmptyClient ? 0 : canonDebts.reduce((sum: number, d: any) => sum + getRemaining(d), 0);
     const totalOther = otherDebts.reduce((sum: number, d: any) => sum + getRemaining(d), 0);
     const hasPartialPayments = debts.some((d: any) => (d.amount_paid || 0) > 0 && d.status === 'PENDING');
+
+    // Deudas visibles: si el cliente está vacío, solo muestra las que NO son CANON
+    const visibleDebts = isEmptyClient
+        ? debts.filter((d: any) => d.type !== 'CANON')
+        : debts;
+    const visibleTotal = visibleDebts.reduce((sum, d) => sum + getRemaining(d), 0);
 
 
     return (
@@ -1010,8 +1046,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                     </div>
                 </div>
 
-                {/* DEUDA BANNER PENDING */}
-                {debts.length > 0 && (
+                {/* DEUDA BANNER PENDING — Solo si hay deudas visibles */}
+                {visibleDebts.length > 0 && (
                     <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-6 backdrop-blur-sm flex flex-col md:flex-row items-center justify-between animate-in fade-in duration-500 gap-4">
                         <div className="flex items-center gap-4 flex-1">
                             <div className="p-3 bg-red-500/20 rounded-full">
@@ -1033,7 +1069,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                         <div className="text-right flex flex-col items-end gap-3 text-red-400 font-bold">
                             <div className="text-right">
                                 <span className="block text-2xl font-mono text-red-400 font-bold">
-                                    ${debts.reduce((sum, d) => sum + getRemaining(d), 0).toLocaleString()}
+                                    ${visibleTotal.toLocaleString()}
                                 </span>
                                 {(totalCanon > 0 && totalOther > 0) && (
                                     <div className="text-xs text-gray-400/90 font-medium mb-1.5 flex items-center justify-end gap-2">

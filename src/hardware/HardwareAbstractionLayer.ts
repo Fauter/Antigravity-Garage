@@ -20,6 +20,26 @@ export interface HardwareEntryEvent {
     source: 'ANPR' | 'MANUAL' | 'SIMULATOR';
 }
 
+/** Evento emitido cuando el ESP32 escanea una tarjeta RFID */
+export interface RfidScanEvent {
+    rfidCode: string;           // Tag UID (ej. 'A1B2C3D4')
+    timestamp: string;          // ISO string
+    source: 'ESP32' | 'SIMULATOR';
+}
+
+/** Resultado de autorización RFID */
+export interface RfidAuthResult {
+    authorized: boolean;
+    reason: 'PAID' | 'SUBSCRIBER' | 'NOT_FOUND' | 'NOT_PAID' | 'ALREADY_USED' | 'ERROR';
+    rfidCode: string;
+    plate?: string;
+    stayId?: string;
+    error?: string;
+}
+
+/** Estado del sensor anti-aplastamiento (radar LD2450) */
+export type SensorOccupancyState = 'OCCUPIED' | 'CLEAR' | 'UNKNOWN';
+
 /** Resultado de la autorización de salida */
 export interface BarrierAuthResult {
     authorized: boolean;
@@ -65,6 +85,12 @@ export interface IBarrierDriver extends IDriver {
 
     /** Subscribe to vehicle detection (loop detector, sensor, etc.) */
     onVehicleDetected(callback: (type: 'ENTRY' | 'EXIT') => void): void;
+
+    /** Subscribe to RFID tag scanned at exit barrier (bidirectional from ESP32) */
+    onRfidScanned(callback: (event: RfidScanEvent) => void): void;
+
+    /** Subscribe to anti-crush sensor state changes (radar LD2450 telemetry) */
+    onSensorStateChanged(callback: (state: SensorOccupancyState) => void): void;
 }
 
 // ── Camera / ANPR Driver ─────────────────────────────────────────────
@@ -99,6 +125,9 @@ export interface HardwareStatus {
     scannerOnline: boolean;
     driverType: string;
     lastEventAt: string | null;     // ISO string
+    sensorState: SensorOccupancyState;  // Anti-crush radar state
+    entryBarrierState: 'OPEN' | 'CLOSED' | 'UNKNOWN';  // Physical barrier arm position
+    exitBarrierState: 'OPEN' | 'CLOSED' | 'UNKNOWN';
 }
 
 // ── Hardware Configuration ───────────────────────────────────────────

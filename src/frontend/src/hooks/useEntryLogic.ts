@@ -67,16 +67,10 @@ export const useEntryLogic = () => {
                 description: 'Entrada autorizada correctamente'
             });
 
-            // ── Open physical entry barrier via ESP32 ──
-            try {
-                if (window.electronAPI?.openBarrier) {
-                    console.log('[useEntryLogic] Sending OPEN:ENTRY to barrier...');
-                    await window.electronAPI.openBarrier('ENTRY');
-                    console.log('[useEntryLogic] ✅ Entry barrier opened');
-                }
-            } catch (barrierErr) {
-                console.warn('[useEntryLogic] ⚠️ Barrier open failed (entry still processed):', barrierErr);
-            }
+            // NOTE: Entry registration does NOT open the physical barrier.
+            // The barrier opens automatically when the hardware detects the vehicle
+            // (via HardwareOrchestrator → hw:entry-detected → openBarrier('ENTRY')).
+            // This decouples the operator's registration action from the physical gate.
 
             // TICKET
             PrinterService.printEntryTicket(data);

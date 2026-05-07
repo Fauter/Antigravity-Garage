@@ -547,7 +547,7 @@ export class SyncService {
                 : (item.is_subscriber !== undefined ? item.is_subscriber : false);
             delete base.isSubscriber; // Prevent PGRST204 (Extra column)
 
-            const allowedVehicleFields = ['id', 'garage_id', 'owner_id', 'plate', 'type', 'brand', 'model', 'color', 'year', 'insurance', 'is_subscriber', 'vehicle_type_id', 'customer_id', 'created_at', 'updated_at'];
+            const allowedVehicleFields = ['id', 'garage_id', 'owner_id', 'plate', 'type', 'brand', 'model', 'color', 'year', 'insurance', 'is_subscriber', 'vehicle_type_id', 'customer_id', 'rfid_tag', 'created_at', 'updated_at'];
             Object.keys(base).forEach(key => {
                 if (!allowedVehicleFields.includes(key)) {
                     delete base[key];

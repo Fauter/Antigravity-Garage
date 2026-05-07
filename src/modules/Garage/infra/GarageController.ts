@@ -563,6 +563,7 @@ export class GarageController {
                     color: vehicleData.color,
                     year: vehicleData.year || vehicleData.anio, // Frontend might send 'anio'
                     insurance: vehicleData.insurance || vehicleData.seguro, // Frontend might send 'seguro'
+                    rfid_tag: vehicleData.rfid_tag || null, // RFID Tag from frontend
                     isSubscriber: true, // Created via Subscription -> True
                     createdAt: new Date(),
                     updatedAt: new Date()
@@ -571,6 +572,7 @@ export class GarageController {
                 createdVehicleId = vehicle!.id; // Track for rollback
             } else {
                 // Update existing vehicle metadata if provided (User requested robustness)
+                // RFID IMMUTABILITY: VehicleRepository.save() handles preservation of existing tags.
                 const updatedVehicle = {
                     ...vehicle,
                     brand: vehicleData.brand || vehicle.brand,
@@ -578,6 +580,7 @@ export class GarageController {
                     color: vehicleData.color || vehicle.color,
                     year: (vehicleData.year || vehicleData.anio) || vehicle.year,
                     insurance: (vehicleData.insurance || vehicleData.seguro) || vehicle.insurance,
+                    rfid_tag: vehicleData.rfid_tag || (vehicle as any).rfid_tag || null, // Preserve or update RFID
                     isSubscriber: true, // Mark as subscriber on new sub
                     updatedAt: new Date()
                 };
