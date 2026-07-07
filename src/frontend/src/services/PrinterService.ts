@@ -1,6 +1,13 @@
 
 import { toast } from 'sonner';
 import JsBarcode from 'jsbarcode';
+import { applyDithering } from '../utils/dithering';
+
+// ── Constantes de layout para impresión térmica ──────────────────────────
+// Separador visual entre copias de un mismo ticket (negro puro para térmicas monocromáticas)
+const TICKET_SEPARATOR = '<div style="border-top: 1px dashed #000; margin: 6px 0;"></div>';
+// Espacio para corte de papel — se agrega SOLO al final del bloque HTML consolidado
+const CUT_SPACER = '<div style="height: 30px;"></div>';
 
 // Helper to resolve garage config
 const getGarageConfig = () => {
@@ -19,9 +26,9 @@ const getGarageConfig = () => {
 
 export const PrinterService = {
     getLegalFooter: () => `
-        <div style="margin-top: 10px; text-align: center; font-size: 12px; line-height: 1.2;">
-            <div>Aceptación Contrato (Adm.)</div>
-            <div>Jurisdicción: Tribunales CABA</div>
+        <div style="margin-top: 5px; text-align: center; font-size: 9px; line-height: 1.2;">
+            <div style="white-space: nowrap;">Aceptación Contrato (Adm.)</div>
+            <div style="white-space: nowrap;">Jurisdicción: Tribunales CABA</div>
         </div>
     `,
 
@@ -46,7 +53,7 @@ export const PrinterService = {
         }
     },
 
-    printEntryTicket: (stay: any) => {
+    printEntryTicket: async (stay: any) => {
         const config = getGarageConfig();
         const shortId = stay.ticket_code ? stay.ticket_code : (stay.id ? stay.id.slice(0, 8).toUpperCase() : 'UNKNOWN');
         const entryTime = new Date(stay.entryTime || stay.entry_time || Date.now());
@@ -56,11 +63,42 @@ export const PrinterService = {
         });
 
         const barcodeDataUrl = PrinterService.generateBase64Barcode(shortId, config.paperWidth);
+        
+        let photoHtml = '';
+        if (stay.entry_photo_path) {
+            let base64ToDither = stay.entry_photo_path;
+
+            // Si es una ruta de disco, convertirla usando el main process
+            if (!base64ToDither.startsWith('data:image')) {
+                try {
+                    const electronAPI = (window as any).electronAPI;
+                    if (electronAPI?.readFileBase64) {
+                        base64ToDither = await electronAPI.readFileBase64(base64ToDither);
+                    }
+                } catch (err) {
+                    console.error("Error leyendo imagen del disco vía IPC:", err);
+                }
+            }
+
+            if (base64ToDither && base64ToDither.startsWith('data:image')) {
+                try {
+                    // Pre-procesar imagen con Dithering para la ticketera (monocromo 1-bit real)
+                    const ditheredBase64 = await applyDithering(base64ToDither, 380);
+                    photoHtml = `
+                    <div style="margin: 10px 0; text-align: center;">
+                        <img src="${ditheredBase64}" style="width: 100%; max-width: 44mm; height: auto; object-fit: contain; border-radius: 4px; display: block; margin: 0 auto;" />
+                    </div>
+                    `;
+                } catch (err) {
+                    console.error("Error aplicando Dithering a la imagen de entrada", err);
+                }
+            }
+        }
 
         const content = `
             <div style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
                 
-                <div style="margin-bottom: 10px; margin-top: 10px;">
+                <div style="margin-bottom: 5px; margin-top: 5px;">
                     <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
                         [X]
                     </div>
@@ -72,22 +110,22 @@ export const PrinterService = {
                     <div style="font-size: 12px; font-family: sans-serif; margin-top: 2px;">${config.address}</div>
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
                 <div style="margin-bottom: 5px;">
                     <div style="font-size: 11px;">Ingreso: <b>${shortId}</b></div>
                 </div>
 
                 ${barcodeDataUrl ? `
-                <div style="margin: 10px 0;">
+                <div style="margin: 5px 0;">
                     <img src="${barcodeDataUrl}" style="max-width: 100%; height: auto; display: block; margin: 0 auto;" />
                 </div>
                 ` : ''}
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
-                <div style="margin: 10px 0;">
-                    <table style="width: 100%; font-size: 12px; line-height: 1.4; font-family: 'Courier New', Courier, monospace;">
+                <div style="margin: 5px 0;">
+                    <table style="width: 100%; font-size: 12px; line-height: 1.2; font-family: 'Courier New', Courier, monospace;">
                         <tr>
                             <td style="text-align: left;">Ingreso:</td>
                             <td style="text-align: right; font-weight: bold;">${formattedDate}</td>
@@ -99,31 +137,161 @@ export const PrinterService = {
                     </table>
                 </div>
 
-                <div style="margin: 15px 0;">
+                <div style="margin: 8px 0;">
                     <div style="font-size: 11px; margin-bottom: 2px;">PATENTE</div>
                     <div style="font-size: 28px; font-weight: bold; letter-spacing: 1px;">${stay.plate}</div>
                 </div>
 
-                <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
+                ${photoHtml}
 
-                <div style="font-size: 10px; line-height: 1.3; margin-top: 10px;">
+                <div style="border-bottom: 1px solid #000; margin: 4px 0;"></div>
+
+                <div style="font-size: 9px; line-height: 1.2; margin-top: 5px; white-space: nowrap;">
                     <div>Conserve este ticket para retirar su vehículo.</div>
                     <div>La empresa no se responsabiliza por objetos</div>
                     <div>dejados en el interior del mismo.</div>
-                    <div style="font-weight: bold; margin-top: 5px;">¡Gracias por su visita!</div>
+                    <div style="font-weight: bold; margin-top: 5px; font-size: 10px;">¡Gracias por su visita!</div>
                 </div>
                 
                 ${PrinterService.getLegalFooter()}
 
-                <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
+                <div style="font-size: 10px; font-weight: bold; margin-top: 5px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
-                <!-- Spacing for printer cut -->
-                <div style="height: 30px;"></div>
             </div>
         `;
-        printHtml(content, config.paperWidth);
+        printHtml(content + CUT_SPACER, config.paperWidth);
         toast.info(`🖨️ Imprimiendo Ticket Entrada: ${stay.plate}`);
+    },
+
+    printPrepaidEntryTicket: async (stay: any, movement: any, tariffName: string) => {
+        const config = getGarageConfig();
+        const shortId = stay.ticket_code ? stay.ticket_code : (stay.id ? stay.id.slice(0, 8).toUpperCase() : 'UNKNOWN');
+        const entryTime = new Date(stay.entryTime || stay.entry_time || Date.now());
+        const formattedDate = entryTime.toLocaleString('es-AR', {
+            day: '2-digit', month: '2-digit', year: 'numeric',
+            hour: '2-digit', minute: '2-digit', hour12: false
+        });
+
+        const prepaidUntil = new Date(stay.prepaidUntil);
+        const formattedUntil = prepaidUntil.toLocaleString('es-AR', {
+            hour: '2-digit', minute: '2-digit', hour12: false
+        });
+
+        const barcodeDataUrl = PrinterService.generateBase64Barcode(shortId, config.paperWidth);
+        
+        let photoHtml = '';
+        if (stay.entry_photo_path) {
+            let base64ToDither = stay.entry_photo_path;
+
+            // Si es una ruta de disco, convertirla usando el main process
+            if (!base64ToDither.startsWith('data:image')) {
+                try {
+                    const electronAPI = (window as any).electronAPI;
+                    if (electronAPI?.readFileBase64) {
+                        base64ToDither = await electronAPI.readFileBase64(base64ToDither);
+                    }
+                } catch (err) {
+                    console.error("Error leyendo imagen del disco vía IPC:", err);
+                }
+            }
+
+            if (base64ToDither && base64ToDither.startsWith('data:image')) {
+                try {
+                    // Pre-procesar imagen con Dithering para la ticketera (monocromo 1-bit real)
+                    const ditheredBase64 = await applyDithering(base64ToDither, 380);
+                    photoHtml = `
+                    <div style="margin: 10px 0; text-align: center;">
+                        <img src="${ditheredBase64}" style="width: 100%; max-width: 44mm; height: auto; object-fit: contain; border-radius: 4px; display: block; margin: 0 auto;" />
+                    </div>
+                    `;
+                } catch (err) {
+                    console.error("Error aplicando Dithering a la imagen de entrada", err);
+                }
+            }
+        }
+
+        const content = `
+            <div style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
+                
+                <div style="margin-bottom: 5px; margin-top: 5px;">
+                    <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
+                        [X]
+                    </div>
+                    <div style="font-size: 10px; font-weight: bold;">DOCUMENTO NO VÁLIDO COMO FACTURA</div>
+                </div>
+
+                <div style="margin-bottom: 5px;">
+                    <h2 style="margin: 0; font-size: 18px; font-weight: bold; letter-spacing: -0.5px; text-transform: uppercase;">${config.name}</h2>
+                    <div style="font-size: 12px; font-family: sans-serif; margin-top: 2px;">${config.address}</div>
+                </div>
+
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
+
+                <div style="margin-bottom: 5px;">
+                    <h2 style="margin: 0; font-size: 16px; font-weight: bold; letter-spacing: 0.5px; text-transform: uppercase;">PAGO ANTICIPADO</h2>
+                    <div style="font-size: 11px;">Ticket: <b>${shortId}</b></div>
+                </div>
+
+                ${barcodeDataUrl ? `
+                <div style="margin: 5px 0;">
+                    <img src="${barcodeDataUrl}" style="max-width: 100%; height: auto; display: block; margin: 0 auto;" />
+                </div>
+                ` : ''}
+
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
+
+                <div style="margin: 5px 0;">
+                    <table style="width: 100%; font-size: 12px; line-height: 1.2; font-family: 'Courier New', Courier, monospace;">
+                        <tr>
+                            <td style="text-align: left;">Ingreso:</td>
+                            <td style="text-align: right; font-weight: bold;">${formattedDate}</td>
+                        </tr>
+                        <tr>
+                            <td style="text-align: left;">Tipo:</td>
+                            <td style="text-align: right; font-weight: bold;">${stay.vehicleType || 'Auto'}</td>
+                        </tr>
+                        <tr>
+                            <td style="text-align: left;">Tarifa:</td>
+                            <td style="text-align: right; font-weight: bold;">${tariffName}</td>
+                        </tr>
+                        <tr>
+                            <td style="text-align: left;">Cobro:</td>
+                            <td style="text-align: right; font-weight: bold;">$${movement.amount} (${movement.paymentMethod})</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <div style="margin: 8px 0;">
+                    <div style="font-size: 11px; margin-bottom: 2px;">PATENTE</div>
+                    <div style="font-size: 28px; font-weight: bold; letter-spacing: 1px;">${stay.plate}</div>
+                </div>
+
+                <div style="border: 2px dashed #000; padding: 4px; margin: 8px 0;">
+                    <div style="font-size: 11px; font-weight: bold;">VÁLIDO HASTA:</div>
+                    <div style="font-size: 24px; font-weight: bold; margin-top: 2px;">${formattedUntil}</div>
+                </div>
+
+                ${photoHtml}
+
+                <div style="border-bottom: 1px solid #000; margin: 4px 0;"></div>
+
+                <div style="font-size: 9px; line-height: 1.2; margin-top: 5px; white-space: nowrap;">
+                    <div>Conserve este ticket para retirar su vehículo.</div>
+                    <div>La empresa no se responsabiliza por objetos</div>
+                    <div>dejados en el interior del mismo.</div>
+                    <div style="font-weight: bold; margin-top: 5px; font-size: 10px;">¡Gracias por su visita!</div>
+                </div>
+                
+                ${PrinterService.getLegalFooter()}
+
+                <div style="font-size: 10px; font-weight: bold; margin-top: 5px; letter-spacing: 2px;">
+                    XXXXXXXXXXXXXXXXX
+                </div>
+            </div>
+        `;
+        printHtml(content + CUT_SPACER, config.paperWidth);
+        toast.info(`🖨️ Imprimiendo Anticipado: ${stay.plate}`);
     },
 
     printExitTicket: (stay: any, movement: any) => {
@@ -144,10 +312,10 @@ export const PrinterService = {
         const paymentMethod = movement ? movement.paymentMethod : 'N/A';
         const operatorName = movement ? (movement.operator || 'Sys') : 'Sys';
 
-        const generateTicket = (title: string, showTotal: boolean = true) => `
-            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
+        const generateTicket = (showTotal: boolean = true) => `
+            <div style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
                 
-                <div style="margin-bottom: 10px; margin-top: 10px;">
+                <div style="margin-bottom: 5px; margin-top: 5px;">
                     <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
                         [X]
                     </div>
@@ -159,24 +327,24 @@ export const PrinterService = {
                     <div style="font-size: 12px; font-family: sans-serif; margin-top: 2px;">${config.address}</div>
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
                 <div style="margin-bottom: 5px;">
                     ${movement?.receipt_number ? `<div style="font-size: 11px; margin-top: 2px;">Ticket: <b>${movement.receipt_number}</b></div>` : ''}
                     <div style="font-size: 11px; margin-top: 1px;">Ingreso: <b>${shortId}</b></div>
-                    <div style="font-size: 14px; font-weight: bold; margin-top: 4px;">${title}</div>
+                    <div style="font-size: 14px; font-weight: bold; margin-top: 4px;">${ticketType}</div>
                 </div>
 
                 ${barcodeDataUrl ? `
-                <div style="margin: 10px 0;">
+                <div style="margin: 5px 0;">
                     <img src="${barcodeDataUrl}" style="max-width: 100%; height: auto; display: block; margin: 0 auto;" />
                 </div>
                 ` : ''}
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
-                <div style="margin: 10px 0;">
-                    <table style="width: 100%; font-size: 12px; line-height: 1.4; font-family: 'Courier New', Courier, monospace;">
+                <div style="margin: 5px 0;">
+                    <table style="width: 100%; font-size: 12px; line-height: 1.2; font-family: 'Courier New', Courier, monospace;">
                         <tr>
                             <td style="text-align: left;">Ingreso:</td>
                             <td style="text-align: right; font-weight: bold;">${formattedEntry}</td>
@@ -192,20 +360,20 @@ export const PrinterService = {
                     </table>
                 </div>
 
-                <div style="margin: 15px 0;">
+                <div style="margin: 8px 0;">
                     <div style="font-size: 11px; margin-bottom: 2px;">PATENTE</div>
                     <div style="font-size: 28px; font-weight: bold; letter-spacing: 1px;">${stay.plate}</div>
                 </div>
 
-                <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px solid #000; margin: 4px 0;"></div>
 
                 ${showTotal ? `
-                <div style="margin: 15px 0;">
+                <div style="margin: 8px 0;">
                     <div style="font-size: 14px; font-weight: bold;">TOTAL</div>
                     <div style="font-size: 32px; font-weight: bold; letter-spacing: -1px;">$${Number(totalAmount).toFixed(2)}</div>
                 </div>
                 
-                <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px solid #000; margin: 4px 0;"></div>
 
                 <table style="width: 100%; font-size: 11px; line-height: 1.3; font-family: 'Courier New', Courier, monospace;">
                     <tr>
@@ -219,25 +387,23 @@ export const PrinterService = {
                 </table>
                 ` : ''}
 
-                <div style="font-size: 10px; line-height: 1.3; margin-top: 15px;">
+                <div style="font-size: 10px; line-height: 1.3; margin-top: 8px; white-space: nowrap;">
                     <div>¡Gracias por su visita!</div>
                 </div>
                 
                 ${PrinterService.getLegalFooter()}
 
-                <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
+                <div style="font-size: 10px; font-weight: bold; margin-top: 5px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
-                <!-- Spacing for printer cut -->
-                <div style="height: 30px;"></div>
             </div>
         `;
 
-        const clientTicket = generateTicket(ticketType, true);
-        const controlTicket = generateTicket(ticketType === 'SALIDA - ABONADO' ? 'CONTROL - ABONADO' : 'CONTROL INTERNO', true);
+        const clientTicket = generateTicket(true);
+        const controlTicket = generateTicket(true);
 
-        // Print both sequentially
-        printHtml(clientTicket + controlTicket, config.paperWidth);
+        // Imprimir ambas copias con separador fino entre ellas y espacio de corte solo al final
+        printHtml(clientTicket + TICKET_SEPARATOR + controlTicket + CUT_SPACER, config.paperWidth);
 
         toast.info(`🖨️ Imprimiendo Tickets Salida (x2): ${stay.plate}`);
     },
@@ -254,8 +420,8 @@ export const PrinterService = {
         const ultimoDia = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
         const daysRemaining = (ultimoDia - now.getDate()) + 1;
 
-        const generateTicketHtml = (typeLabel: string) => `
-            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
+        const generateTicketHtml = () => `
+            <div style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
                 
                 <div style="margin-bottom: 5px; margin-top: 5px;">
                     <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px;">
@@ -268,19 +434,18 @@ export const PrinterService = {
                     <div style="font-size: 12px; font-family: sans-serif; margin-top: 2px;">${config.address}</div>
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
                 <div style="margin-bottom: 5px;">
                     <div style="font-size: 14px; font-weight: bold; letter-spacing: 1px;">COMPROBANTE ALTA</div>
-                    <div style="font-size: 12px; font-weight: bold; margin-top: 2px;">${typeLabel}</div>
                     ${data.ticket_code ? `<div style="font-size: 11px; margin-top: 2px;">Ticket: <b>${data.ticket_code}</b></div>` : ''}
                     <div style="font-size: 11px; margin-top: 2px;">ABONO MES</div>
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
                 <!-- SECCIÓN 1: IDENTIFICACIÓN -->
-                <div style="text-align: left; font-size: 12px; margin: 10px 0; line-height: 1.4;">
+                <div style="text-align: left; font-size: 12px; margin: 5px 0; line-height: 1.2;">
                     <div style="margin-bottom: 5px;">
                         <span style="font-size: 10px;">Fecha Alta:</span><br/>
                         <span style="font-weight: bold; margin-left: 10px;">${formattedDate}</span>
@@ -295,10 +460,10 @@ export const PrinterService = {
                     </div>
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
                 <!-- SECCIÓN 2: ECONÓMICA -->
-                <div style="text-align: left; font-size: 12px; margin: 10px 0; line-height: 1.4;">
+                <div style="text-align: left; font-size: 12px; margin: 5px 0; line-height: 1.2;">
                     <div style="margin-bottom: 5px;">
                         <span style="font-size: 10px;">Valor Mensual (Referencia):</span><br/>
                         <span style="font-weight: bold; margin-left: 10px;">$${data.basePriceDisplay}</span>
@@ -317,25 +482,25 @@ export const PrinterService = {
                     </div>
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
                 <!-- SECCIÓN 3: VEHÍCULO -->
-                <div style="text-align: left; font-size: 12px; margin: 10px 0; line-height: 1.4;">
+                <div style="text-align: left; font-size: 12px; margin: 5px 0; line-height: 1.2;">
                     <div style="margin-bottom: 5px;">
                         <span style="font-size: 10px;">Vehículo (${data.tipoVehiculo}):</span><br/>
                         <span style="font-weight: bold; margin-left: 10px;">${data.marca} ${data.modelo}</span>
                     </div>
                 </div>
 
-                <div style="margin: 8px 0; text-align: center;">
+                <div style="margin: 4px 0; text-align: center;">
                     <div style="font-size: 11px; margin-bottom: 2px;">PATENTE</div>
                     <div style="font-size: 28px; font-weight: bold; letter-spacing: 1px;">${data.patente}</div>
                 </div>
 
-                <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px solid #000; margin: 4px 0;"></div>
 
-                <div style="font-size: 10px; line-height: 1.3; margin-top: 5px;">
-                    <div style="font-weight: bold;">¡Gracias por confiar en nosotros!</div>
+                <div style="font-size: 9px; line-height: 1.2; margin-top: 5px; white-space: nowrap;">
+                    <div style="font-weight: bold; font-size: 10px;">¡Gracias por confiar en nosotros!</div>
                     <div style="margin-top: 3px;">Recuerde que la mensualidad</div>
                     <div>se paga del 1 al 10 de cada mes.</div>
                 </div>
@@ -345,15 +510,13 @@ export const PrinterService = {
                 <div style="font-size: 10px; font-weight: bold; margin-top: 5px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
-                <!-- Spacing for printer cut -->
-                <div style="height: 15px;"></div>
             </div>
         `;
 
-        const ticketOriginal = generateTicketHtml('ORIGINAL');
-        const ticketDuplicado = generateTicketHtml('DUPLICADO (CONTROL)');
+        const ticketOriginal = generateTicketHtml();
+        const ticketDuplicado = generateTicketHtml();
 
-        printHtml(ticketOriginal + ticketDuplicado, config.paperWidth);
+        printHtml(ticketOriginal + TICKET_SEPARATOR + ticketDuplicado + CUT_SPACER, config.paperWidth);
         toast.info(`🖨️ Imprimiendo Comprobantes Alta Abono (x2): ${data.patente}`);
     },
 
@@ -364,25 +527,24 @@ export const PrinterService = {
             hour: '2-digit', minute: '2-digit', hour12: false
         });
 
-        const generateRenewalHtml = (typeLabel: string) => `
-            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
+        const generateRenewalHtml = () => `
+            <div style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
                 
-                <div style="margin-bottom: 5px; margin-top: 10px;">
+                <div style="margin-bottom: 5px; margin-top: 5px;">
                     <h2 style="margin: 0; font-size: 16px; font-weight: bold; text-transform: uppercase;">${config.name}</h2>
                     <div style="font-size: 11px;">${config.address}</div>
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
                 <div style="margin-bottom: 5px;">
                     <div style="font-size: 14px; font-weight: bold; letter-spacing: 0.5px;">RENOVACIÓN DE ABONO</div>
-                    <div style="font-size: 12px; font-weight: bold; margin-top: 2px;">${typeLabel}</div>
                     ${data.ticket_code ? `<div style="font-size: 11px; margin-top: 2px;">Ticket: <b>${data.ticket_code}</b></div>` : ''}
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
-                <div style="text-align: left; font-size: 12px; margin: 10px 0; line-height: 1.4;">
+                <div style="text-align: left; font-size: 12px; margin: 5px 0; line-height: 1.2;">
                     <div style="margin-bottom: 3px;">
                         <span style="font-weight: bold;">TITULAR:</span> ${String(data.titular).toUpperCase()}
                     </div>
@@ -397,20 +559,20 @@ export const PrinterService = {
                     </div>
                 </div>
 
-                <div style="margin: 15px 0; border: 2px solid #000; padding: 8px; text-align: center;">
+                <div style="margin: 8px 0; border: 2px solid #000; padding: 8px; text-align: center;">
                     <div style="font-size: 11px; font-weight: bold; margin-bottom: 2px;">MONTO PAGADO:</div>
                     <div style="font-size: 22px; font-weight: bold;">$${Number(data.monto).toLocaleString('es-AR')}</div>
                 </div>
 
-                <div style="text-align: left; font-size: 11px; margin: 10px 0; line-height: 1.3;">
+                <div style="text-align: left; font-size: 11px; margin: 5px 0; line-height: 1.3;">
                     <div><span style="font-weight: bold;">FECHA:</span> ${formattedDate}</div>
                     <div><span style="font-weight: bold;">OPERADOR:</span> ${data.operador}</div>
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
-                <div style="font-size: 10px; line-height: 1.3; margin-top: 5px;">
-                    <div style="font-weight: bold; text-transform: uppercase;">Comprobante de Renovación</div>
+                <div style="font-size: 9px; line-height: 1.2; margin-top: 5px; white-space: nowrap;">
+                    <div style="font-weight: bold; text-transform: uppercase; font-size: 10px;">Comprobante de Renovación</div>
                     <div style="margin-top: 2px;">CONSERVE ESTE TICKET</div>
                 </div>
                 
@@ -419,15 +581,13 @@ export const PrinterService = {
                 <div style="font-size: 10px; font-weight: bold; margin-top: 5px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
-                <!-- Spacing for printer cut -->
-                <div style="height: 15px;"></div>
             </div>
         `;
 
-        const original = generateRenewalHtml('ORIGINAL');
-        const duplicado = generateRenewalHtml('DUPLICADO');
+        const original = generateRenewalHtml();
+        const duplicado = generateRenewalHtml();
 
-        printHtml(original + duplicado, config.paperWidth);
+        printHtml(original + TICKET_SEPARATOR + duplicado + CUT_SPACER, config.paperWidth);
         toast.info(`🖨️ Imprimiendo Comprobante Renovación (x2): ${data.titular}`);
     },
 
@@ -438,8 +598,8 @@ export const PrinterService = {
             hour: '2-digit', minute: '2-digit', hour12: false
         });
 
-        const generateUpgradeHtml = (typeLabel: string) => `
-            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
+        const generateUpgradeHtml = () => `
+            <div style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
                 
                 <div style="margin-bottom: 5px; margin-top: 5px;">
                     <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px;">
@@ -453,19 +613,18 @@ export const PrinterService = {
                     <div style="font-size: 11px;">${config.address}</div>
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
                 <div style="margin-bottom: 5px;">
                     <div style="font-size: 13px; font-weight: bold; letter-spacing: 0.5px;">DIFERENCIA POR CAMBIO</div>
                     <div style="font-size: 13px; font-weight: bold; letter-spacing: 0.5px;">DE CATEGORÍA</div>
-                    <div style="font-size: 12px; font-weight: bold; margin-top: 2px;">${typeLabel}</div>
                     ${data.ticket_code ? `<div style="font-size: 11px; margin-top: 2px;">Ticket: <b>${data.ticket_code}</b></div>` : ''}
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
                 <!-- SECCIÓN 1: IDENTIFICACIÓN -->
-                <div style="text-align: left; font-size: 12px; margin: 10px 0; line-height: 1.4;">
+                <div style="text-align: left; font-size: 12px; margin: 5px 0; line-height: 1.2;">
                     <div style="margin-bottom: 3px;">
                         <span style="font-weight: bold;">TITULAR:</span> ${String(data.titular).toUpperCase()}
                     </div>
@@ -474,15 +633,15 @@ export const PrinterService = {
                     </div>
                 </div>
 
-                <div style="margin: 8px 0; text-align: center;">
+                <div style="margin: 4px 0; text-align: center;">
                     <div style="font-size: 11px; margin-bottom: 2px;">PATENTE</div>
                     <div style="font-size: 28px; font-weight: bold; letter-spacing: 1px;">${data.patente}</div>
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
                 <!-- SECCIÓN 2: ECONÓMICA -->
-                <div style="text-align: left; font-size: 12px; margin: 10px 0; line-height: 1.4;">
+                <div style="text-align: left; font-size: 12px; margin: 5px 0; line-height: 1.2;">
                     <div style="margin-bottom: 5px;">
                         <span style="font-size: 10px;">Precio Anterior:</span><br/>
                         <span style="font-weight: bold; margin-left: 10px;">$${Number(data.precioAnterior).toLocaleString('es-AR')}</span>
@@ -502,17 +661,17 @@ export const PrinterService = {
                     </div>
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
-                <div style="text-align: left; font-size: 11px; margin: 10px 0; line-height: 1.3;">
+                <div style="text-align: left; font-size: 11px; margin: 5px 0; line-height: 1.3;">
                     <div><span style="font-weight: bold;">FECHA:</span> ${formattedDate}</div>
                     <div><span style="font-weight: bold;">OPERADOR:</span> ${data.operador}</div>
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
-                <div style="font-size: 10px; line-height: 1.3; margin-top: 5px;">
-                    <div style="font-weight: bold; text-transform: uppercase;">Comprobante de Upgrade</div>
+                <div style="font-size: 9px; line-height: 1.2; margin-top: 5px; white-space: nowrap;">
+                    <div style="font-weight: bold; text-transform: uppercase; font-size: 10px;">Comprobante de Upgrade</div>
                     <div style="margin-top: 2px;">CONSERVE ESTE TICKET</div>
                 </div>
                 
@@ -521,25 +680,23 @@ export const PrinterService = {
                 <div style="font-size: 10px; font-weight: bold; margin-top: 5px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
-                <!-- Spacing for printer cut -->
-                <div style="height: 15px;"></div>
             </div>
         `;
 
-        const original = generateUpgradeHtml('ORIGINAL');
-        const duplicado = generateUpgradeHtml('DUPLICADO (CONTROL)');
+        const original = generateUpgradeHtml();
+        const duplicado = generateUpgradeHtml();
 
-        printHtml(original + duplicado, config.paperWidth);
+        printHtml(original + TICKET_SEPARATOR + duplicado + CUT_SPACER, config.paperWidth);
         toast.info(`🖨️ Imprimiendo Comprobante Upgrade (x2): ${data.patente}`);
     },
 
     printPartialCloseTicket: (data: any) => {
         const config = getGarageConfig();
 
-        const generateTicket = (title: string) => `
-            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
+        const generateTicket = () => `
+            <div style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
                 
-                <div style="margin-bottom: 10px; margin-top: 10px;">
+                <div style="margin-bottom: 5px; margin-top: 5px;">
                     <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
                         [X]
                     </div>
@@ -551,17 +708,16 @@ export const PrinterService = {
                     <div style="font-size: 12px; font-family: sans-serif; margin-top: 2px;">${config.address}</div>
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
                 <div style="margin-bottom: 5px;">
-                    <div style="font-size: 11px; margin-top: 2px;">${title}</div>
                     <div style="font-size: 14px; font-weight: bold; margin-top: 3px;">RETIRO PARCIAL</div>
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
-                <div style="margin: 10px 0;">
-                    <table style="width: 100%; font-size: 12px; line-height: 1.4; font-family: 'Courier New', Courier, monospace;">
+                <div style="margin: 5px 0;">
+                    <table style="width: 100%; font-size: 12px; line-height: 1.2; font-family: 'Courier New', Courier, monospace;">
                         <tr>
                             <td style="text-align: left;">Fecha:</td>
                             <td style="text-align: right; font-weight: bold;">${new Date(data.timestamp).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}</td>
@@ -583,48 +739,44 @@ export const PrinterService = {
                     </table>
                 </div>
 
-                <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px solid #000; margin: 4px 0;"></div>
 
-                <div style="margin: 15px 0;">
+                <div style="margin: 8px 0 12px 0;">
                     <div style="font-size: 14px; font-weight: bold;">TOTAL RETIRADO</div>
                     <div style="font-size: 32px; font-weight: bold; letter-spacing: -1px;">$${Number(data.partialAmount).toLocaleString('es-AR')}</div>
                 </div>
-                
-                <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
 
-                <div style="text-align: center; margin-top: 20px;">
+                <div style="text-align: center; margin-top: 12px;">
                     <div style="border-bottom: 1px solid #000; width: 80%; margin: 0 auto;"></div>
                     <div style="font-size: 11px; margin-top: 5px;">Firma de quien recibe</div>
                 </div>
 
-                <div style="font-size: 10px; line-height: 1.3; margin-top: 15px;">
+                <div style="font-size: 10px; line-height: 1.3; margin-top: 8px; white-space: nowrap;">
                     <div>Retiro parcial de caja</div>
                 </div>
                 
                 ${PrinterService.getLegalFooter()}
 
-                <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
+                <div style="font-size: 10px; font-weight: bold; margin-top: 5px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
-                <!-- Spacing for printer cut -->
-                <div style="height: 30px;"></div>
             </div>
         `;
 
-        const original = generateTicket('ORIGINAL');
-        const duplicado = generateTicket('DUPLICADO');
+        const original = generateTicket();
+        const duplicado = generateTicket();
 
-        printHtml(original + duplicado, config.paperWidth);
+        printHtml(original + TICKET_SEPARATOR + duplicado + CUT_SPACER, config.paperWidth);
         toast.info('🖨️ Imprimiendo Retiro Parcial');
     },
 
     printShiftCloseTicket: (data: any) => {
         const config = getGarageConfig();
 
-        const generateTicket = (title: string) => `
-            <div class="page-break" style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
+        const generateTicket = () => `
+            <div style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
                 
-                <div style="margin-bottom: 10px; margin-top: 10px;">
+                <div style="margin-bottom: 5px; margin-top: 5px;">
                     <div style="border: 2px solid #000; display: inline-block; padding: 2px 8px; font-weight: bold; font-size: 14px; margin-bottom: 5px;">
                         [X]
                     </div>
@@ -636,17 +788,16 @@ export const PrinterService = {
                     <div style="font-size: 12px; font-family: sans-serif; margin-top: 2px;">${config.address}</div>
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
                 <div style="margin-bottom: 5px;">
-                    <div style="font-size: 11px; margin-top: 2px;">${title}</div>
                     <div style="font-size: 14px; font-weight: bold; margin-top: 3px;">CIERRE DE CAJA FINAL</div>
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
-                <div style="margin: 10px 0;">
-                    <table style="width: 100%; font-size: 12px; line-height: 1.4; font-family: 'Courier New', Courier, monospace;">
+                <div style="margin: 5px 0;">
+                    <table style="width: 100%; font-size: 12px; line-height: 1.2; font-family: 'Courier New', Courier, monospace;">
                         <tr>
                             <td style="text-align: left;">Fecha:</td>
                             <td style="text-align: right; font-weight: bold;">${new Date(data.timestamp).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}</td>
@@ -658,10 +809,10 @@ export const PrinterService = {
                     </table>
                 </div>
 
-                <div style="border-bottom: 1px dashed #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
-                <div style="margin: 10px 0;">
-                    <table style="width: 100%; font-size: 12px; line-height: 1.4; font-family: 'Courier New', Courier, monospace;">
+                <div style="margin: 5px 0;">
+                    <table style="width: 100%; font-size: 12px; line-height: 1.2; font-family: 'Courier New', Courier, monospace;">
                         <tr>
                             <td style="text-align: left;">Ef. Esperado:</td>
                             <td style="text-align: right; font-weight: bold;">$${Number(data.total).toLocaleString('es-AR')}</td>
@@ -681,75 +832,94 @@ export const PrinterService = {
                     </table>
                 </div>
 
-                <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
+                <div style="border-bottom: 1px solid #000; margin: 4px 0;"></div>
 
-                <div style="margin: 15px 0;">
+                <div style="margin: 8px 0 12px 0;">
                     <div style="font-size: 14px; font-weight: bold;">MONTO RENDIDO</div>
                     <div style="font-size: 32px; font-weight: bold; letter-spacing: -1px;">$${Number(data.renderedAmount).toLocaleString('es-AR')}</div>
                 </div>
-                
-                <div style="border-bottom: 1px solid #000; margin: 8px 0;"></div>
 
-                <div style="text-align: center; margin-top: 20px;">
+                <div style="text-align: center; margin-top: 12px;">
                     <div style="border-bottom: 1px solid #000; width: 80%; margin: 0 auto;"></div>
                     <div style="font-size: 11px; margin-top: 5px;">Firma del Operador</div>
                 </div>
 
-                <div style="font-size: 10px; line-height: 1.3; margin-top: 15px;">
+                <div style="font-size: 10px; line-height: 1.3; margin-top: 8px; white-space: nowrap;">
                     <div>Cierre de turno</div>
                 </div>
                 
                 ${PrinterService.getLegalFooter()}
 
-                <div style="font-size: 10px; font-weight: bold; margin-top: 10px; letter-spacing: 2px;">
+                <div style="font-size: 10px; font-weight: bold; margin-top: 5px; letter-spacing: 2px;">
                     XXXXXXXXXXXXXXXXX
                 </div>
-                <!-- Spacing for printer cut -->
-                <div style="height: 30px;"></div>
             </div>
         `;
 
-        const original = generateTicket('ORIGINAL');
-        const duplicado = generateTicket('DUPLICADO');
+        // Cierre de caja: una sola copia (reporte interno, no requiere duplicado)
+        const ticket = generateTicket();
 
-        printHtml(original + duplicado, config.paperWidth);
+        printHtml(ticket + CUT_SPACER, config.paperWidth);
         toast.info('🖨️ Imprimiendo Cierre de Caja Final');
     }
 };
 
+// ── Build Full HTML Document ─────────────────────────────────────────────
+// Envuelve el HTML de tickets en un documento completo con CSS optimizado
+// para impresión térmica, centrado correcto en 58mm y 80mm, y sin page-breaks.
 const buildFullHtml = (html: string, paperWidth: number): string => {
     const is80 = paperWidth === 80;
-    const layoutWidth = is80 ? '100%' : '48mm';
-    const baseFontSize = is80 ? '16px' : '12px'; // Proporcional para 80mm via calc()
 
-    // Reemplazamos los widths fijos de 48mm por 100% (el contenedor dictará el límite real)
-    let processedHtml = html.replace(/width:\s*48mm;/g, 'width: 100%;');
+    // ── Hard-Offset: Centrado anti-cropping para 80mm ───────────────────
+    // Los drivers POS genéricos aplican "Whitespace Cropping" (recorte de
+    // bounding box): descartan todo margen CSS puro (margin, auto-centering)
+    // porque el raster resultante es solo espacio blanco sin píxeles.
+    //
+    // Solución: forzar un desplazamiento físico que ocupe píxeles reales
+    // en el bitmap rasterizado, haciéndolo invisible al ojo pero opaco
+    // al driver.
+    //
+    // Matemática del offset:
+    //   Base ticket:   48mm
+    //   Zoom:          1.35
+    //   Ancho efectivo: 48 × 1.35 = 64.8mm
+    //   Espacio libre:  80 - 64.8 = 15.2mm
+    //   Offset:         15.2 / 2  = 7.6mm  ← centrado simétrico
+    //
+    // Se usa border-left: transparent en el contenedor porque:
+    //   1. Genera píxeles reales (transparente ≠ inexistente en raster)
+    //   2. El driver de Windows lo incluye en el bounding box del bitmap
+    //   3. A diferencia de margin, NO puede ser recortado como whitespace
+    //   4. print-color-adjust:exact fuerza a Chromium a rasterizar el borde
 
-    // Reemplazamos todos los font-size: Xpx por proporciones basadas en var(--base-font-size)
-    processedHtml = processedHtml.replace(/font-size:\s*(\d+)px/g, (_match, p1) => {
-        const factor = (parseInt(p1) / 12).toFixed(3);
-        return `font-size: calc(${factor} * var(--base-font-size))`;
-    });
+    const zoomCSS = is80 ? 'zoom: 1.35;' : '';
+
+    // 80mm: padding-left empuja el contenedor; border-left transparente
+    //       garantiza que el driver respete el espacio.
+    // 58mm: margin: 0 auto clásico (funciona porque los drivers de 58mm
+    //       no cropean — el contenido de 48mm ya llena casi todo el rollo).
+    const bodyOffsetCSS = is80 ? 'padding-left: 7.6mm;' : '';
+    const containerMarginCSS = is80 ? 'margin: 0;' : 'margin: 0 auto;';
+    const containerBorderCSS = is80
+        ? 'border-left: 7.6mm solid transparent;'
+        : '';
 
     return `
     <html>
         <head>
             <title>Pos Print</title>
             <style>
-                :root {
-                    --base-font-size: ${baseFontSize};
+                @page {
+                    margin: 0;
+                    size: ${paperWidth}mm auto;
                 }
-                /* ═══ CSS SAFE-MODE PARA IMPRESORAS TÉRMICAS ═══ */
+
                 @media print {
-                    @page { margin: 0; size: ${paperWidth}mm auto; }
-                    body {
-                        zoom: 1;
-                        transform: none;
+                    html, body {
                         margin: 0; padding: 0;
-                        font-weight: 600;
-                        color: #000 !important;
-                        -webkit-print-color-adjust: exact;
-                        print-color-adjust: exact;
+                        width: ${paperWidth}mm;
+                        display: block !important;
+                        ${bodyOffsetCSS}
                     }
                     * {
                         box-sizing: border-box;
@@ -757,46 +927,61 @@ const buildFullHtml = (html: string, paperWidth: number): string => {
                         -webkit-print-color-adjust: exact !important;
                         print-color-adjust: exact !important;
                     }
-                    .page-break { page-break-after: always; }
                 }
 
-                body {
+                html, body {
                     margin: 0; padding: 0;
+                    width: ${paperWidth}mm;
                     background: #fff;
                     font-weight: 600;
                     color: #000 !important;
+                    display: block !important;
+                    ${bodyOffsetCSS}
                 }
                 * {
                     box-sizing: border-box;
                     color: black !important;
                 }
-                .page-break { page-break-after: always; }
                 b, strong { font-weight: bold !important; }
                 td, th { font-weight: 600; }
                 img {
                     image-rendering: -webkit-optimize-contrast;
                     image-rendering: crisp-edges;
                 }
-                
-                /* Contenedor estricto para Área Imprimible */
+
+                /* ═══ CONTENEDOR ═══
+                 * 48mm siempre — idéntico al width inline de los templates.
+                 * 80mm: border-left transparente ocupa 7.6mm de píxeles
+                 *       reales en el raster → el driver NO lo cropea.
+                 *       Combinado con el padding-left del body, el bloque
+                 *       queda desplazado 7.6mm a la derecha = centrado.
+                 * 58mm: margin:0 auto clásico, sin borde, sin zoom.
+                 */
                 .print-container {
-                    width: ${layoutWidth};
-                    max-width: ${is80 ? '100%' : layoutWidth};
+                    width: 48mm !important;
+                    ${containerMarginCSS}
+                    ${containerBorderCSS}
                     overflow: hidden;
-                    margin: 0 auto;
-                    ${is80 ? 'padding: 0 5mm;' : ''}
+                    ${zoomCSS}
+                }
+
+                .print-container > div {
+                    text-align: center;
                 }
             </style>
         </head>
         <body>
             <div class="print-container">
-                ${processedHtml}
+                ${html}
             </div>
         </body>
     </html>
     `;
 };
 
+// ── Print HTML ───────────────────────────────────────────────────────────
+// Envía el HTML a la impresora (silenciosa vía Electron IPC) o abre en ventana para preview/PDF.
+// El mismo buildFullHtml se usa para ambas rutas, garantizando paridad visual.
 const printHtml = async (html: string, paperWidth: number, isVirtual: boolean = false) => {
     if (isVirtual) {
         const fullHtml = buildFullHtml(html, paperWidth);

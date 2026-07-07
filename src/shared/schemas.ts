@@ -156,6 +156,10 @@ export const StaySchema = z.object({
   anpr_suggested_plate: z.string().optional().nullable(),
   barrier_exit_used: z.boolean().default(false),
   barrier_exit_at: TimestampSchema.optional().nullable(),
+  // --- Prepaid / Anticipado Fields ---
+  isPrepaid: z.boolean().default(false),
+  prepaidUntil: TimestampSchema.optional().nullable(),
+  prepaidTariffId: z.string().optional().nullable(),
   createdAt: TimestampSchema.default(() => new Date()),
 });
 export type Stay = z.infer<typeof StaySchema>;

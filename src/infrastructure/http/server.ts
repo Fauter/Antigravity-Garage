@@ -188,6 +188,10 @@ export const startServer = async () => {
             if (garageController?.triggerDebtSweep) return garageController.triggerDebtSweep(req, res);
             res.status(404).send('Method not found');
         });
+        app.patch('/api/abonos/:id', (req, res) => {
+            if (garageController?.updateSubscription) return garageController.updateSubscription(req, res);
+            res.status(404).send('Method not found');
+        });
 
         // Customers & Vehicles
         app.get('/api/clientes', (req, res) => {

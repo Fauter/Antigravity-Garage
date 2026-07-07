@@ -14,8 +14,7 @@ import {
     AlertCircle,
     Edit2,
     X,
-    Camera,
-    Tag
+    Camera
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { toast } from 'sonner';
@@ -29,6 +28,38 @@ interface CustomerDetailViewProps {
     subscriber: any;
     onBack: () => void;
 }
+
+export const isSubscriptionExpired = (sub: any): boolean => {
+    if (!sub) return false;
+    const endStr = sub.endDate || sub.end_date;
+    const startStr = sub.startDate || sub.start_date;
+
+    if (!endStr && !startStr) {
+        if (process.env.NODE_ENV === 'development') {
+            console.warn('[Validation] Subscription missing any date field (endDate, end_date, startDate, start_date):', sub);
+        }
+        return false;
+    }
+
+    const now = new Date();
+
+    if (endStr) {
+        const endDateObj = new Date(endStr);
+        if (!isNaN(endDateObj.getTime())) {
+            return now > endDateObj;
+        }
+    }
+
+    if (startStr) {
+        const startDateObj = new Date(startStr);
+        if (!isNaN(startDateObj.getTime())) {
+            const endOfMonth = new Date(startDateObj.getFullYear(), startDateObj.getMonth() + 1, 0, 23, 59, 59, 999);
+            return now > endOfMonth;
+        }
+    }
+
+    return false;
+};
 
 const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onBack }) => {
     const { operatorName } = useAuth();
@@ -77,7 +108,6 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         color: '',
         anio: '',
         companiaSeguro: '',
-        rfidTag: '',
         metodoPago: 'Efectivo',
         tipoFactura: 'Final'
     });
@@ -105,7 +135,6 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         color: '',
         anio: '',
         seguro: '',
-        rfidTag: '',
         // Billing
         metodoPago: 'Efectivo',
         tipoFactura: 'Final'
@@ -373,13 +402,6 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     const handleCreateCochera = async () => {
         if (!clientId) { toast.error("Error: Cliente no identificado"); return; }
         if (!newCocheraData.patente || !newCocheraData.tipoVehiculo) { toast.error("Patente y Tipo de Vehículo obligatorios"); return; }
-        if (!newCocheraData.rfidTag.trim()) { toast.error("RFID Tag obligatorio para abonados"); return; }
-
-        // RFID Duplicate Check
-        const cleanRfid = newCocheraData.rfidTag.trim().toUpperCase();
-        const rfidConflict = realVehicles.find(v => v.rfid_tag && String(v.rfid_tag).toUpperCase() === cleanRfid && v.plate !== newCocheraData.patente.toUpperCase());
-        if (rfidConflict) { toast.error(`RFID "${cleanRfid}" ya asignado a ${rfidConflict.plate}`); return; }
-
         if ((newCocheraData.tipo === 'Fija' || newCocheraData.exclusiva) && !newCocheraData.numero) { toast.error("Número de cochera obligatorio"); return; }
         if (newCocheraData.tipo !== 'Movil' && !newCocheraData.piso) { toast.error("Debe seleccionar un Piso para cocheras fijas o exclusivas"); return; }
 
@@ -424,7 +446,6 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                     year: newCocheraData.anio,
                     insurance: newCocheraData.seguro,
                     type: newCocheraData.tipoVehiculo,
-                    rfid_tag: newCocheraData.rfidTag.trim().toUpperCase() || null,
                     photos: compressedPhotos
                 },
                 subscriptionType: finalType,
@@ -525,7 +546,6 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             color: '',
             anio: '',
             companiaSeguro: '',
-            rfidTag: '',
             metodoPago: 'Efectivo',
             tipoFactura: 'Final'
         });
@@ -536,20 +556,6 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         if (!selectedCochera) return;
         if (!newVehicleData.patente || !newVehicleData.tipoVehiculo) {
             toast.error("Patente y Tipo son obligatorios");
-            return;
-        }
-
-        // RFID Tag mandatory for subscriber vehicles
-        if (!newVehicleData.rfidTag.trim()) {
-            toast.error("RFID Tag obligatorio para abonados");
-            return;
-        }
-
-        // RFID Duplicate Check
-        const cleanRfid = newVehicleData.rfidTag.trim().toUpperCase();
-        const rfidConflict = realVehicles.find(v => v.rfid_tag && String(v.rfid_tag).toUpperCase() === cleanRfid && v.plate !== newVehicleData.patente.toUpperCase());
-        if (rfidConflict) {
-            toast.error(`RFID "${cleanRfid}" ya asignado a ${rfidConflict.plate}`);
             return;
         }
 
@@ -573,7 +579,6 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 year: newVehicleData.anio,
                 insurance: newVehicleData.companiaSeguro,
                 type: newVehicleData.tipoVehiculo,
-                rfid_tag: newVehicleData.rfidTag.trim().toUpperCase() || null,
                 photos: compressedPhotos
             };
 
@@ -614,6 +619,34 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             }
 
             await api.patch(`/cocheras/${selectedCochera.id}`, patchPayload);
+
+            // SYNC: Also update the underlying subscription's price so the cronjob
+            // bills the new rate next month (otherwise only the cochera is updated).
+            if (upgradeInfo.isUpgrade && upgradeInfo.newBasePrice > 0) {
+                const associatedSub = subscriptions.find((s: any) => {
+                    if (s.active === false && s.status !== 'active') return false;
+                    const subClientId = s.customerId || s.customer_id || s.clientId;
+                    const cocheraClienteId = selectedCochera.clienteId || selectedCochera.cliente_id;
+                    if (subClientId !== cocheraClienteId) return false;
+
+                    if (s.spotNumber && selectedCochera.numero && String(s.spotNumber) === String(selectedCochera.numero)) return true;
+
+                    const subPlate = s.vehicleData?.plate || s.plate;
+                    const cocheraPlates = (selectedCochera.vehiculos || []).map((v: any) => typeof v === 'string' ? v.trim() : v.plate?.trim());
+                    if (subPlate && cocheraPlates.includes(subPlate.trim())) return true;
+
+                    return false;
+                });
+
+                if (associatedSub) {
+                    await api.patch(`/abonos/${associatedSub.id || associatedSub._id}`, {
+                        price: upgradeInfo.newBasePrice
+                    });
+                    console.log(`✅ [Upgrade] Subscription ${(associatedSub.id || associatedSub._id)?.slice(0, 8)} price updated to $${upgradeInfo.newBasePrice}`);
+                } else {
+                    console.warn('[Upgrade] No associated subscription found for cochera — price not synced to subscription');
+                }
+            }
 
             toast.success("Vehículo agregado correctamente", { id: btnSpinner });
             setIsModalOpen(false);
@@ -979,12 +1012,63 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     const inputStyle = "bg-gray-950/40 border border-gray-800/60 rounded-lg px-2.5 py-1.5 text-sm text-white outline-none focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/5 transition-all w-full placeholder-gray-700/50 font-medium h-9 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
     const labelStyle = "block text-[10px] uppercase text-gray-500 font-bold mb-0.5 tracking-wider";
 
+    // --- REGLA ABSOLUTA DE NEGOCIO ---
+    const now = new Date();
+    const expiredSubIdsLinkedToCocheras = new Set<string>();
+
+    // 1. Evaluamos exclusivamente las cocheras que el cliente tiene asignadas
+    cocheras.forEach(cochera => {
+        const cleanCocheraPlates = (cochera.vehiculos || []).map((v: any) => typeof v === 'string' ? v.trim() : v.plate?.trim());
+        const cocheraVehicles = realVehicles.filter(v => v.plate && cleanCocheraPlates.includes(v.plate.trim()));
+        const cocheraVehicleIds = cocheraVehicles.map(v => v.id);
+
+        // Mismo matching estricto que usa la tarjeta
+        const associatedSub = subscriptions.find(s => {
+            if (s.active === false && s.status !== 'active') return false;
+
+            const subClientId = s.customerId || s.customer_id || s.clientId;
+            const cocheraClienteId = cochera.clienteId || cochera.cliente_id;
+
+            if (s.spotNumber && cochera.numero && String(s.spotNumber) === String(cochera.numero)) {
+                if (subClientId === cocheraClienteId) return true;
+            }
+
+            const subVehicleId = s.vehicleId || s.vehicle_id;
+            const subPlate = s.vehicleData?.plate || s.plate;
+
+            if (subVehicleId && cocheraVehicleIds.includes(subVehicleId)) return true;
+            if (subPlate && cleanCocheraPlates.includes(subPlate.trim())) return true;
+
+            if (subClientId === cocheraClienteId) {
+                const norm = (t: string) => t ? t.toLowerCase().replace(/fija/g, 'fija').replace(/movil/g, 'movil').replace(/exclusiva/g, 'exclusiva') : '';
+                if (norm(s.type || s.subscriptionType) === norm(cochera.tipo)) return true;
+            }
+            return false;
+        });
+
+        // Solo si matchea y ESTÁ VENCIDA, habilitamos sus deudas
+        if (associatedSub) {
+            if (isSubscriptionExpired(associatedSub)) {
+                expiredSubIdsLinkedToCocheras.add(associatedSub.id);
+            }
+        }
+    });
+
+    const sanitizedDebts = debts.filter((d: any) => {
+        if (d.type === 'CANON') {
+            const subId = d.subscriptionId || d.subscription_id;
+            // BARRERA: Solo pasa si pertenece a una cochera visible que está vencida
+            return subId && expiredSubIdsLinkedToCocheras.has(subId);
+        }
+        return true; // MANUAL_MIGRATION pasa siempre
+    });
+
     // --- "Cliente Vacío" check: cocheras vacías → ocultar deudas CANON ---
     const isEmptyClient = cocheras.length === 0;
 
-    const canonDebts = isEmptyClient ? [] : debts.filter((d: any) => d.type === 'CANON');
-    const otherDebts = debts.filter((d: any) => d.type !== 'CANON');
-    const manualDebtsPending = debts.filter((d: any) => d.status === 'PENDING' && d.type === 'MANUAL_MIGRATION');
+    const canonDebts = isEmptyClient ? [] : sanitizedDebts.filter((d: any) => d.type === 'CANON');
+    const otherDebts = sanitizedDebts.filter((d: any) => d.type !== 'CANON');
+    const manualDebtsPending = sanitizedDebts.filter((d: any) => d.status === 'PENDING' && d.type === 'MANUAL_MIGRATION');
     // Use remaining_amount for real pending balance (supports partial payments)
     // SAFE: handles null, undefined, NaN from DB
     const getRemaining = (d: any) => {
@@ -993,12 +1077,12 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     };
     const totalCanon = isEmptyClient ? 0 : canonDebts.reduce((sum: number, d: any) => sum + getRemaining(d), 0);
     const totalOther = otherDebts.reduce((sum: number, d: any) => sum + getRemaining(d), 0);
-    const hasPartialPayments = debts.some((d: any) => (d.amount_paid || 0) > 0 && d.status === 'PENDING');
+    const hasPartialPayments = sanitizedDebts.some((d: any) => (d.amount_paid || 0) > 0 && d.status === 'PENDING');
 
     // Deudas visibles: si el cliente está vacío, solo muestra las que NO son CANON
     const visibleDebts = isEmptyClient
-        ? debts.filter((d: any) => d.type !== 'CANON')
-        : debts;
+        ? sanitizedDebts.filter((d: any) => d.type !== 'CANON')
+        : sanitizedDebts;
     const visibleTotal = visibleDebts.reduce((sum, d) => sum + getRemaining(d), 0);
 
 
@@ -1127,79 +1211,67 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-8">
                             {cocheras.map((cochera) => {
                                 // Buscar los vehículos registrados en esta cochera para sacar sus IDs reales
-                                const cocheraVehicles = realVehicles.filter(v => cochera.vehiculos && cochera.vehiculos.includes(v.plate));
+                                // TRIM: Supabase puede devolver plates con espacios residuales (ej. "CLINTON " vs "CLINTON")
+                                const cleanCocheraPlates = (cochera.vehiculos || []).map((v: any) => typeof v === 'string' ? v.trim() : v.plate?.trim());
+                                const cocheraVehicles = realVehicles.filter(v => v.plate && cleanCocheraPlates.includes(v.plate.trim()));
                                 const cocheraVehicleIds = cocheraVehicles.map(v => v.id);
 
                                 // Encontrar la subscripción asociada
                                 const associatedSub = subscriptions.find(s => {
-                                    // 1. Prioridad definitiva (Número de Cochera)
-                                    if (s.spotNumber && cochera.numero && String(s.spotNumber) === String(cochera.numero)) return true;
+                                    // 0. Guardia: ignorar suscripciones inactivas
+                                    if (s.active === false && s.status !== 'active') return false;
+
+                                    // 1. Prioridad por spotNumber — ESTRICTA: exige coincidencia de clienteId
+                                    if (s.spotNumber && cochera.numero && String(s.spotNumber) === String(cochera.numero)) {
+                                        const subClientId = s.customerId || s.customer_id || s.clientId;
+                                        const cocheraClienteId = cochera.clienteId || cochera.cliente_id;
+                                        if (subClientId === cocheraClienteId) return true;
+                                        // Si el spotNumber matchea pero el cliente NO coincide, NO retorna true.
+                                        // Continúa evaluando las prioridades siguientes.
+                                    }
 
                                     // 2. Prioridad por ID de vehículo y patente
                                     const subVehicleId = s.vehicleId || s.vehicle_id;
                                     const subPlate = s.vehicleData?.plate || s.plate;
 
                                     if (subVehicleId && cocheraVehicleIds.includes(subVehicleId)) return true;
-                                    if (subPlate && cochera.vehiculos?.includes(subPlate)) return true;
+                                    if (subPlate && cleanCocheraPlates.includes(subPlate.trim())) return true;
 
-                                    // 3. Fallback Genérico: Por cliente y tipo SOLO si la suscripción NO tiene vehículo específico (vehicleId ni plate)
-                                    if (!subVehicleId && !subPlate) {
-                                        const subClientId = s.customerId || s.customer_id || s.clientId;
-                                        const isSameClient = subClientId === cochera.clienteId;
+                                    // 3. Fallback Genérico relajado
+                                    const subClientId = s.customerId || s.customer_id || s.clientId;
+                                    const cocheraClienteId = cochera.clienteId || cochera.cliente_id;
 
-                                        const normalizeType = (t: string) => {
-                                            if (!t) return '';
-                                            const lower = t.toLowerCase();
-                                            if (lower.includes('movil')) return 'Movil';
-                                            if (lower.includes('fija')) return 'Fija';
-                                            if (lower.includes('exclusiva')) return 'Exclusiva';
-                                            return '';
-                                        };
-
-                                        if (isSameClient && normalizeType(s.type || s.subscriptionType) === normalizeType(cochera.tipo)) {
-                                            return true;
-                                        }
+                                    if (subClientId === cocheraClienteId) {
+                                        const norm = (t: string) => t ? t.toLowerCase().replace(/fija/g, 'fija').replace(/movil/g, 'movil').replace(/exclusiva/g, 'exclusiva') : '';
+                                        if (norm(s.type || s.subscriptionType) === norm(cochera.tipo)) return true;
                                     }
 
                                     return false;
                                 });
 
-                                // Logic for checking expiration: Compare to subscription endDate (if Exists), 
+                                // Logic for checking expiration: Compare to subscription dates (supporting snake_case and camelCase)
                                 // otherwise assume standard month based calculation from startDate
                                 const now = new Date();
                                 let isExpired = false;
                                 let expirationDate = "Sin Vencimiento";
 
                                 if (associatedSub) {
+                                    isExpired = isSubscriptionExpired(associatedSub);
+                                    const endStr = associatedSub.endDate || associatedSub.end_date;
+                                    const startStr = associatedSub.startDate || associatedSub.start_date;
+
                                     let rawD: Date | null = null;
-                                    if (associatedSub.endDate) {
-                                        rawD = new Date(associatedSub.endDate);
-                                    } else if (associatedSub.startDate) {
-                                        const sDate = new Date(associatedSub.startDate);
-                                        rawD = new Date(sDate.getFullYear(), sDate.getMonth() + 1, 0, 23, 59, 59, 999); // Fin de mes local extrapolado
+                                    if (endStr) {
+                                        rawD = new Date(endStr);
+                                    } else if (startStr) {
+                                        const sDate = new Date(startStr);
+                                        rawD = new Date(sDate.getFullYear(), sDate.getMonth() + 1, 0, 23, 59, 59, 999);
                                     }
 
-                                    if (rawD) {
-                                        isExpired = now > rawD;
+                                    if (rawD && !isNaN(rawD.getTime())) {
                                         expirationDate = rawD.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
                                     }
 
-                                    // OVERRIDE: If there are PENDING CANON debts with remaining_amount > 0,
-                                    // treat as expired/unpaid even if endDate is in the future
-                                    if (!isExpired && associatedSub) {
-                                        const pendingCanonDebts = debts.filter((d: any) =>
-                                            d.subscriptionId === associatedSub.id &&
-                                            d.type === 'CANON' &&
-                                            d.status === 'PENDING'
-                                        );
-                                        const hasUnpaidCanon = pendingCanonDebts.some((d: any) => {
-                                            const rem = Number(d.remaining_amount);
-                                            return (typeof d.remaining_amount === 'number' && !isNaN(rem)) ? rem > 0 : true;
-                                        });
-                                        if (hasUnpaidCanon) {
-                                            isExpired = true;
-                                        }
-                                    }
 
                                 } else {
                                     // Fallback to end of month if no sub found at all (Edge case)
@@ -1208,7 +1280,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                     isExpired = false; // Cannot definitively say expired if no sub
                                 }
 
-                                console.log(`[DEBUG] Cochera #${cochera.numero || 'Móvil ID: ' + cochera.id.slice(0, 4)} - Sub Asociada: ${associatedSub?.id || 'Ninguna'} - EndDate: ${associatedSub?.endDate || 'N/A'} - Expirada: ${isExpired} - Deuda: 0`);
+                                console.log(`[DEBUG] Cochera #${cochera.numero || 'Móvil ID: ' + cochera.id.slice(0, 4)} - Sub Asociada: ${associatedSub?.id || 'Ninguna'} - EndDate/end_date: ${associatedSub?.endDate || associatedSub?.end_date || 'N/A'} - Expirada: ${isExpired} - Deuda: 0`);
 
                                 return (
                                     <div key={cochera.id} className={`group relative backdrop-blur-md border ${isExpired ? 'bg-red-500/10 border-red-500/50 shadow-lg shadow-red-900/20' : 'bg-gray-900/40 border-gray-800 hover:border-indigo-500/50 hover:shadow-indigo-900/10'} rounded-2xl p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl flex flex-col justify-between overflow-hidden`}>
@@ -1253,7 +1325,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                             {/* Partial Payment Badge & Month Labels */}
                                             {(() => {
                                                 if (!associatedSub) return null;
-                                                const cocheraDebts = debts.filter(d => d.subscriptionId === associatedSub.id && d.status === 'PENDING' && d.type === 'CANON');
+                                                const cocheraDebts = sanitizedDebts.filter(d => (d.subscriptionId === associatedSub.id || d.subscription_id === associatedSub.id) && d.status === 'PENDING' && d.type === 'CANON');
                                                 if (cocheraDebts.length === 0) return null;
 
                                                 const partialDebts = cocheraDebts.filter(d => getRemaining(d) < (Number(d.amount) || 0));
@@ -1264,7 +1336,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                 const canonPending = cocheraDebts.filter(d => d.type === 'CANON');
                                                 const labels = canonPending.map(d => {
                                                     const dt = new Date(d.dueDate);
-                                                    return { label: monthNames[dt.getMonth()], time: dt.getTime() };
+                                                    return { label: monthNames[dt.getUTCMonth()], time: dt.getTime() };
                                                 }).sort((a, b) => a.time - b.time).map(m => m.label).join('-');
 
                                                 return (
@@ -1374,7 +1446,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                 <button
                                                     onClick={() => {
                                                         // Use remaining_amount for base calculation if partially paid
-                                                        const specificDebts = debts.filter(d => d.subscriptionId === associatedSub.id && d.status === 'PENDING' && d.type === 'CANON');
+                                                        const specificDebts = sanitizedDebts.filter(d => (d.subscriptionId === associatedSub.id || d.subscription_id === associatedSub.id) && d.status === 'PENDING' && d.type === 'CANON');
                                                         const totalRemaining = specificDebts.reduce((s: number, d: any) => s + getRemaining(d), 0);
                                                         const base = totalRemaining > 0 ? totalRemaining : (cochera.precioBase || 0);
                                                         const mora = calculateSurcharge(base);
@@ -1383,7 +1455,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                         handleOpenRenewalModal(associatedSub.id, cochera, base, mora, base + mora, isExpired, false, targetDebtsArray);
                                                     }}
                                                     className={`w-full py-2 ${(() => {
-                                                        const specificDebts = debts.filter(d => d.subscriptionId === associatedSub.id && d.status === 'PENDING' && d.type === 'CANON');
+                                                        const specificDebts = sanitizedDebts.filter(d => (d.subscriptionId === associatedSub.id || d.subscription_id === associatedSub.id) && d.status === 'PENDING' && d.type === 'CANON');
                                                         // Caso A: Si todas las deudas pendientes están parcialmente pagadas
                                                         const allHavePartial = specificDebts.length > 0 && specificDebts.every(d => getRemaining(d) < (Number(d.amount) || 0));
                                                         return allHavePartial
@@ -1392,7 +1464,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                     })()} border rounded-lg text-xs font-bold uppercase tracking-widest transition-all`}
                                                 >
                                                     {(() => {
-                                                        const specificDebts = debts.filter(d => d.subscriptionId === associatedSub.id && d.status === 'PENDING' && d.type === 'CANON');
+                                                        const specificDebts = sanitizedDebts.filter(d => (d.subscriptionId === associatedSub.id || d.subscription_id === associatedSub.id) && d.status === 'PENDING' && d.type === 'CANON');
                                                         // Caso A: Si todas las deudas pendientes están parcialmente pagadas
                                                         const allHavePartial = specificDebts.length > 0 && specificDebts.every(d => getRemaining(d) < (Number(d.amount) || 0));
                                                         const totalRemaining = specificDebts.reduce((s: number, d: any) => s + getRemaining(d), 0);

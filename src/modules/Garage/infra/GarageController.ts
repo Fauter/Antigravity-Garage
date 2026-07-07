@@ -171,7 +171,7 @@ export class GarageController {
 
     getAllCocheras = async (req: Request, res: Response) => {
         try {
-            const { clienteId } = req.query;
+            const { clienteId } = req.query as { clienteId?: string };
             const garageId = req.headers['x-garage-id'] as string;
             if (!garageId) {
                 return res.status(400).json({ error: 'x-garage-id header is required' });
@@ -184,7 +184,7 @@ export class GarageController {
             let filtered = allCocheras.filter(c => (c as any).garageId === garageId || !(c as any).garageId);
 
             if (clienteId) {
-                filtered = filtered.filter(c => c.clienteId === String(clienteId));
+                filtered = filtered.filter(c => c.clienteId === clienteId);
             }
 
             // Populate vehicle details for rich frontend diaplay
@@ -267,11 +267,11 @@ export class GarageController {
 
     updateCochera = async (req: Request, res: Response) => {
         try {
-            const { id } = req.params;
+            const { id } = req.params as { id: string };
             const { vehiculos, newVehicleType, precioBase } = req.body; // Expanded destructuring
             const garageId = req.headers['x-garage-id'] as string;
 
-            const cochera = await cocherasDB.getById(String(id));
+            const cochera = await cocherasDB.getById(id);
             if (!cochera) return res.status(404).json({ error: 'Cochera not found' });
 
             // Direct Price Update Override (Logic from frontend "Add Vehicle" Modal)
@@ -366,8 +366,8 @@ export class GarageController {
 
     deleteCochera = async (req: Request, res: Response) => {
         try {
-            const { id } = req.params;
-            await cocherasDB.delete(String(id));
+            const { id } = req.params as { id: string };
+            await cocherasDB.delete(id);
             res.json({ message: 'Cochera eliminada' });
         } catch (error: any) {
             res.status(500).json({ error: error.message });
@@ -408,15 +408,26 @@ export class GarageController {
                 cochera.piso = null as any;
                 await cocherasDB.updateOne({ id: cocheraId } as any, cochera);
 
-                // Deactivate matching subscriptions + cancel eligible debts
+                // Deactivate matching subscriptions + cancel ALL associated CANON debts
                 if (originalClienteId) {
                     const subs = await this.subscriptionRepo.findByCustomerId(originalClienteId);
-                    for (const sub of subs.filter(s => s.active)) {
-                        if ((sub as any).spotNumber === cochera.numero || (sub as any).type === cochera.tipo) {
-                            sub.active = false;
-                            sub.endDate = new Date();
-                            await this.subscriptionRepo.save(sub);
+                    // Buscar en TODAS las subs (no solo activas) para atrapar deudas huérfanas
+                    for (const sub of subs) {
+                        const subSpot = (sub as any).spotNumber;
+                        const subPlate = sub.plate || sub.vehicleData?.plate;
+                        const spotMatch = subSpot && cochera.numero && String(subSpot) === String(cochera.numero);
+                        const plateMatch = subPlate && subPlate === plate;
+                        const typeMatch = !subSpot && !subPlate && (sub.type || (sub as any).subscriptionType) === cochera.tipo;
 
+                        if (spotMatch || plateMatch || typeMatch) {
+                            // Desactivar si aún estaba activa
+                            if (sub.active) {
+                                sub.active = false;
+                                sub.endDate = new Date();
+                                await this.subscriptionRepo.save(sub);
+                            }
+
+                            // Cancelar TODAS las deudas CANON PENDING de esta suscripción
                             const debts = await this.debtRepo.findBySubscriptionId(sub.id);
                             for (const debt of debts) {
                                 if (debt.status === 'PENDING' && AUTO_CANCELLABLE_DEBT_TYPES.includes((debt as any).type || 'CANON')) {
@@ -466,18 +477,28 @@ export class GarageController {
                 }
             }
 
-            // Find an active subscription for this cochera/client and deactivate it
+            // Find subscriptions for this cochera/client and deactivate + cancel debts
             if (originalClienteId) {
                 const subs = await this.subscriptionRepo.findByCustomerId(originalClienteId);
-                const activeSubs = subs.filter(s => s.active);
+                const vehiclePlates = vehiclesToRelease.map((v: any) => typeof v === 'string' ? v : (v as any).plate);
 
-                for (const sub of activeSubs) {
-                    if ((sub as any).spotNumber === cochera.numero || (sub as any).type === cochera.tipo) {
-                        sub.active = false;
-                        sub.endDate = new Date(); // Cut it today
-                        await this.subscriptionRepo.save(sub);
+                // Buscar en TODAS las subs (no solo activas) para limpiar deudas huérfanas
+                for (const sub of subs) {
+                    const subSpot = (sub as any).spotNumber;
+                    const subPlate = sub.plate || sub.vehicleData?.plate;
+                    const spotMatch = subSpot && cochera.numero && String(subSpot) === String(cochera.numero);
+                    const plateMatch = subPlate && vehiclePlates.includes(subPlate);
+                    const typeMatch = !subSpot && !subPlate && (sub.type || (sub as any).subscriptionType) === cochera.tipo;
 
-                        // Encontrar y Anular Deudas Pendientes
+                    if (spotMatch || plateMatch || typeMatch) {
+                        // Desactivar si aún estaba activa
+                        if (sub.active) {
+                            sub.active = false;
+                            sub.endDate = new Date();
+                            await this.subscriptionRepo.save(sub);
+                        }
+
+                        // Cancelar TODAS las deudas CANON PENDING de esta suscripción
                         const debts = await this.debtRepo.findBySubscriptionId(sub.id);
                         for (const debt of debts) {
                             if (debt.status === 'PENDING' && AUTO_CANCELLABLE_DEBT_TYPES.includes((debt as any).type || 'CANON')) {
@@ -768,6 +789,31 @@ export class GarageController {
         }
     };
 
+    updateSubscription = async (req: Request, res: Response) => {
+        try {
+            const { id } = req.params as { id: string };
+            const updates = req.body;
+
+            const existing = await this.subscriptionRepo.findById(id);
+            if (!existing) return res.status(404).json({ error: 'Subscription not found' });
+
+            // Merge only allowed fields (whitelist to prevent arbitrary overwrites)
+            const allowedFields = ['price', 'type', 'active', 'endDate'];
+            for (const key of allowedFields) {
+                if (updates[key] !== undefined) {
+                    (existing as any)[key] = updates[key];
+                }
+            }
+            (existing as any).updatedAt = new Date();
+
+            const saved = await this.subscriptionRepo.save(existing);
+            res.json({ message: 'Subscription updated', subscription: saved });
+        } catch (error: any) {
+            console.error('Subscription Update Error:', error);
+            res.status(500).json({ error: error.message });
+        }
+    };
+
     getAllSubscriptions = async (req: Request, res: Response) => {
         try {
             const garageId = req.headers['x-garage-id'] as string;
@@ -967,14 +1013,14 @@ export class GarageController {
 
     findClientByDni = async (req: Request, res: Response) => {
         try {
-            const { dni } = req.query;
+            const { dni } = req.query as { dni?: string };
             const garageId = req.headers['x-garage-id'] as string;
             if (!garageId) {
                 return res.status(400).json({ error: 'x-garage-id header is required' });
             }
 
             if (dni) {
-                const customer = await this.customerRepo.findByDni(String(dni));
+                const customer = await this.customerRepo.findByDni(dni);
                 // Optional: ensure customer.garageId === garageId, but for now returned if found
                 return res.json(customer ? [customer] : []);
             } else {
@@ -992,10 +1038,10 @@ export class GarageController {
     // --- DEBTS ---
     getDebtsByCustomer = async (req: Request, res: Response) => {
         try {
-            const { clientId } = req.params;
+            const { clientId } = req.params as { clientId: string };
             const garageId = req.headers['x-garage-id'] as string;
 
-            const debts = await this.debtRepo.findByCustomerId(String(clientId));
+            const debts = await this.debtRepo.findByCustomerId(clientId);
 
             // Apply Dynamic Surcharge based on real Garage settings from Supabase
             let garageSettings: any = {};
@@ -1068,7 +1114,7 @@ export class GarageController {
             const { id } = req.params as { id: string };
             const updates = req.body;
 
-            const existing = await this.customerRepo.findById(String(id));
+            const existing = await this.customerRepo.findById(id);
             if (!existing) {
                 return res.status(404).json({ error: 'Cliente no encontrado' });
             }
@@ -1379,11 +1425,11 @@ export class GarageController {
 
     getVehicles = async (req: Request, res: Response) => {
         try {
-            const { customerId } = req.query;
+            const { customerId } = req.query as { customerId?: string };
             const garageId = req.headers['x-garage-id'] as string;
 
             if (customerId) {
-                const vehicles = await this.vehicleRepo.findByCustomerId(String(customerId), garageId);
+                const vehicles = await this.vehicleRepo.findByCustomerId(customerId, garageId);
                 return res.json(vehicles);
             }
             res.json([]);

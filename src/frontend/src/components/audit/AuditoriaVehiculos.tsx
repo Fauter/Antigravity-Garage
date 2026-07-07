@@ -8,6 +8,8 @@ interface Stay {
     plate: string;
     entryTime: string;
     vehicleType?: string;
+    isPrepaid?: boolean;
+    prepaidUntil?: string | null;
 }
 
 const AuditoriaVehiculos: React.FC = () => {
@@ -45,6 +47,19 @@ const AuditoriaVehiculos: React.FC = () => {
         const diffHrs = Math.floor(diffMs / (1000 * 60 * 60));
         const diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
         return `${diffHrs}h ${diffMins}m`;
+    };
+
+    const formatRemaining = (ms: number) => {
+        const hrs = Math.floor(ms / (1000 * 60 * 60));
+        const mins = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
+        return `${hrs}h ${mins}m`;
+    };
+
+    const formatExcedido = (ms: number) => {
+        const diffMs = Math.abs(ms);
+        const hrs = Math.floor(diffMs / (1000 * 60 * 60));
+        const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+        return `${hrs}h ${mins}m`;
     };
 
     return (
@@ -104,7 +119,18 @@ const AuditoriaVehiculos: React.FC = () => {
                                             {new Date(stay.entryTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                         </td>
                                         <td className="p-4 font-mono font-medium text-emerald-400">
-                                            {calculateDuration(stay.entryTime)}
+                                            <div>{calculateDuration(stay.entryTime)}</div>
+                                            {stay.isPrepaid && stay.prepaidUntil && (() => {
+                                                const remainingMs = new Date(stay.prepaidUntil).getTime() - new Date().getTime();
+                                                return (
+                                                    <div className={`text-[10px] font-bold mt-1 px-1 rounded inline-block ${remainingMs > 0 ? 'text-violet-400 bg-violet-900/20' : 'text-red-400 bg-red-900/20'}`}>
+                                                        {remainingMs > 0 
+                                                            ? `Anticipado: ${formatRemaining(remainingMs)}` 
+                                                            : `Vencido hace: ${formatExcedido(remainingMs)}`
+                                                        }
+                                                    </div>
+                                                );
+                                            })()}
                                         </td>
                                         <td className="p-4">
                                             <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-slate-800 border border-slate-700 text-slate-300">

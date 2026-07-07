@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import { Search, Plus } from 'lucide-react';
+import { Search, Plus, ArrowUp, ArrowDown } from 'lucide-react';
 import { api } from '../../services/api';
 
 // --- TypeScript Interfaces ---
@@ -57,21 +57,26 @@ interface SubscriberListProps {
 const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSubscriber, subscribers }) => {
     // Local state
     const [cocheras, setCocheras] = useState<any[]>([]);
+    const [subscriptions, setSubscriptions] = useState<any[]>([]);
+    const [realVehicles, setRealVehicles] = useState<any[]>([]);
     const [debts, setDebts] = useState<Debt[]>([]);
     const [debtsLoaded, setDebtsLoaded] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
+    const [balanceSort, setBalanceSort] = useState<'default' | 'desc' | 'asc'>('default');
 
     // --- Initial Effects: Debt sweep + Cocheras fetch ---
     useEffect(() => {
-        // Silent background sweep for debts when entering the list
-        api.post('/abonos/evaluar-deudas', {})
-            .then(res => console.log("Silent debt sweep completed:", res.data))
-            .catch(err => console.error("Error running debt sweep:", err));
+        api.post('/abonos/evaluar-deudas', {}).catch(e => console.error(e));
 
-        // Fetch all cocheras to map plates correctly
-        api.get('/cocheras')
-            .then(res => setCocheras(res.data || []))
-            .catch(err => console.error("Error loading cocheras list:", err));
+        Promise.all([
+            api.get('/cocheras').catch(() => ({ data: [] })),
+            api.get('/abonos').catch(() => ({ data: [] })),
+            api.get('/vehiculos').catch(() => ({ data: [] }))
+        ]).then(([cocherasRes, subsRes, vehRes]) => {
+            setCocheras(cocherasRes.data || []);
+            setSubscriptions(subsRes.data || []);
+            setRealVehicles(vehRes.data || []);
+        });
     }, []);
 
     // --- Extract unique customer IDs from subscribers ---
@@ -98,9 +103,10 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
             );
 
             const allDebts: Debt[] = [];
-            results.forEach(result => {
+            results.forEach((result, index) => {
                 if (result.status === 'fulfilled') {
-                    const data = result.value?.data || [];
+                    const id = customerIds[index];
+                    const data = (result.value?.data || []).map((d: any) => ({ ...d, customerId: id }));
                     allDebts.push(...data);
                 }
             });
@@ -135,34 +141,92 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                 const email = sub.customerData?.email || sub.email || '';
                 const phone = sub.customerData?.phone || sub.phone || '';
 
-                // --- Plate Mapping from Cocheras (MUST run before balance) ---
-                const clientCocheras = cocheras.filter(c => c.clienteId === customerId && c.status === 'Ocupada');
+                // --- Plate Mapping ---
+                const clientCocheras = cocheras.filter(c => (c.clienteId === customerId || c.cliente_id === customerId) && c.status === 'Ocupada');
                 const uniquePlates = new Set<string>();
                 clientCocheras.forEach(c => {
                     if (c.vehiculos && Array.isArray(c.vehiculos)) {
                         c.vehiculos.forEach((v: any) => {
-                            if (typeof v === 'string' && v.trim() !== '' && v !== '---') {
-                                uniquePlates.add(v);
-                            } else if (typeof v === 'object' && v.plate && v.plate !== '---' && v.plate.trim() !== '') {
-                                uniquePlates.add(v.plate);
-                            }
+                            if (typeof v === 'string' && v.trim() !== '' && v !== '---') uniquePlates.add(v);
+                            else if (typeof v === 'object' && v.plate && v.plate !== '---' && v.plate.trim() !== '') uniquePlates.add(v.plate);
                         });
                     }
                 });
-
                 const plates = Array.from(uniquePlates);
-                const isEmptyClient = uniquePlates.size === 0;
 
-                // --- Balance Calculation ---
-                // REGLA: Si el cliente está "vacío" (sin vehículos/cocheras), se ignoran
-                // las deudas tipo CANON. Solo persisten deudas MANUAL_MIGRATION u otros tipos.
-                const allCustomerDebts = debts.filter(d => d.customerId === customerId && d.status === 'PENDING');
-                const customerDebts = isEmptyClient
-                    ? allCustomerDebts.filter((d: any) => d.type !== 'CANON')
+                // --- REGLA ABSOLUTA DE NEGOCIO (Espejo de DetailView) ---
+                const now = new Date();
+                const expiredClientSubIds = new Set<string>();
+
+                clientCocheras.forEach(cochera => {
+                    const cleanCocheraPlates = (cochera.vehiculos || []).map((v: any) => typeof v === 'string' ? v.trim() : v.plate?.trim());
+                    const cocheraVehicles = realVehicles.filter(v => v.plate && cleanCocheraPlates.includes(v.plate.trim()));
+                    const cocheraVehicleIds = cocheraVehicles.map(v => v.id);
+
+                    const associatedSub = subscriptions.find(s => {
+                        if (s.active === false && s.status !== 'active') return false;
+                        const subClientId = s.customerId || s.customer_id || s.clientId;
+                        const cocheraClienteId = cochera.clienteId || cochera.cliente_id;
+                        
+                        if (s.spotNumber && cochera.numero && String(s.spotNumber) === String(cochera.numero)) {
+                            if (subClientId === cocheraClienteId) return true;
+                        }
+                        
+                        const subVehicleId = s.vehicleId || s.vehicle_id;
+                        const subPlate = s.vehicleData?.plate || s.plate;
+                        
+                        if (subVehicleId && cocheraVehicleIds.includes(subVehicleId)) return true;
+                        if (subPlate && cleanCocheraPlates.includes(subPlate.trim())) return true;
+                        
+                        // Fallback relajado: Si coinciden cliente y tipo, lo tomamos como válido
+                        if (subClientId === cocheraClienteId) {
+                            const norm = (t: string) => t ? t.toLowerCase().replace(/fija/g, 'fija').replace(/movil/g, 'movil').replace(/exclusiva/g, 'exclusiva') : '';
+                            if (norm(s.type || s.subscriptionType) === norm(cochera.tipo)) return true;
+                        }
+                        return false;
+                    });
+
+                    if (associatedSub) {
+                        let isExpired = false;
+                        // Soporte nativo para flat DB rows y populaciones
+                        const rawEndDate = associatedSub.endDate || associatedSub.end_date;
+                        const rawStartDate = associatedSub.startDate || associatedSub.start_date;
+
+                        if (rawEndDate) {
+                            isExpired = now > new Date(rawEndDate);
+                        } else if (rawStartDate) {
+                            const sDate = new Date(rawStartDate);
+                            isExpired = now > new Date(sDate.getFullYear(), sDate.getMonth() + 1, 0, 23, 59, 59, 999);
+                        }
+                        
+                        if (isExpired) {
+                            expiredClientSubIds.add(associatedSub.id || associatedSub._id);
+                        }
+                    }
+                });
+
+                const isEmptyClient = clientCocheras.length === 0;
+
+                const allCustomerDebts = debts.filter((d: any) => {
+                    const isClientMatch = (d.customerId === customerId || d.customer_id === customerId);
+                    if (!isClientMatch || d.status !== 'PENDING') return false;
+
+                    if (d.type === 'CANON') {
+                        const subId = d.subscriptionId || d.subscription_id;
+                        return subId && expiredClientSubIds.has(subId);
+                    }
+                    return true; // MANUAL_MIGRATION pasa siempre
+                });
+
+                const visibleDebts = isEmptyClient 
+                    ? allCustomerDebts.filter((d: any) => d.type !== 'CANON') 
                     : allCustomerDebts;
-                const balance = customerDebts.reduce((sum, d) => {
-                    const rem = Number(d.remaining_amount);
-                    const debtValue = (!isNaN(rem) && d.remaining_amount != null) ? rem : Number(d.amount || 0);
+
+                const balance = visibleDebts.reduce((sum, d) => {
+                    const remRaw = d.remaining_amount;
+                    const debtValue = (remRaw !== undefined && remRaw !== null && !isNaN(Number(remRaw))) 
+                        ? Number(remRaw) 
+                        : Number(d.amount || 0);
                     return sum + debtValue;
                 }, 0);
 
@@ -197,7 +261,7 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
         });
 
         return all;
-    }, [subscribers, cocheras, debts]);
+    }, [subscribers, cocheras, debts, subscriptions, realVehicles]);
 
     // --- Reactive Search Filtering ---
     const filteredSubscribers = useMemo((): AggregatedSubscriber[] => {
@@ -214,6 +278,29 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
             return false;
         });
     }, [uniqueSubscribers, searchTerm]);
+
+    const sortedAndFilteredSubscribers = useMemo(() => {
+        if (balanceSort === 'default') return filteredSubscribers;
+        
+        return [...filteredSubscribers].sort((a, b) => {
+            const aHas = a.aggregatedValues.plates.length > 0 ? 0 : 1;
+            const bHas = b.aggregatedValues.plates.length > 0 ? 0 : 1;
+            if (aHas !== bHas) return aHas - bHas;
+
+            const balA = a.aggregatedValues.balance;
+            const balB = b.aggregatedValues.balance;
+            
+            if (balA !== balB) {
+                if (balanceSort === 'desc') {
+                    return balB - balA;
+                } else {
+                    return balA - balB;
+                }
+            }
+
+            return a.aggregatedValues.name.localeCompare(b.aggregatedValues.name, 'es');
+        });
+    }, [filteredSubscribers, balanceSort]);
 
     return (
         <div className="max-w-7xl mx-auto space-y-6 w-full p-6">
@@ -249,13 +336,29 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                             <th className="py-4 px-4 font-medium border-b border-gray-700">Contacto</th>
                             <th className="py-4 px-4 font-medium border-b border-gray-700">Patentes</th>
                             <th className="py-4 px-4 font-medium border-b border-gray-700">Estado</th>
-                            <th className="py-4 px-4 font-medium text-right border-b border-gray-700">Balance</th>
+                            <th 
+                                className="py-4 px-4 font-medium border-b border-gray-700 cursor-pointer select-none"
+                                onClick={() => {
+                                    setBalanceSort(prev => {
+                                        if (prev === 'default') return 'desc';
+                                        if (prev === 'desc') return 'asc';
+                                        return 'default';
+                                    });
+                                }}
+                            >
+                                <div className="flex items-center justify-end gap-1">
+                                    Balance
+                                    {balanceSort === 'desc' && <ArrowDown className="w-4 h-4 text-gray-400" />}
+                                    {balanceSort === 'asc' && <ArrowUp className="w-4 h-4 text-gray-400" />}
+                                </div>
+                            </th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-800/60">
-                        {filteredSubscribers.map((sub) => {
-                            const isActive = sub.aggregatedValues.isActive;
+                        {sortedAndFilteredSubscribers.map((sub) => {
                             const { name, dni, avatar, balance, plates, email, phone } = sub.aggregatedValues;
+                            const hasNoVehicles = plates.length === 0;
+                            const isActive = hasNoVehicles ? false : sub.aggregatedValues.isActive;
 
                             return (
                                 <tr key={sub.id || sub._id}
@@ -312,6 +415,10 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                                         {balance > 0 ? (
                                             <span className="text-red-400 font-semibold font-mono">
                                                 ${balance.toLocaleString('es-AR')}
+                                            </span>
+                                        ) : hasNoVehicles ? (
+                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-800/40 text-gray-500 border border-gray-700/40">
+                                                -
                                             </span>
                                         ) : (
                                             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">

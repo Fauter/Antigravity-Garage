@@ -49,6 +49,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
      */
     getPrinters: () => ipcRenderer.invoke('print:get-printers'),
 
+    /**
+     * Lee un archivo local y lo devuelve en Base64.
+     */
+    readFileBase64: (filePath) => ipcRenderer.invoke('fs:readFileBase64', filePath),
+
     // ── Hardware Integration ──────────────────────────────────
 
     /** Listener: evento de entrada detectado por hardware/simulador */

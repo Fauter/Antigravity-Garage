@@ -5,6 +5,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { api } from '../../services/api';
 import { toast } from 'sonner';
 
+export const SyncRefreshContext = React.createContext<{ refreshKey: number }>({ refreshKey: 0 });
 
 interface MainLayoutProps {
     children: React.ReactNode;
@@ -54,12 +55,12 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
 
     // ── Config Modal State ──
     const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
-    
+
     // Printer State
     const [printerList, setPrinterList] = useState<Array<{ name: string; isDefault: boolean; status?: number }>>([]);
     const [isLoadingPrinters, setIsLoadingPrinters] = useState(false);
     const [selectedPrinter, setSelectedPrinter] = useState<string>(localStorage.getItem('selected_printer_name') || '');
-    
+
     // Hardware State
     const [hwConfig, setHwConfig] = useState<any>(null);
     const [isLoadingHw, setIsLoadingHw] = useState(false);
@@ -78,6 +79,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     useEffect(() => {
         if (prevSyncingRef.current && !isGlobalSyncing) {
             setRefreshKey(prev => prev + 1);
+            window.dispatchEvent(new CustomEvent('ag:sync-completed', { detail: { timestamp: Date.now() } }));
         }
         prevSyncingRef.current = isGlobalSyncing;
     }, [isGlobalSyncing]);
@@ -194,7 +196,12 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
         try {
             await api.post('/sync/background', { garageId: gId });
             setLastSyncTime(new Date());
-            setRefreshKey(prev => prev + 1); // Forzar repintado de componentes activos
+
+            // Incrementamos la key silenciosamente. Esto NO desmontará el DOM principal, 
+            // sino que proveerá el nuevo valor a los hijos mediante SyncRefreshContext y CustomEvent.
+            setRefreshKey(prev => prev + 1);
+            window.dispatchEvent(new CustomEvent('ag:sync-completed', { detail: { timestamp: Date.now() } }));
+
             toast.success('Datos actualizados en segundo plano', {
                 duration: 2500,
                 style: { background: '#022c22', border: '1px solid rgba(16, 185, 129, 0.4)', color: '#34d399' },
@@ -301,7 +308,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     const handleOpenConfigModal = async () => {
         setIsConfigModalOpen(true);
         setConfigSaved(false);
-        
+
         // Load Printers
         setIsLoadingPrinters(true);
         try {
@@ -454,12 +461,6 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                             icon={<Ticket className="w-4 h-4" />}
                             label="Abonos"
                         />
-                        {/* <NavButton
-                            active={activeTab === 'anticipados'}
-                            onClick={() => handleTabChange('anticipados')}
-                            icon={<Clock className="w-4 h-4" />}
-                            label="Anticipados"
-                        /> */}
                         <NavButton
                             active={activeTab === 'caja'}
                             onClick={() => handleTabChange('caja')}
@@ -501,9 +502,11 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
             </header>
 
             {/* --- CONTENT AREA --- */}
-            <main key={refreshKey} className="flex-1 overflow-auto relative">
-                {children}
-            </main>
+            <SyncRefreshContext.Provider value={{ refreshKey }}>
+                <main className="flex-1 overflow-auto relative">
+                    {children}
+                </main>
+            </SyncRefreshContext.Provider>
 
             {/* --- INCIDENT MODAL --- */}
             {isIncidentModalOpen && (
@@ -706,73 +709,73 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                                         Set `false` → `true` below to re-enable the UI.
                                         The config state and save handler remain intact. */}
                                     {false && (
-                                    <div className="space-y-3 relative">
-                                        <div className="flex items-center justify-between border-b border-gray-800 pb-2">
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-sm">📷</span>
-                                                <h3 className="text-xs font-bold uppercase tracking-widest text-emerald-500">Cámara</h3>
+                                        <div className="space-y-3 relative">
+                                            <div className="flex items-center justify-between border-b border-gray-800 pb-2">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-sm">📷</span>
+                                                    <h3 className="text-xs font-bold uppercase tracking-widest text-emerald-500">Cámara</h3>
+                                                </div>
+                                                {!mockMode && (
+                                                    <div className="flex items-center gap-1.5">
+                                                        {hwStatus.cameraOnline ? (
+                                                            <Wifi className="w-3.5 h-3.5 text-emerald-500" />
+                                                        ) : (
+                                                            <WifiOff className="w-3.5 h-3.5 text-red-500" />
+                                                        )}
+                                                        <span className={`text-[9px] font-bold uppercase tracking-wider ${hwStatus.cameraOnline ? 'text-emerald-500' : 'text-red-500'}`}>
+                                                            {hwStatus.cameraOnline ? 'Online' : 'Offline'}
+                                                        </span>
+                                                    </div>
+                                                )}
                                             </div>
-                                            {!mockMode && (
-                                                <div className="flex items-center gap-1.5">
-                                                    {hwStatus.cameraOnline ? (
-                                                        <Wifi className="w-3.5 h-3.5 text-emerald-500" />
-                                                    ) : (
-                                                        <WifiOff className="w-3.5 h-3.5 text-red-500" />
+
+                                            {mockMode ? (
+                                                /* ── Mock Lock Overlay ── */
+                                                <div className="relative">
+                                                    <div className="p-4 bg-amber-950/20 border border-amber-500/20 rounded-lg flex items-center gap-3">
+                                                        <div className="p-2 bg-amber-900/30 rounded-lg shrink-0">
+                                                            <Lock className="w-4 h-4 text-amber-500" />
+                                                        </div>
+                                                        <div>
+                                                            <p className="text-xs font-bold text-amber-500 uppercase tracking-wide">Modo Simulación Activo</p>
+                                                            <p className="text-[10px] text-amber-500/60 mt-0.5">
+                                                                Desactive el modo Mock desde el Simulador (Ctrl+Shift+D) para configurar la cámara real.
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                /* ── Real Config Fields ── */
+                                                <div className="space-y-3">
+                                                    <div className="grid grid-cols-2 gap-4 p-3 bg-gray-900/50 border border-emerald-900/30 rounded-lg">
+                                                        <div className="space-y-1">
+                                                            <label className="text-[9px] font-bold uppercase text-gray-500">Puerto Webhook (Listener)</label>
+                                                            <input
+                                                                type="number"
+                                                                value={hwConfig.camera.webhook?.listenPort || 8080}
+                                                                onChange={(e) => setHwConfig({ ...hwConfig, camera: { ...hwConfig.camera, driver: 'ANPR_WEBHOOK', webhook: { ...hwConfig.camera.webhook, listenPort: parseInt(e.target.value) } } })}
+                                                                className="w-full bg-gray-950 border border-gray-800 rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                                                            />
+                                                        </div>
+                                                        <div className="space-y-1">
+                                                            <label className="text-[9px] font-bold uppercase text-gray-500">Auth Token (opcional)</label>
+                                                            <input
+                                                                type="text"
+                                                                value={hwConfig.camera.webhook?.authToken || ''}
+                                                                onChange={(e) => setHwConfig({ ...hwConfig, camera: { ...hwConfig.camera, driver: 'ANPR_WEBHOOK', webhook: { ...hwConfig.camera.webhook, authToken: e.target.value } } })}
+                                                                className="w-full bg-gray-950 border border-gray-800 rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                                                                placeholder="opcional"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                    {!hwStatus.cameraOnline && hwConfig.camera.driver === 'ANPR_WEBHOOK' && (
+                                                        <p className="text-[10px] text-red-400/80 px-1 flex items-center gap-1">
+                                                            <WifiOff className="w-3 h-3" /> Listener webhook no activo. Verifique el puerto.
+                                                        </p>
                                                     )}
-                                                    <span className={`text-[9px] font-bold uppercase tracking-wider ${hwStatus.cameraOnline ? 'text-emerald-500' : 'text-red-500'}`}>
-                                                        {hwStatus.cameraOnline ? 'Online' : 'Offline'}
-                                                    </span>
                                                 </div>
                                             )}
                                         </div>
-
-                                        {mockMode ? (
-                                            /* ── Mock Lock Overlay ── */
-                                            <div className="relative">
-                                                <div className="p-4 bg-amber-950/20 border border-amber-500/20 rounded-lg flex items-center gap-3">
-                                                    <div className="p-2 bg-amber-900/30 rounded-lg shrink-0">
-                                                        <Lock className="w-4 h-4 text-amber-500" />
-                                                    </div>
-                                                    <div>
-                                                        <p className="text-xs font-bold text-amber-500 uppercase tracking-wide">Modo Simulación Activo</p>
-                                                        <p className="text-[10px] text-amber-500/60 mt-0.5">
-                                                            Desactive el modo Mock desde el Simulador (Ctrl+Shift+D) para configurar la cámara real.
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        ) : (
-                                            /* ── Real Config Fields ── */
-                                            <div className="space-y-3">
-                                                <div className="grid grid-cols-2 gap-4 p-3 bg-gray-900/50 border border-emerald-900/30 rounded-lg">
-                                                    <div className="space-y-1">
-                                                        <label className="text-[9px] font-bold uppercase text-gray-500">Puerto Webhook (Listener)</label>
-                                                        <input
-                                                            type="number"
-                                                            value={hwConfig.camera.webhook?.listenPort || 8080}
-                                                            onChange={(e) => setHwConfig({ ...hwConfig, camera: { ...hwConfig.camera, driver: 'ANPR_WEBHOOK', webhook: { ...hwConfig.camera.webhook, listenPort: parseInt(e.target.value) } } })}
-                                                            className="w-full bg-gray-950 border border-gray-800 rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
-                                                        />
-                                                    </div>
-                                                    <div className="space-y-1">
-                                                        <label className="text-[9px] font-bold uppercase text-gray-500">Auth Token (opcional)</label>
-                                                        <input
-                                                            type="text"
-                                                            value={hwConfig.camera.webhook?.authToken || ''}
-                                                            onChange={(e) => setHwConfig({ ...hwConfig, camera: { ...hwConfig.camera, driver: 'ANPR_WEBHOOK', webhook: { ...hwConfig.camera.webhook, authToken: e.target.value } } })}
-                                                            className="w-full bg-gray-950 border border-gray-800 rounded px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
-                                                            placeholder="opcional"
-                                                        />
-                                                    </div>
-                                                </div>
-                                                {!hwStatus.cameraOnline && hwConfig.camera.driver === 'ANPR_WEBHOOK' && (
-                                                    <p className="text-[10px] text-red-400/80 px-1 flex items-center gap-1">
-                                                        <WifiOff className="w-3 h-3" /> Listener webhook no activo. Verifique el puerto.
-                                                    </p>
-                                                )}
-                                            </div>
-                                        )}
-                                    </div>
                                     )}
                                 </>
                             ) : (

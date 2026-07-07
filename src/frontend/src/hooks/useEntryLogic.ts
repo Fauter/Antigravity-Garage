@@ -1,13 +1,21 @@
-import { useState, useMemo, useRef, useCallback } from 'react';
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '../services/api';
 import { PrinterService } from '../services/PrinterService';
 import { useVehiclePriceValidation } from './useVehiclePriceValidation';
+import { useAuth } from '../context/AuthContext';
 
 export interface EntryFormData {
     plate: string;
     vehicleTypeId: string;
+    photoPath?: string;
+    operator?: string;
+    // Prepaid / Anticipado
+    prepaidTariffId?: string;
+    prepaidPaymentMethod?: string;
+    prepaidInvoiceType?: string;
+    prepaidPromoPercentage?: number;
 }
 
 export interface ErrorInfo {
@@ -17,11 +25,26 @@ export interface ErrorInfo {
 }
 
 export const useEntryLogic = () => {
+    const { operatorName } = useAuth();
     const [plate, setPlateRaw] = useState('');
     const [vehicleType, setVehicleType] = useState('');
+    const [photoPath, setPhotoPath] = useState('');
     const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
     const plateInputRef = useRef<HTMLInputElement>(null);
     const queryClient = useQueryClient();
+
+    // --- Prepaid / Anticipado State ---
+    const [isPrepaid, setIsPrepaid] = useState(false);
+    const [prepaidTariffId, setPrepaidTariffId] = useState('');
+    const [prepaidPaymentMethod, setPrepaidPaymentMethod] = useState('');
+    const [prepaidInvoiceType, setPrepaidInvoiceType] = useState('');
+
+    const [promos, setPromos] = useState<any[]>([]);
+    const [selectedPromo, setSelectedPromo] = useState<any>(null);
+
+    useEffect(() => {
+        api.get('/promos').then(res => setPromos(res.data)).catch(console.error);
+    }, []);
 
     // Fetch Vehicle Types
     const { data: rawVehicleTypes = [] } = useQuery({
@@ -45,6 +68,54 @@ export const useEntryLogic = () => {
         [rawVehicleTypes, getSortedVehicleTypes]
     );
 
+    // --- Dual Fetch Prices (for dynamic display in Prepaid UI) ---
+    const { data: pricesStd = {} } = useQuery({
+        queryKey: ['prices', 'Efectivo'],
+        queryFn: async () => {
+            const res = await api.get('/precios', { params: { metodo: 'Efectivo' } });
+            return res.data || {};
+        }
+    });
+
+    const { data: pricesElec = {} } = useQuery({
+        queryKey: ['prices', 'Transferencia'],
+        queryFn: async () => {
+            const res = await api.get('/precios', { params: { metodo: 'Transferencia' } });
+            return res.data || {};
+        }
+    });
+
+    // --- Fetch Turno Tariffs (for Prepaid selector) ---
+    const { data: turnoTariffs = [] } = useQuery({
+        queryKey: ['tariffs-turno'],
+        queryFn: async () => {
+            const res = await api.get('/tarifas');
+            const all = res.data || [];
+            // Filter to 'turno' type and map totalMinutes
+            const turnoRaw = all
+                .filter((t: any) => (t.type || '').toLowerCase() === 'turno')
+                .map((t: any) => {
+                    const d = Number(t.days || 0);
+                    const h = Number(t.hours || 0);
+                    const m = Number(t.minutes || 0);
+                    const totalMinutes = (d * 1440) + (h * 60) + m;
+                    return { ...t, totalMinutes };
+                });
+
+            // Deduplicate by name (case-insensitive) - keep the first one found
+            const uniqueTariffs = Array.from(
+                new Map(
+                    turnoRaw.map((t: any) => [(t.name || '').trim().toLowerCase(), t])
+                ).values()
+            );
+
+            // Sort by duration ascending
+            return uniqueTariffs.sort((a: any, b: any) => a.totalMinutes - b.totalMinutes);
+        }
+    });
+
+
+
     // Clear error when user starts typing a new plate
     const handlePlateChange = useCallback((value: string) => {
         setPlateRaw(value);
@@ -60,10 +131,13 @@ export const useEntryLogic = () => {
             return response.data;
         },
         onSuccess: async (data) => {
+            const stay = data.stay;
+            const prepaidMovement = data.prepaidMovement;
+
             // Invalidate active stays query to refresh list
             queryClient.invalidateQueries({ queryKey: ['stays'] });
             queryClient.invalidateQueries({ queryKey: ['activeStays'] });
-            toast.success(`Ingreso registrado: ${data.plate || 'Vehículo'}`, {
+            toast.success(`Ingreso registrado: ${stay.plate || 'Vehículo'}`, {
                 description: 'Entrada autorizada correctamente'
             });
 
@@ -73,7 +147,14 @@ export const useEntryLogic = () => {
             // This decouples the operator's registration action from the physical gate.
 
             // TICKET
-            PrinterService.printEntryTicket(data);
+            if (prepaidMovement) {
+                // Find tariff name for ticket using the active state BEFORE reset
+                const selectedTariff = turnoTariffs.find((t: any) => String(t.id) === String(prepaidTariffId));
+                const tariffName = selectedTariff?.name || 'Pago Anticipado';
+                PrinterService.printPrepaidEntryTicket(stay, prepaidMovement, tariffName);
+            } else {
+                PrinterService.printEntryTicket(stay);
+            }
 
             setErrorInfo(null);
             resetForm();
@@ -115,6 +196,12 @@ export const useEntryLogic = () => {
     const resetForm = () => {
         setPlateRaw('');
         setVehicleType('');
+        setPhotoPath('');
+        setIsPrepaid(false);
+        setPrepaidTariffId('');
+        setPrepaidPaymentMethod('');
+        setPrepaidInvoiceType('');
+        setSelectedPromo(null);
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -134,10 +221,32 @@ export const useEntryLogic = () => {
 
         if (!plate || !vehicleType) return;
 
-        entryMutation.mutate({
+        // Validate prepaid completeness
+        if (isPrepaid && (!prepaidTariffId || !prepaidPaymentMethod || !prepaidInvoiceType)) {
+            setErrorInfo({
+                message: 'Complete todos los datos del pago anticipado.',
+                isConflict: false,
+                plate: plate
+            });
+            return;
+        }
+
+        const formData: EntryFormData = {
             plate,
-            vehicleTypeId: vehicleType
-        });
+            vehicleTypeId: vehicleType,
+            photoPath: photoPath,
+            operator: operatorName || 'Sistema'
+        };
+
+        // Attach prepaid fields only when active
+        if (isPrepaid && prepaidTariffId) {
+            formData.prepaidTariffId = prepaidTariffId;
+            formData.prepaidPaymentMethod = prepaidPaymentMethod;
+            formData.prepaidInvoiceType = prepaidInvoiceType;
+            formData.prepaidPromoPercentage = selectedPromo?.porcentaje || 0;
+        }
+
+        entryMutation.mutate(formData);
     };
 
     return {
@@ -145,11 +254,28 @@ export const useEntryLogic = () => {
         setPlate: handlePlateChange,
         vehicleType,
         setVehicleType,
+        photoPath,
+        setPhotoPath,
         vehicleTypes,
         handleSubmit,
         isLoading: entryMutation.isPending,
         isSuccess: entryMutation.isSuccess,
         errorInfo,
-        plateInputRef
+        plateInputRef,
+        // Prepaid / Anticipado
+        isPrepaid,
+        setIsPrepaid,
+        prepaidTariffId,
+        setPrepaidTariffId,
+        prepaidPaymentMethod,
+        setPrepaidPaymentMethod,
+        prepaidInvoiceType,
+        setPrepaidInvoiceType,
+        turnoTariffs,
+        pricesStd,
+        pricesElec,
+        promos,
+        selectedPromo,
+        setSelectedPromo
     };
 };

@@ -32,12 +32,15 @@ const useExitLogic = () => {
             setStay(res.data);
 
             if (res.data) {
-                if (!res.data.is_subscriber) {
+                if (res.data.is_subscriber) {
+                    setBasePrice(0);
+                    setPrice(0);
+                } else if (res.data.isPrepaid || res.data.price === 0) {
                     setBasePrice(res.data.price ?? null);
                     setPrice(res.data.price ?? null);
                 } else {
-                    setBasePrice(0);
-                    setPrice(0);
+                    setBasePrice(res.data.price ?? null);
+                    setPrice(null);
                 }
             }
 
@@ -107,6 +110,10 @@ const PanelSalida: React.FC = () => {
     const [isProcessing, setIsProcessing] = useState(false);
 
     const isGracePeriod = Boolean(stay && !isSubscriber && stay.is_grace_period && price === 0);
+
+    // --- Prepaid / Anticipado Detection ---
+    const isPrepaidCovered = Boolean(stay && stay.isPrepaidCovered);
+    const isPrepaidExceedance = Boolean(stay && stay.isPrepaid && !isPrepaidCovered && price !== null && price > 0);
 
     // ── Anti-Crush Sensor State + Barrier LED ──
     const [sensorState, setSensorState] = useState<'OCCUPIED' | 'CLEAR' | 'UNKNOWN'>('UNKNOWN');
@@ -214,6 +221,9 @@ const PanelSalida: React.FC = () => {
             if (isSubscriber) {
                 method = 'Efectivo';
                 invoice = 'Final';
+            } else if (isPrepaidCovered) {
+                method = 'Efectivo';
+                invoice = 'Final';
             } else if (isGracePeriod) {
                 method = 'Efectivo';
                 invoice = 'Final';
@@ -241,7 +251,7 @@ const PanelSalida: React.FC = () => {
                 }
 
                 toast.success(`Salida ok: ${stay.plate}`, {
-                    description: isGracePeriod ? 'Tiempo de Gracia (Sin Cargo)' : (isSubscriber ? 'Abonado (Sin Cargo)' : `Cobro: ${paymentMethod || 'Aut.'}`)
+                    description: isPrepaidCovered ? 'Anticipado (Sin Cargo)' : isGracePeriod ? 'Tiempo de Gracia (Sin Cargo)' : (isSubscriber ? 'Abonado (Sin Cargo)' : `Cobro: ${paymentMethod || 'Aut.'}`)
                 });
 
                 setShowSuccess(true);
@@ -300,7 +310,7 @@ const PanelSalida: React.FC = () => {
             </div>
 
             {/* --- TOP SECTION (Compact Split) --- */}
-            <div className="flex bg-gray-900 border-b border-gray-800" style={{ height: '35%' }}>
+            <div className="h-[35%] shrink-0 flex bg-gray-900 border-b border-gray-800">
 
                 {/* Evidence Viewer (Left) - NOT A LIVE CAMERA */}
                 {/* ... Evidence Viewer code ... */}
@@ -374,7 +384,7 @@ const PanelSalida: React.FC = () => {
             {/* --- MIDDLE SECTION & FOOTER (STRICT BIFURCATION) --- */}
             {stay && isSubscriber ? (
                 <>
-                    <div className="flex-1 p-3 bg-gray-950 flex flex-col justify-center gap-3 overflow-y-auto">
+                    <div className="flex-1 p-3 bg-gray-950 flex flex-col justify-evenly overflow-hidden">
                         <div className="flex-1 flex items-center justify-center bg-emerald-900/20 rounded-xl border border-dashed border-emerald-800/50 p-4">
                             <div className="text-center">
                                 <h4 className="text-emerald-500 font-black text-3xl mb-2 tracking-widest">VEHÍCULO ABONADO</h4>
@@ -395,9 +405,32 @@ const PanelSalida: React.FC = () => {
                         </button>
                     </div>
                 </>
+            ) : stay && isPrepaidCovered ? (
+                <>
+                    <div className="flex-1 p-3 bg-gray-950 flex flex-col justify-evenly overflow-hidden">
+                        <div className="flex-1 flex items-center justify-center bg-violet-900/20 rounded-xl border border-dashed border-violet-800/50 p-4">
+                            <div className="text-center">
+                                <h4 className="text-violet-500 font-black text-3xl mb-2 tracking-widest">PAGO ANTICIPADO</h4>
+                                <p className="text-violet-400/80 text-base">Salida sin cargo &mdash; dentro del bloque prepago.</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div className="px-4 py-3 bg-gray-900/50 border-t border-gray-800 shrink-0">
+                        <button
+                            onClick={handleExit}
+                            disabled={isGlobalSyncing || showSuccess || isProcessing || isSensorBlocked}
+                            className={`w-full h-14 rounded-xl font-bold text-2xl uppercase tracking-widest shadow-xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${(isGlobalSyncing || showSuccess || isProcessing || isSensorBlocked)
+                                ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
+                                : 'bg-violet-600 hover:bg-violet-500 text-white shadow-violet-900/30 ring-1 ring-white/10'
+                                }`}
+                        >
+                            {isProcessing ? 'Procesando...' : isGlobalSyncing ? 'Sincronizando...' : showSuccess ? 'Confirmando...' : 'Confirmar Salida Anticipada'}
+                        </button>
+                    </div>
+                </>
             ) : stay && isGracePeriod ? (
                 <>
-                    <div className="flex-1 p-3 bg-gray-950 flex flex-col justify-center gap-3 overflow-y-auto">
+                    <div className="flex-1 p-3 bg-gray-950 flex flex-col justify-evenly overflow-hidden">
                         <div className="flex-1 flex items-center justify-center bg-cyan-900/20 rounded-xl border border-dashed border-cyan-800/50 p-4">
                             <div className="text-center">
                                 <h4 className="text-cyan-500 font-black text-3xl mb-2 tracking-widest">TIEMPO DE GRACIA</h4>
@@ -420,7 +453,13 @@ const PanelSalida: React.FC = () => {
                 </>
             ) : stay ? (
                 <>
-                    <div className="flex-1 p-3 bg-gray-950 flex flex-col justify-center gap-3 overflow-y-auto">
+                    <div className="flex-1 p-3 bg-gray-950 flex flex-col justify-evenly overflow-hidden">
+                        {/* Exceedance Badge (only for prepaid vehicles with surplus) */}
+                        {isPrepaidExceedance && (
+                            <div className="bg-amber-900/20 border border-amber-600/30 rounded-lg p-2 flex items-center justify-center gap-2">
+                                <span className="text-amber-400 text-xs font-bold uppercase tracking-wider">Excedente de Anticipado</span>
+                            </div>
+                        )}
                         {/* Payment Row */}
                         <div>
                             <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-1 block">Medio de Pago</label>
@@ -521,18 +560,18 @@ const PanelSalida: React.FC = () => {
             {/* SUCCESS OVERLAY */}
             {showSuccess && stay && (
                 <div className="absolute inset-0 z-50 bg-gray-950/95 backdrop-blur-md flex flex-col items-center justify-center animate-in fade-in duration-300">
-                    <div className={`w-28 h-28 mb-6 rounded-full flex items-center justify-center shadow-2xl ${isSubscriber ? 'bg-emerald-500/20 shadow-emerald-500/20' : (isGracePeriod ? 'bg-cyan-500/20 shadow-cyan-500/20' : 'bg-blue-500/20 shadow-blue-500/20')}`}>
-                        <CheckCircle className={`w-16 h-16 animate-[pulse_1s_ease-in-out_infinite] ${isSubscriber ? 'text-emerald-500' : (isGracePeriod ? 'text-cyan-500' : 'text-blue-500')}`} />
+                    <div className={`w-28 h-28 mb-6 rounded-full flex items-center justify-center shadow-2xl ${isSubscriber ? 'bg-emerald-500/20 shadow-emerald-500/20' : isPrepaidCovered ? 'bg-violet-500/20 shadow-violet-500/20' : (isGracePeriod ? 'bg-cyan-500/20 shadow-cyan-500/20' : 'bg-blue-500/20 shadow-blue-500/20')}`}>
+                        <CheckCircle className={`w-16 h-16 animate-[pulse_1s_ease-in-out_infinite] ${isSubscriber ? 'text-emerald-500' : isPrepaidCovered ? 'text-violet-500' : (isGracePeriod ? 'text-cyan-500' : 'text-blue-500')}`} />
                     </div>
                     <div className="text-center font-bold">
-                        <h2 className={`text-4xl font-black tracking-widest uppercase mb-3 ${isSubscriber ? 'text-emerald-400' : (isGracePeriod ? 'text-cyan-400' : 'text-blue-400')}`}>
+                        <h2 className={`text-4xl font-black tracking-widest uppercase mb-3 ${isSubscriber ? 'text-emerald-400' : isPrepaidCovered ? 'text-violet-400' : (isGracePeriod ? 'text-cyan-400' : 'text-blue-400')}`}>
                             SALIDA REGISTRADA
                         </h2>
                         <div className="text-white font-mono text-5xl tracking-widest bg-black/60 px-6 py-3 rounded-lg border border-gray-800 inline-block mb-4 mt-2">
                             {stay.plate}
                         </div>
                         <p className="text-gray-400 uppercase tracking-widest text-sm font-bold">
-                            {isGracePeriod ? 'Salida sin Cargo (Tolerancia)' : (isSubscriber ? 'Vehículo Abonado' : `Cobro Efectuado - ${paymentMethod || 'Efectivo'}`)}
+                            {isPrepaidCovered ? 'Pago Anticipado — Sin Cargo' : isGracePeriod ? 'Salida sin Cargo (Tolerancia)' : (isSubscriber ? 'Vehículo Abonado' : `Cobro Efectuado - ${paymentMethod || 'Efectivo'}`)}
                         </p>
                     </div>
                 </div>

@@ -1,32 +1,38 @@
 /**
- * EthernetRelayDriver.ts — Controls barriers via TCP/IP relay module.
+ * EthernetRelayDriver.ts — Controls barriers via TCP/IP to ESP32.
  *
- * Connects to an ESP32 via raw TCP socket. The connection is PERSISTENT:
- * the socket stays open as long as the driver is alive, and Keep-Alive
- * packets prevent the Wi-Fi stack from dropping it.
+ * Connects to an ESP32 via raw TCP socket on port 23. The connection is
+ * PERSISTENT: the socket stays open as long as the driver is alive, and
+ * Keep-Alive packets prevent the Wi-Fi stack from dropping it.
  *
- * Protocol (ESP32 → Server, incoming):
- *   RFID:<tag_id>\n       →  RFID card scanned at exit barrier
- *   SENSOR:OCCUPIED\n     →  Anti-crush radar detects object under barrier
- *   SENSOR:CLEAR\n        →  Anti-crush radar confirms clear zone
- *   ACK:*\n               →  Command acknowledgement
- *   BUTTON:ENTRY\n        →  Physical button press on entry barrier
- *   BUTTON:EXIT\n         →  Physical button press on exit barrier
+ * Protocol (ESP32 → App, incoming — JSON delimited by \n):
+ *   {"event":"BUTTON_PRESSED","payload":"ENTRY_STATION"}   →  Physical button press
+ *   {"event":"SENSOR_STATE","payload":"OCCUPIED"}           →  Beam sensor blocked
+ *   {"event":"SENSOR_STATE","payload":"CLEAR"}              →  Beam sensor clear
+ *   {"event":"BARRIER_STATE","payload":"OPENING"}           →  Barrier arm rising
+ *   {"event":"BARRIER_STATE","payload":"OPEN"}              →  Barrier arm fully open
+ *   {"event":"BARRIER_STATE","payload":"CLOSING"}           →  Barrier arm descending
+ *   {"event":"BARRIER_STATE","payload":"CLOSED"}            →  Barrier arm fully closed
+ *   {"event":"BARRIER_STATE","payload":"STOPPED"}           →  Emergency stop engaged
+ *   {"event":"RFID","payload":"<tag_uid>"}                  →  RFID tag scanned (future)
  *
- * Protocol (Server → ESP32, outgoing):
- *   OPEN:ENTRY\n  →  opens entry barrier
- *   OPEN:EXIT\n   →  opens exit barrier
+ * Protocol (App → ESP32, outgoing — plain text delimited by \n):
+ *   OPEN_BARRIER\n    →  Activate relay UP (opens barrier arm)
+ *   CLOSE_BARRIER\n   →  Activate relay DOWN (closes barrier arm)
+ *   STOP_BARRIER\n    →  Emergency stop (pulses STOP relay)
  *
  * TCP STREAM BUFFERING:
  *   TCP is a byte stream, NOT a message protocol. Data chunks may arrive
- *   fragmented ("RFI" + "D:ABC\n") or concatenated ("RFID:A\nSENSOR:CLEAR\n").
- *   We accumulate bytes in a buffer and split on \n to extract complete messages.
+ *   fragmented ("{"ev" + "ent":"BU...\n") or concatenated (two JSON objects
+ *   in one chunk). We accumulate bytes in a buffer and split on \n to
+ *   extract complete messages before JSON.parse.
  *
  * ZERO native dependencies — uses Node.js built-in `net` module.
  *
  * Connection lifecycle:
  *   connect()       → TCP socket to ESP32 IP:port (with Keep-Alive)
- *   openBarrier()   → send "OPEN:ENTRY\n" or "OPEN:EXIT\n"
+ *   openBarrier()   → send "OPEN_BARRIER\n"
+ *   closeBarrier()  → send "CLOSE_BARRIER\n"
  *   disconnect()    → graceful close of TCP socket
  *
  * If the cable is unplugged, the 'close'/'error' events on the socket trigger
@@ -42,9 +48,22 @@ import type {
     SensorOccupancyState,
 } from '../HardwareAbstractionLayer';
 
+// ── ESP32 JSON Event Shape ──────────────────────────────────────────
+// Every message from the firmware follows this structure.
+
+interface Esp32JsonEvent {
+    event: string;
+    payload: string;
+}
+
+// ── Barrier State Type ──────────────────────────────────────────────
+// States reported by the firmware's state machine.
+
+type Esp32BarrierState = 'OPENING' | 'OPEN' | 'CLOSING' | 'CLOSED' | 'STOPPED';
+
 export class EthernetRelayDriver implements IBarrierDriver {
     readonly driverType = 'ETHERNET_RELAY';
-    readonly driverName = 'Barrera Ethernet (Relé TCP)';
+    readonly driverName = 'Barrera Ethernet (ESP32 JSON/TCP)';
 
     private socket: net.Socket | null = null;
     private _connected = false;
@@ -57,11 +76,21 @@ export class EthernetRelayDriver implements IBarrierDriver {
     // Accumulates incoming bytes until a complete \n-delimited message is found.
     private _recvBuffer = '';
 
+    // ── Barrier State Tracking ───────────────────────────────────────
+    // The ESP32 controls a single physical barrier. We track state per
+    // logical type (ENTRY/EXIT) for interface compliance. Since both map
+    // to the same ESP32, they share the same physical state.
+    private _barrierStates: Record<'ENTRY' | 'EXIT', 'OPEN' | 'CLOSED' | 'UNKNOWN'> = {
+        ENTRY: 'UNKNOWN',
+        EXIT: 'UNKNOWN',
+    };
+
     // ── Event Callback Registries ────────────────────────────────────
     private _buttonCallbacks: ((type: 'ENTRY' | 'EXIT') => void)[] = [];
     private _vehicleCallbacks: ((type: 'ENTRY' | 'EXIT') => void)[] = [];
     private _rfidCallbacks: ((event: RfidScanEvent) => void)[] = [];
     private _sensorCallbacks: ((state: SensorOccupancyState) => void)[] = [];
+    private _barrierStateCallbacks: ((type: 'ENTRY' | 'EXIT', state: 'OPEN' | 'CLOSED') => void)[] = [];
 
     // Callback the ConnectionMonitor attaches to get notified of unexpected disconnects
     private _onDisconnect: (() => void) | null = null;
@@ -141,7 +170,7 @@ export class EthernetRelayDriver implements IBarrierDriver {
                     : typeof data === 'string'
                         ? Buffer.from(data)
                         : Buffer.from(data as any);
-                
+
                 this.onTcpData(bufferData);
             });
 
@@ -218,19 +247,21 @@ export class EthernetRelayDriver implements IBarrierDriver {
         this._onDisconnect = cb;
     }
 
-    async openBarrier(type: 'ENTRY' | 'EXIT'): Promise<boolean> {
+    // ── Outgoing Commands ────────────────────────────────────────────
+
+    async openBarrier(_type: 'ENTRY' | 'EXIT'): Promise<boolean> {
         if (!this.isConnected() || !this.socket) {
             console.error('❌ [EthernetRelay] Cannot open barrier: not connected');
             return false;
         }
 
-        // ESP32 protocol: send "OPEN:ENTRY\n" or "OPEN:EXIT\n"
-        const command = `OPEN:${type}\n`;
+        // ESP32 firmware: single unified barrier controlled by OPEN_BARRIER
+        const command = 'OPEN_BARRIER\n';
 
         try {
             console.log(`[TCP-DEBUG] Enviando comando: ${JSON.stringify(command)}`);
             await this.sendCommand(command);
-            console.log(`🔓 [EthernetRelay] Barrier ${type} OPEN command sent`);
+            console.log(`🔓 [EthernetRelay] OPEN_BARRIER command sent`);
             return true;
         } catch (err: any) {
             this._lastError = err.message;
@@ -240,15 +271,30 @@ export class EthernetRelayDriver implements IBarrierDriver {
     }
 
     async closeBarrier(_type: 'ENTRY' | 'EXIT'): Promise<boolean> {
-        // Most relay-controlled barriers auto-close via mechanical spring/weight.
-        // This is a no-op unless the relay module supports a "close" command.
-        return true;
+        if (!this.isConnected() || !this.socket) {
+            console.error('❌ [EthernetRelay] Cannot close barrier: not connected');
+            return false;
+        }
+
+        const command = 'CLOSE_BARRIER\n';
+
+        try {
+            console.log(`[TCP-DEBUG] Enviando comando: ${JSON.stringify(command)}`);
+            await this.sendCommand(command);
+            console.log(`🔒 [EthernetRelay] CLOSE_BARRIER command sent`);
+            return true;
+        } catch (err: any) {
+            this._lastError = err.message;
+            console.error(`❌ [EthernetRelay] closeBarrier failed:`, err);
+            return false;
+        }
     }
 
-    getBarrierState(_type: 'ENTRY' | 'EXIT'): 'OPEN' | 'CLOSED' | 'UNKNOWN' {
-        // Without digital input feedback from the barrier, we can't know the state.
-        return 'UNKNOWN';
+    getBarrierState(type: 'ENTRY' | 'EXIT'): 'OPEN' | 'CLOSED' | 'UNKNOWN' {
+        return this._barrierStates[type];
     }
+
+    // ── Event Subscriptions ──────────────────────────────────────────
 
     onButtonPress(callback: (type: 'ENTRY' | 'EXIT') => void): void {
         this._buttonCallbacks.push(callback);
@@ -266,9 +312,17 @@ export class EthernetRelayDriver implements IBarrierDriver {
         this._sensorCallbacks.push(callback);
     }
 
+    /**
+     * Subscribe to barrier arm state changes reported by the ESP32 firmware.
+     * Fires when the barrier transitions to a terminal state (OPEN or CLOSED).
+     */
+    onBarrierStateChanged(callback: (type: 'ENTRY' | 'EXIT', state: 'OPEN' | 'CLOSED') => void): void {
+        this._barrierStateCallbacks.push(callback);
+    }
+
     // ── TCP Stream Processing ────────────────────────────────────────
     // TCP is a byte stream. Messages may arrive fragmented or concatenated.
-    // We buffer and split by \n to extract complete commands.
+    // We buffer and split by \n to extract complete JSON messages.
 
     /**
      * Handles raw TCP data from ESP32.
@@ -297,73 +351,137 @@ export class EthernetRelayDriver implements IBarrierDriver {
     }
 
     /**
-     * Parse a single complete message from the ESP32.
-     * Protocol commands: RFID:<id>, SENSOR:OCCUPIED, SENSOR:CLEAR,
-     *                    BUTTON:ENTRY, BUTTON:EXIT, ACK:*
+     * Parse a single complete JSON message from the ESP32.
+     * Expected shape: {"event":"<TYPE>","payload":"<VALUE>"}
      */
     private parseIncomingMessage(msg: string): void {
         console.log(`📨 [EthernetRelay] ESP32 says: "${msg}"`);
 
-        // ── RFID Tag Scanned ──
-        if (msg.startsWith('RFID:')) {
-            const rfidCode = msg.slice(5).trim();
-            if (rfidCode.length === 0) {
-                console.warn('⚠️ [EthernetRelay] Empty RFID code received, ignoring');
-                return;
+        let parsed: Esp32JsonEvent;
+        try {
+            parsed = JSON.parse(msg);
+        } catch {
+            // Non-JSON message (e.g. boot log, debug print from Serial)
+            console.warn(`⚠️ [EthernetRelay] Non-JSON message ignored: "${msg}"`);
+            return;
+        }
+
+        if (!parsed.event) {
+            console.warn(`⚠️ [EthernetRelay] JSON message missing "event" field: "${msg}"`);
+            return;
+        }
+
+        switch (parsed.event) {
+            // ── Physical Button Press ──
+            case 'BUTTON_PRESSED': {
+                const mappedType = this.mapPayloadToBarrierType(parsed.payload);
+                if (mappedType) {
+                    console.log(`🔘 [EthernetRelay] Button press: ${mappedType} (payload="${parsed.payload}")`);
+                    this._buttonCallbacks.forEach(cb => cb(mappedType));
+                } else {
+                    console.warn(`⚠️ [EthernetRelay] Unknown BUTTON_PRESSED payload: "${parsed.payload}"`);
+                }
+                break;
             }
-            const event: RfidScanEvent = {
-                rfidCode: rfidCode.toUpperCase(),
-                timestamp: new Date().toISOString(),
-                source: 'ESP32',
-            };
-            console.log(`🏷️ [EthernetRelay] RFID scanned: ${event.rfidCode}`);
-            this._rfidCallbacks.forEach(cb => cb(event));
-            return;
-        }
 
-        // ── Anti-Crush Sensor State ──
-        if (msg.startsWith('SENSOR:')) {
-            const stateStr = msg.slice(7).trim().toUpperCase();
-            if (stateStr === 'OCCUPIED' || stateStr === 'CLEAR') {
-                console.log(`📡 [EthernetRelay] Sensor state → ${stateStr}`);
-                this._sensorCallbacks.forEach(cb => cb(stateStr as SensorOccupancyState));
-            } else {
-                console.warn(`⚠️ [EthernetRelay] Unknown sensor state: "${stateStr}"`);
+            // ── Anti-Crush / Beam Sensor State ──
+            case 'SENSOR_STATE': {
+                const state = parsed.payload?.toUpperCase();
+                if (state === 'OCCUPIED' || state === 'CLEAR') {
+                    console.log(`📡 [EthernetRelay] Sensor state → ${state}`);
+                    this._sensorCallbacks.forEach(cb => cb(state as SensorOccupancyState));
+                } else {
+                    console.warn(`⚠️ [EthernetRelay] Unknown SENSOR_STATE payload: "${parsed.payload}"`);
+                }
+                break;
             }
-            return;
-        }
 
-        // ── Physical Button Press ──
-        if (msg.startsWith('BUTTON:')) {
-            const btnType = msg.slice(7).trim().toUpperCase();
-            if (btnType === 'ENTRY' || btnType === 'EXIT') {
-                console.log(`🔘 [EthernetRelay] Button press: ${btnType}`);
-                this._buttonCallbacks.forEach(cb => cb(btnType as 'ENTRY' | 'EXIT'));
+            // ── Barrier Arm State Machine ──
+            case 'BARRIER_STATE': {
+                const barrierState = parsed.payload?.toUpperCase() as Esp32BarrierState;
+                console.log(`🚧 [EthernetRelay] Barrier state → ${barrierState}`);
+                this.handleBarrierStateUpdate(barrierState);
+                break;
             }
-            return;
-        }
 
-        // ── Vehicle Detection ──
-        if (msg.startsWith('VEHICLE:')) {
-            const vehType = msg.slice(8).trim().toUpperCase();
-            if (vehType === 'ENTRY' || vehType === 'EXIT') {
-                console.log(`🚗 [EthernetRelay] Vehicle detected: ${vehType}`);
-                this._vehicleCallbacks.forEach(cb => cb(vehType as 'ENTRY' | 'EXIT'));
+            // ── RFID Tag Scanned (future firmware support) ──
+            case 'RFID': {
+                const rfidCode = parsed.payload?.trim();
+                if (!rfidCode || rfidCode.length === 0) {
+                    console.warn('⚠️ [EthernetRelay] Empty RFID payload received, ignoring');
+                    break;
+                }
+                const event: RfidScanEvent = {
+                    rfidCode: rfidCode.toUpperCase(),
+                    timestamp: new Date().toISOString(),
+                    source: 'ESP32',
+                };
+                console.log(`🏷️ [EthernetRelay] RFID scanned: ${event.rfidCode}`);
+                this._rfidCallbacks.forEach(cb => cb(event));
+                break;
             }
-            return;
-        }
 
-        // ── Acknowledgements (ACK:OPEN_ENTRY, ACK:OPEN_EXIT, etc.) ──
-        if (msg.startsWith('ACK:')) {
-            // Logged above, no further action needed
-            return;
+            // ── Unknown Event ──
+            default: {
+                console.log(`ℹ️ [EthernetRelay] Unhandled event type: "${parsed.event}" (payload="${parsed.payload}")`);
+                break;
+            }
         }
-
-        // ── Unknown / Heartbeat / Debug messages ──
-        // Already logged above via console.log — no action needed
     }
 
-    // ── Internal ─────────────────────────────────────────────────────
+    // ── Internal Helpers ─────────────────────────────────────────────
+
+    /**
+     * Maps ESP32 BUTTON_PRESSED payload values to the IBarrierDriver type.
+     * The firmware sends "ENTRY_STATION"; future firmware may send "EXIT_STATION".
+     */
+    private mapPayloadToBarrierType(payload: string): 'ENTRY' | 'EXIT' | null {
+        switch (payload?.toUpperCase()) {
+            case 'ENTRY_STATION':
+                return 'ENTRY';
+            case 'EXIT_STATION':
+                return 'EXIT';
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * Updates internal barrier state tracking from firmware telemetry.
+     * Maps transient states (OPENING/CLOSING) to terminal states (OPEN/CLOSED)
+     * and fires callbacks when a terminal state is reached.
+     */
+    private handleBarrierStateUpdate(state: Esp32BarrierState): void {
+        let terminalState: 'OPEN' | 'CLOSED' | null = null;
+
+        switch (state) {
+            case 'OPEN':
+                terminalState = 'OPEN';
+                break;
+            case 'CLOSED':
+                terminalState = 'CLOSED';
+                break;
+            case 'STOPPED':
+                // STOPPED is an intermediate state — barrier position is ambiguous.
+                // We do NOT update _barrierStates to avoid stale reads.
+                // The next OPEN/CLOSED from the firmware will correct it.
+                break;
+            case 'OPENING':
+            case 'CLOSING':
+                // Transient states — logged but no terminal state update.
+                break;
+        }
+
+        if (terminalState) {
+            // Single ESP32 → both logical types share the same physical state
+            this._barrierStates.ENTRY = terminalState;
+            this._barrierStates.EXIT = terminalState;
+            this._barrierStateCallbacks.forEach(cb => {
+                cb('ENTRY', terminalState!);
+                cb('EXIT', terminalState!);
+            });
+        }
+    }
 
     private sendCommand(cmd: string): Promise<void> {
         return new Promise((resolve, reject) => {

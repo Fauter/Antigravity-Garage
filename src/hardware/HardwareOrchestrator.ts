@@ -19,6 +19,7 @@ import { BrowserWindow, ipcMain, globalShortcut } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import http from 'http';
+import { v4 as uuidv4 } from 'uuid';
 
 import type {
     HardwareConfig,
@@ -159,6 +160,10 @@ export class HardwareOrchestrator {
     private _ipcRegistered = false;
     private _shortcutRegistered = false;
 
+    // ── Automated Flow State: prevents event duplication ──
+    private _isAutomatedFlowActive = false;
+    private _capturedCameraEvent: HardwareEntryEvent | null = null;
+
     // ── Deduplication: track recent event IDs to prevent double-processing ──
     private _recentEventIds: Set<string> = new Set();
     private _dedupeWindowMs = 3000; // 3 second window
@@ -200,7 +205,14 @@ export class HardwareOrchestrator {
     private wireCameraEvents(): void {
         try {
             this.registry.camera.onPlateDetected((event) => {
-                this.handleEntryEvent(event);
+                // If we are currently processing a button press, intercept the camera event.
+                // This prevents duplicating the entry in the frontend queue, while still
+                // allowing us to capture the photo/plate for the single unified event.
+                if (this._isAutomatedFlowActive) {
+                    this._capturedCameraEvent = event;
+                } else {
+                    this.handleEntryEvent(event);
+                }
             });
         } catch (err: any) {
             console.warn(`[HW-DEBUG] wireCameraEvents failed (camera may not be initialized): ${err.message}`);
@@ -231,7 +243,12 @@ export class HardwareOrchestrator {
                 });
             }
 
-            console.log('[HW-DEBUG] ✅ Barrier bidirectional events wired');
+            // ── Button Press: ESP32 physical button → automated entry flow ──
+            this.registry.barrier.onButtonPress((type: 'ENTRY' | 'EXIT') => {
+                this.handleAutomatedEntryFlow(type);
+            });
+
+            console.log('[HW-DEBUG] ✅ Barrier bidirectional events wired (incl. button press)');
         } catch (err: any) {
             console.warn(`[HW-DEBUG] wireBarrierEvents failed: ${err.message}`);
         }
@@ -490,6 +507,73 @@ export class HardwareOrchestrator {
         });
 
         console.log('✅ [HardwareOrchestrator] IPC handlers registered');
+    }
+
+    // ── Automated Entry Flow (Button Press → Camera → IPC) ────────
+
+    /**
+     * Adapter between the raw ESP32 button press and the full entry pipeline.
+     * Attempts an async camera capture with graceful degradation: if the camera
+     * is MOCK, fails, or times out, the flow continues with empty photo/plate
+     * so vehicle ingress is NEVER blocked by a camera failure.
+     */
+    private async handleAutomatedEntryFlow(type: 'ENTRY' | 'EXIT'): Promise<void> {
+        // Only the ENTRY flow triggers automated ingress
+        if (type !== 'ENTRY') {
+            console.log(`ℹ️ [HardwareOrchestrator] Button press ${type} — no automated flow for EXIT`);
+            return;
+        }
+
+        console.log(`🚀 [HardwareOrchestrator] Automated entry flow triggered by physical button`);
+
+        // Lock the event stream so the camera doesn't emit a duplicate event
+        this._isAutomatedFlowActive = true;
+        this._capturedCameraEvent = null;
+
+        // ── Attempt camera capture (fail-safe, 3s timeout) ──
+        let photoPath = '';
+        let suggestedPlate = '';
+
+        try {
+            const captureResult = await safeDriverCall(
+                () => this.registry.camera.triggerCapture(),
+                3000,
+                '' // Fallback: empty string on timeout/error
+            );
+
+            // Wait a tiny tick (50ms) to allow the event loop to process any pending 
+            // synchronous event emissions from the driver (like the MockDriver does)
+            await new Promise(resolve => setTimeout(resolve, 50));
+
+            // Consolidate: if the camera driver natively emitted an event (Mock or Webhook),
+            // we absorb its data. Otherwise, we use the direct captureResult.
+            const captured = this._capturedCameraEvent as HardwareEntryEvent | null;
+            if (captured) {
+                photoPath = captured.photoPath || captureResult;
+                suggestedPlate = captured.suggestedPlate || '';
+                console.log(`📸 [HardwareOrchestrator] Consolidating async camera event into automated flow`);
+            } else if (captureResult) {
+                photoPath = captureResult;
+            }
+        } catch (err: any) {
+            console.warn(`⚠️ [HardwareOrchestrator] Camera capture failed (graceful degradation): ${err.message}`);
+        } finally {
+            // Unlock the stream
+            this._isAutomatedFlowActive = false;
+        }
+
+        // ── Build the SINGLE Unified HardwareEntryEvent envelope ──
+        const event: HardwareEntryEvent = {
+            id: uuidv4(),
+            timestamp: new Date().toISOString(),
+            photoPath,
+            suggestedPlate,
+            source: 'MANUAL', // Always MANUAL when triggered by the button
+        };
+
+        // ── Delegate to the unified entry pipeline ──
+        // handleEntryEvent handles: dedup → barrier open → IPC → simulator notify
+        this.handleEntryEvent(event);
     }
 
     // ── Event Handling ───────────────────────────────────────────────

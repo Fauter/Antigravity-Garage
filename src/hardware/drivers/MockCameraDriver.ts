@@ -8,6 +8,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { ICameraDriver, DriverHealth, HardwareEntryEvent } from '../HardwareAbstractionLayer';
 import { randomPlate, generatePlaceholderPhoto } from './MockBarrierDriver';
+import fs from 'fs';
+import path from 'path';
 
 export class MockCameraDriver implements ICameraDriver {
     readonly driverType = 'MOCK';
@@ -47,14 +49,31 @@ export class MockCameraDriver implements ICameraDriver {
         this._plateCallbacks.push(callback);
     }
 
+    /**
+     * Intenta cargar la imagen local de prueba y la convierte a Base64.
+     * Retorna fallback (placeholder) en caso de fallo para degradación elegante.
+     */
+    private _capturePhoto(): string {
+        try {
+            const imagePath = path.resolve(process.cwd(), '.data/mock/vehiculo_test.jpg');
+            if (fs.existsSync(imagePath)) {
+                const imageBuffer = fs.readFileSync(imagePath);
+                return `data:image/jpeg;base64,${imageBuffer.toString('base64')}`;
+            }
+        } catch (error) {
+            console.warn('⚠️ [MockCameraDriver] Error leyendo imagen local, usando fallback.', error);
+        }
+        return generatePlaceholderPhoto(); // Fallback si no existe
+    }
+
     async triggerCapture(): Promise<string> {
-        const photoPath = generatePlaceholderPhoto();
+        const photoPath = this._capturePhoto();
         this._lastCapture = photoPath;
 
         const event: HardwareEntryEvent = {
             id: uuidv4(),
             timestamp: new Date().toISOString(),
-            photoPath,
+            photoPath, // Ahora contiene el Base64
             suggestedPlate: randomPlate(),
             source: 'SIMULATOR',
         };
@@ -73,7 +92,7 @@ export class MockCameraDriver implements ICameraDriver {
      * Returns the generated event for IPC forwarding.
      */
     simulateDetection(): HardwareEntryEvent {
-        const photoPath = generatePlaceholderPhoto();
+        const photoPath = this._capturePhoto();
         this._lastCapture = photoPath;
 
         const event: HardwareEntryEvent = {

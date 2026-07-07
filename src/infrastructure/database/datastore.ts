@@ -74,6 +74,7 @@ export const db = {
     // Sync Queue
     mutations: createStore('mutations'),
     syncConflicts: createStore('sync_conflicts'),
+    syncState: createStore('sync_state'),
 
     // Hardware Integration
     hardwareEvents: createStore('hardware_events'),

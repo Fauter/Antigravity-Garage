@@ -3,7 +3,7 @@ import { useEntryLogic } from '../../hooks/useEntryLogic';
 import { useAuth } from '../../context/AuthContext';
 import { useHardware, type PendingEntry } from '../../context/HardwareContext';
 import EntryTabQueue from './EntryTabQueue';
-import { Car, CheckCircle, AlertTriangle, Camera } from 'lucide-react';
+import { Car, CheckCircle, AlertTriangle, Camera, Clock, Lock } from 'lucide-react';
 
 const EntryPanel: React.FC = () => {
     const {
@@ -16,7 +16,24 @@ const EntryPanel: React.FC = () => {
         isLoading,
         isSuccess,
         errorInfo,
-        plateInputRef
+        photoPath,
+        setPhotoPath,
+        plateInputRef,
+        // Prepaid / Anticipado
+        isPrepaid,
+        setIsPrepaid,
+        prepaidTariffId,
+        setPrepaidTariffId,
+        prepaidPaymentMethod,
+        setPrepaidPaymentMethod,
+        prepaidInvoiceType,
+        setPrepaidInvoiceType,
+        turnoTariffs,
+        pricesStd,
+        pricesElec,
+        promos,
+        selectedPromo,
+        setSelectedPromo
     } = useEntryLogic();
 
     const { isGlobalSyncing } = useAuth();
@@ -61,6 +78,7 @@ const EntryPanel: React.FC = () => {
             if (activeEntry.vehicleTypeId) {
                 setVehicleType(activeEntry.vehicleTypeId);
             }
+            setPhotoPath(activeEntry.photoPath || '');
         }
     }, [activeEntry?.id]); // Only when active tab changes
 
@@ -95,12 +113,37 @@ const EntryPanel: React.FC = () => {
             setPlate(entry.confirmedPlate || entry.suggestedPlate || '');
             if (entry.vehicleTypeId) setVehicleType(entry.vehicleTypeId);
             else setVehicleType('');
+            setPhotoPath(entry.photoPath || '');
         } else {
             // Manual mode — clear form
             setPlate('');
             setVehicleType('');
+            setPhotoPath('');
         }
     };
+
+    const isBaseInvalid = !plate || plate.trim().length < 3 || !vehicleType || isLoading || isGlobalSyncing || isSensorBlocked;
+    const isPrepaidInvalid = isPrepaid && (!prepaidTariffId || !prepaidPaymentMethod || !prepaidInvoiceType);
+    const isFormInvalid = isBaseInvalid || isPrepaidInvalid;
+    const vehicleName = vehicleTypes.find((v: any) => String(v.id) === String(vehicleType))?.name || 'Auto';
+
+    let rawPrice: number | null = null;
+    let hasStdPrice = true;
+    let hasElecPrice = true;
+    if (prepaidTariffId) {
+        const selectedTariff = turnoTariffs.find((t: any) => String(t.id) === String(prepaidTariffId));
+        if (selectedTariff) {
+            hasStdPrice = (pricesStd[vehicleName]?.[selectedTariff.name] || 0) > 0;
+            hasElecPrice = (pricesElec[vehicleName]?.[selectedTariff.name] || 0) > 0;
+            
+            if (prepaidPaymentMethod) {
+                rawPrice = prepaidPaymentMethod === 'Efectivo' 
+                    ? (pricesStd[vehicleName]?.[selectedTariff.name] || 0)
+                    : (pricesElec[vehicleName]?.[selectedTariff.name] || 0);
+            }
+        }
+    }
+    const finalPrice = rawPrice !== null ? (selectedPromo ? rawPrice * (1 - selectedPromo.porcentaje / 100) : rawPrice) : null;
 
     return (
         <div className="flex flex-col h-full bg-gray-900 border-r border-gray-800 font-sans overflow-hidden">
@@ -119,11 +162,10 @@ const EntryPanel: React.FC = () => {
                     </div>
                     {/* Status LED */}
                     <div
-                        className={`w-2.5 h-2.5 rounded-full border transition-all duration-500 ${
-                            barrierState === 'OPEN'
+                        className={`w-2.5 h-2.5 rounded-full border transition-all duration-500 ${barrierState === 'OPEN'
                                 ? 'bg-emerald-500 border-emerald-400 shadow-[0_0_8px_2px_rgba(16,185,129,0.5)]'
                                 : 'bg-red-500/40 border-red-500/50'
-                        }`}
+                            }`}
                         title={`Barrera: ${barrierState}`}
                     />
                 </div>
@@ -136,20 +178,40 @@ const EntryPanel: React.FC = () => {
             <div className="flex-1 flex flex-col overflow-hidden">
 
                 {/* Camera / Photo Area */}
-                <div className="h-40 bg-black flex items-center justify-center border-b border-gray-800 shrink-0 relative">
+                <div className="relative flex-1 flex items-center justify-center bg-black border-b border-gray-800 transition-all duration-300 overflow-hidden min-h-[60px]">
                     {activeEntry ? (
-                        // Hardware entry: show photo placeholder with ANPR data
-                        <div className="flex flex-col items-center gap-1">
-                            <Camera className="w-8 h-8 text-emerald-500/50" />
-                            <span className="text-emerald-400/80 font-mono text-xs font-bold">
-                                CAPTURA ANPR
-                            </span>
-                            {activeEntry.suggestedPlate && (
-                                <span className="text-white/60 font-mono text-[10px] bg-white/5 px-2 py-0.5 rounded">
-                                    OCR: {activeEntry.suggestedPlate}
+                        // Renderizar imagen Base64 real o fallback si es data:image
+                        activeEntry.photoPath && activeEntry.photoPath.startsWith('data:image') ? (
+                            <>
+                                <img
+                                    src={activeEntry.photoPath}
+                                    alt="Captura ANPR"
+                                    className="absolute inset-0 w-full h-full object-cover opacity-80 rounded-sm"
+                                />
+                                <div className="absolute bottom-2 right-2 flex flex-col items-end gap-1 shadow-2xl">
+                                    <span className="text-emerald-400 font-mono text-[10px] bg-black/90 px-2 py-0.5 rounded border border-emerald-500/50 uppercase tracking-wider backdrop-blur-sm">
+                                        Captura ANPR
+                                    </span>
+                                    {activeEntry.suggestedPlate && (
+                                        <span className="text-white font-mono text-xs font-bold bg-emerald-900/90 px-2 py-0.5 rounded border border-emerald-500/80 backdrop-blur-sm">
+                                            OCR: {activeEntry.suggestedPlate}
+                                        </span>
+                                    )}
+                                </div>
+                            </>
+                        ) : (
+                            <div className="flex flex-col items-center gap-1">
+                                <Camera className="w-8 h-8 text-emerald-500/50" />
+                                <span className="text-emerald-400/80 font-mono text-xs font-bold">
+                                    CAPTURA ANPR
                                 </span>
-                            )}
-                        </div>
+                                {activeEntry.suggestedPlate && (
+                                    <span className="text-white/60 font-mono text-[10px] bg-white/5 px-2 py-0.5 rounded">
+                                        OCR: {activeEntry.suggestedPlate}
+                                    </span>
+                                )}
+                            </div>
+                        )
                     ) : (
                         <>
                             <span className="text-gray-700 font-mono text-xs">
@@ -161,18 +223,13 @@ const EntryPanel: React.FC = () => {
                 </div>
 
                 {/* Form Area */}
-                <div className="flex-1 p-6 flex flex-col justify-center gap-4">
-                    <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="shrink-0 px-2 py-1.5 flex flex-col justify-end bg-gray-900 z-10">
+                    <form onSubmit={handleSubmit} className={`flex flex-col transition-all duration-300 ${isPrepaid ? 'gap-1' : 'gap-3'}`}>
 
                         {/* Plate Input */}
                         <div>
-                            <label className="text-gray-500 text-xs font-bold uppercase tracking-widest mb-1 block">
+                            <label className={`text-gray-500 font-bold uppercase tracking-widest block transition-all ${isPrepaid ? 'text-[9px] mb-0' : 'text-xs mb-1'}`}>
                                 Patente
-                                {activeEntry && (
-                                    <span className="text-emerald-500/60 ml-2 normal-case tracking-normal">
-                                        (verificar OCR)
-                                    </span>
-                                )}
                             </label>
                             <input
                                 ref={plateInputRef}
@@ -180,12 +237,7 @@ const EntryPanel: React.FC = () => {
                                 value={plate}
                                 onChange={(e) => handlePlateChange(e.target.value.toUpperCase())}
                                 placeholder="AAA-000"
-                                className={`w-full h-14 bg-gray-800 border-2 rounded-xl text-center text-3xl font-mono text-white font-bold outline-none uppercase transition-colors ${errorInfo?.isConflict
-                                    ? 'border-red-500 focus:border-red-400'
-                                    : activeEntry
-                                        ? 'border-emerald-700 focus:border-emerald-500'
-                                        : 'border-gray-700 focus:border-emerald-500'
-                                    }`}
+                                className={`w-full bg-gray-800 border-2 rounded-xl text-center font-mono text-white font-bold outline-none uppercase transition-colors duration-300 ${errorInfo?.isConflict ? 'border-red-500' : activeEntry ? 'border-emerald-700' : 'border-gray-700'} ${isPrepaid ? 'h-9 text-lg' : 'h-12 text-2xl'}`}
                                 maxLength={7}
                                 autoFocus
                             />
@@ -193,12 +245,12 @@ const EntryPanel: React.FC = () => {
 
                         {/* Vehicle Type Dropdown */}
                         <div>
-                            <label className="text-gray-500 text-xs font-bold uppercase tracking-widest mb-1 block">Tipo Vehículo</label>
+                            <label className={`text-gray-500 font-bold uppercase tracking-widest block transition-all ${isPrepaid ? 'text-[9px] mb-0' : 'text-xs mb-1'}`}>Tipo Vehículo</label>
                             <div className="relative">
                                 <select
                                     value={vehicleType}
                                     onChange={(e) => handleVehicleTypeChange(e.target.value)}
-                                    className="w-full h-12 bg-gray-800 border border-gray-700 rounded-xl px-4 text-white text-lg appearance-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none"
+                                    className={`w-full bg-gray-800 border border-gray-700 rounded-xl px-2 text-white appearance-none outline-none transition-colors duration-300 ${isPrepaid ? 'h-8 text-xs' : 'h-10 text-sm'}`}
                                 >
                                     <option value="" disabled>Seleccione el tipo...</option>
                                     {vehicleTypes.map((type: any) => (
@@ -211,18 +263,136 @@ const EntryPanel: React.FC = () => {
                             </div>
                         </div>
 
-                        {/* Action Button */}
-                        <div className="pt-2">
+                        {/* ── Prepaid / Anticipado Toggle ── */}
+                        <div className="pt-1">
                             <button
-                                type="submit"
-                                disabled={!plate || plate.trim().length < 3 || !vehicleType || isLoading || isGlobalSyncing || isSensorBlocked}
-                                className={`w-full h-14 rounded-xl font-bold text-xl uppercase tracking-wide flex items-center justify-center gap-3 transition-all ${(!plate || plate.trim().length < 3 || !vehicleType || isGlobalSyncing || isSensorBlocked)
-                                    ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
-                                    : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-900/30'
+                                type="button"
+                                onClick={() => setIsPrepaid(!isPrepaid)}
+                                className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg border transition-all duration-200 ${isPrepaid
+                                        ? 'bg-amber-900/30 border-amber-600/50 text-amber-400'
+                                        : 'bg-gray-800/50 border-gray-700/50 text-gray-500 hover:border-gray-600 hover:text-gray-400'
                                     }`}
                             >
-                                {isLoading ? '...' : isGlobalSyncing ? 'Sincronizando...' : 'Dar Entrada'}
-                                {!isLoading && !isGlobalSyncing && <CheckCircle className="w-5 h-5" />}
+                                <div className="flex items-center gap-2">
+                                    <Clock className="w-4 h-4" />
+                                    <span className="text-xs font-bold uppercase tracking-wider">Pago Anticipado</span>
+                                </div>
+                                {/* iOS-style toggle */}
+                                <div className={`relative w-10 h-5 rounded-full transition-colors duration-200 ${isPrepaid ? 'bg-amber-500' : 'bg-gray-700'
+                                    }`}>
+                                    <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-md transition-transform duration-200 ${isPrepaid ? 'translate-x-5' : 'translate-x-0.5'
+                                        }`} />
+                                </div>
+                            </button>
+
+                            {/* Expandable Prepaid Options */}
+                            <div className={`overflow-hidden transition-all duration-300 ease-in-out flex flex-col gap-1.5 ${isPrepaid ? 'max-h-60 opacity-100 mt-1' : 'max-h-0 opacity-0 mt-0'}`}>
+                                <div className="bg-gray-900 border border-gray-800 rounded-lg p-1.5 space-y-1 relative">
+                                    {/* OVERLAY DE BLOQUEO */}
+                                    {!vehicleType && (
+                                        <div className="absolute inset-0 z-10 bg-gray-950/80 backdrop-blur-[1px] rounded-lg flex flex-col items-center justify-center border border-gray-800">
+                                            <Lock className="w-4 h-4 text-amber-500/50 mb-1"/>
+                                            <span className="text-[9px] text-amber-500/70 font-bold uppercase tracking-widest text-center">
+                                                Seleccione un vehículo<br/>para cotizar
+                                            </span>
+                                        </div>
+                                    )}
+
+                                    {/* Tariff Select */}
+                                    <div>
+                                        <label className="text-gray-500 text-[10px] font-bold uppercase tracking-widest mb-1 block">Tarifa Anticipada</label>
+                                        <select
+                                            value={prepaidTariffId}
+                                            onChange={(e) => setPrepaidTariffId(e.target.value)}
+                                            className={`w-full h-7 bg-gray-800 border border-gray-700 rounded-lg px-1.5 text-[10px] appearance-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-none ${!prepaidTariffId ? 'text-gray-400' : 'text-white'}`}
+                                        >
+                                            <option value="" disabled>Seleccione bloque...</option>
+                                            {turnoTariffs.map((t: any) => {
+                                                const pStd = pricesStd[vehicleName]?.[t.name] || 0;
+                                                const pElec = pricesElec[vehicleName]?.[t.name] || 0;
+
+                                                let isDisabled = false;
+                                                if (prepaidPaymentMethod === 'Efectivo') isDisabled = pStd <= 0;
+                                                else if (prepaidPaymentMethod) isDisabled = pElec <= 0;
+                                                else isDisabled = (pStd <= 0 && pElec <= 0);
+
+                                                return <option key={t.id} value={t.id} disabled={isDisabled}>{t.name}{isDisabled ? ' (Sin precio)' : ''}</option>;
+                                            })}
+                                        </select>
+                                    </div>
+
+                                    {/* Payment Method + Invoice in a row */}
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div>
+                                            <label className="text-gray-500 text-[10px] font-bold uppercase tracking-widest mb-1 block">Medio Pago</label>
+                                            <select
+                                                value={prepaidPaymentMethod}
+                                                onChange={(e) => setPrepaidPaymentMethod(e.target.value)}
+                                                className={`w-full h-7 bg-gray-800 border border-gray-700 rounded-lg px-1.5 text-[10px] appearance-none focus:border-amber-500 outline-none ${!prepaidPaymentMethod ? 'text-gray-400' : 'text-white'}`}
+                                            >
+                                                <option value="" disabled>Método...</option>
+                                                <option value="Efectivo" disabled={!hasStdPrice}>Efectivo</option>
+                                                <option value="Transferencia" disabled={!hasElecPrice}>Transf.</option>
+                                                <option value="Debito" disabled={!hasElecPrice}>Débito</option>
+                                                <option value="Credito" disabled={!hasElecPrice}>Crédito</option>
+                                                <option value="QR" disabled={!hasElecPrice}>QR</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="text-gray-500 text-[10px] font-bold uppercase tracking-widest mb-1 block">Factura</label>
+                                            <select
+                                                value={prepaidInvoiceType}
+                                                onChange={(e) => setPrepaidInvoiceType(e.target.value)}
+                                                className={`w-full h-7 bg-gray-800 border border-gray-700 rounded-lg px-1.5 text-[10px] appearance-none focus:border-amber-500 outline-none ${!prepaidInvoiceType ? 'text-gray-400' : 'text-white'}`}
+                                            >
+                                                <option value="" disabled>Factura...</option>
+                                                <option value="Final">Final</option>
+                                                <option value="A">A</option>
+                                                <option value="CC">CC</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    {/* Financial Block (Total & Promos) */}
+                                    <div className="bg-gray-950 border border-gray-800 rounded-lg p-1 px-2 flex justify-between items-center gap-2 mt-0.5 shadow-inner">
+                                        <div>
+                                            <div className="text-gray-500 text-[10px] font-bold uppercase tracking-widest">Total a Pagar</div>
+                                            <div className={`text-xl font-black drop-shadow-md ${finalPrice !== null ? 'text-white' : 'text-gray-700'}`}>
+                                                {finalPrice !== null ? `$${Math.round(finalPrice)}` : '$-'}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="text-gray-500 text-[10px] font-bold uppercase tracking-widest mb-1 block text-right">Descuento / Promo</label>
+                                            <select
+                                                value={selectedPromo?.id || ''}
+                                                onChange={(e) => {
+                                                    const p = promos.find((pr: any) => String(pr.id) === e.target.value);
+                                                    setSelectedPromo(p || null);
+                                                }}
+                                                className="w-32 h-6 bg-gray-800 border border-gray-700 rounded-lg px-1 text-[9px] appearance-none focus:border-amber-500 outline-none text-white text-right"
+                                            >
+                                                <option value="">Ninguno</option>
+                                                {promos.map((p: any) => (
+                                                    <option key={p.id} value={p.id}>
+                                                        {p.name} (-{p.porcentaje}%)
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Action Button */}
+                        <div>
+                            <button
+                                type="submit"
+                                disabled={isFormInvalid}
+                                className={`w-full rounded-xl font-bold uppercase tracking-wide flex items-center justify-center gap-2 transition-all shrink-0 ${isFormInvalid ? 'bg-gray-800 text-gray-600 cursor-not-allowed' : (isPrepaid ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-amber-900/30' : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/30')} ${isPrepaid ? 'h-9 text-xs mt-1' : 'h-12 text-lg mt-2'}`}
+                            >
+                                {isLoading ? '...' : isGlobalSyncing ? 'Sincronizando...' : isPrepaid ? 'Cobrar y Dar Entrada' : 'Dar Entrada'}
+                                {!isLoading && !isGlobalSyncing && (isPrepaid ? <Clock className="w-5 h-5" /> : <CheckCircle className="w-5 h-5" />)}
                             </button>
                         </div>
 

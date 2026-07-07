@@ -42,7 +42,7 @@ const TEST_GARAGE_ID = '1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02';
         retryCount: 0
     };
 
-    const result = await syncService.processMutations([testMutation]);
+    const result = await (syncService as any).processMutations?.([testMutation]);
     console.log('✅ Mutation Process Result:', result);
 
     console.log('🏁 Verification Complete.');

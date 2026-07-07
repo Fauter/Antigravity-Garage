@@ -21,7 +21,8 @@ export class AccessManager {
         customer?: Customer | null,
         isSubscriber: boolean = false,
         subscriptionId?: string | null,
-        ticket_code?: string
+        ticket_code?: string,
+        prepaidOptions?: { isPrepaid: boolean; prepaidUntil: Date; prepaidTariffId: string }
     ): Stay {
         // Si no se provee un ticket_code correlativo, fallback a UUID (seguridad)
         const finalTicketCode = ticket_code || uuidv4().slice(0, 8).toUpperCase();
@@ -39,6 +40,10 @@ export class AccessManager {
             exit_authorized: false,
             is_pending_processing: false,
             barrier_exit_used: false,
+            // Prepaid / Anticipado
+            isPrepaid: prepaidOptions?.isPrepaid ?? false,
+            prepaidUntil: prepaidOptions?.prepaidUntil ?? null,
+            prepaidTariffId: prepaidOptions?.prepaidTariffId ?? null,
             createdAt: new Date(),
         };
 
@@ -145,10 +150,38 @@ export class AccessManager {
             };
         }
 
-        // NON-SUBSCRIBER LOGIC:
+        // --- PREPAID / ANTICIPADO CHECK ---
+        // Must run BEFORE normal pricing. If within prepaid window → $0 exit.
+        // If exceeded → use virtualStay so PricingEngine calculates only the surplus.
+        const stayIsPrepaid = (stay as any).isPrepaid === true;
+        const stayPrepaidUntil = stayIsPrepaid ? new Date((stay as any).prepaidUntil) : null;
+
+        if (stayIsPrepaid && stayPrepaidUntil && !isNaN(stayPrepaidUntil.getTime())) {
+            if (exitDate <= stayPrepaidUntil) {
+                // Within prepaid window → $0 exit, no Movement
+                console.log(`⏱️ Exit: Prepaid vehicle ${stay.plate}. Within prepaid window (until ${stayPrepaidUntil.toISOString()}). $0 charge.`);
+                return {
+                    closedStay: StaySchema.parse(closedStay),
+                    exitMovement: null,
+                    price: 0
+                };
+            } else {
+                // EXCEEDED prepaid window → calculate ONLY the surplus
+                // Strategy: feed PricingEngine a virtual stay starting at prepaidUntil
+                console.log(`⏱️ Exit: Prepaid EXCEEDED for ${stay.plate}. Calculating surplus from ${stayPrepaidUntil.toISOString()}`);
+            }
+        }
+
+        // NON-SUBSCRIBER LOGIC (also handles prepaid surplus):
+        // If prepaid exceeded, use virtualStay.entryTime = prepaidUntil so engine
+        // computes only the time after the prepaid block expired.
+        const stayForPricing = (stayIsPrepaid && stayPrepaidUntil && exitDate > stayPrepaidUntil)
+            ? { ...stay, entryTime: stayPrepaidUntil }
+            : stay;
+
         const params = await paramRepo.getParams();
         price = await engine.calculateParkingFee(
-            stay,
+            stayForPricing,
             exitDate,
             paymentMethod,
             params
@@ -168,7 +201,7 @@ export class AccessManager {
         const mins = durationMin % 60;
         const timeString = `${hours}:${mins.toString().padStart(2, '0')}hs`;
 
-        notes = `Por ${timeString}`;
+        notes = stayIsPrepaid ? `Excedente de Anticipado - ${timeString}` : `Por ${timeString}`;
 
         const cleanOperator = typeof operator === 'string' ? operator.trim() : '';
         const userOperator = (cleanOperator && cleanOperator !== 'undefined undefined' && cleanOperator !== 'null null') ? cleanOperator : 'Sistema';
@@ -212,6 +245,17 @@ export class AccessManager {
 
         if ((stay as any).is_subscriber || stay.isSubscriber) {
             return 0;
+        }
+
+        // --- PREPAID / ANTICIPADO CHECK (Quote) ---
+        const stayIsPrepaid = (stay as any).isPrepaid === true;
+        const stayPrepaidUntil = stayIsPrepaid ? new Date((stay as any).prepaidUntil) : null;
+        const now = new Date();
+
+        if (stayIsPrepaid && stayPrepaidUntil && !isNaN(stayPrepaidUntil.getTime())) {
+            if (now <= stayPrepaidUntil) {
+                return 0; // Within prepaid window
+            }
         }
 
         // Direct DB Access (identical to processExit)
@@ -258,10 +302,15 @@ export class AccessManager {
         };
 
         const engine = new PricingEngine(tariffRepo as any, paramRepo as any, priceRepo);
-        const exitDate = new Date(); // Server time = source of truth
+        const exitDate = now; // Server time = source of truth
         const params = await paramRepo.getParams();
 
-        let price = await engine.calculateParkingFee(stay, exitDate, paymentMethod, params);
+        // If prepaid exceeded, use virtualStay so engine computes only the surplus
+        const stayForPricing = (stayIsPrepaid && stayPrepaidUntil && exitDate > stayPrepaidUntil)
+            ? { ...stay, entryTime: stayPrepaidUntil }
+            : stay;
+
+        let price = await engine.calculateParkingFee(stayForPricing, exitDate, paymentMethod, params);
 
         if (promoPercentage && promoPercentage > 0) {
             price = price * (1 - promoPercentage / 100);

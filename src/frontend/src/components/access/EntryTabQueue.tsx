@@ -28,19 +28,10 @@ const EntryTabQueue: React.FC<EntryTabQueueProps> = ({ onTabSelect }) => {
     };
 
     return (
-        <div className="bg-gray-950 border-b border-gray-800 px-2 py-1.5 shrink-0">
-            {/* Queue Label */}
-            <div className="flex items-center gap-2 mb-1.5 px-1">
-                <span className="text-[9px] font-bold uppercase tracking-widest text-amber-500/70">
-                    Cola Hardware
-                </span>
-                <span className="bg-amber-500/20 text-amber-400 text-[9px] font-black px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
-                    {pendingCount}
-                </span>
-            </div>
+        <div className="bg-gray-950 border-b border-gray-800 px-2 py-1.5 shrink-0 min-h-[48px] flex items-center overflow-x-auto overflow-y-hidden custom-scrollbar">
 
             {/* Tabs Row */}
-            <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-thin scrollbar-thumb-gray-700">
+            <div className="flex gap-1 overflow-x-auto pb-1 [&::-webkit-scrollbar]:h-[4px] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-gray-700 [&::-webkit-scrollbar-thumb]:rounded-full">
                 {pendingEntries.map((entry, index) => {
                     const isActive = index === activeTabIndex;
                     const isStale = entry.staleMinutes >= 5;
@@ -51,8 +42,8 @@ const EntryTabQueue: React.FC<EntryTabQueueProps> = ({ onTabSelect }) => {
                             key={entry.id}
                             onClick={() => handleTabClick(index)}
                             className={`
-                                relative group flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg
-                                text-[10px] font-bold uppercase tracking-wide
+                                relative group flex items-center gap-1.5 px-2 py-1 rounded-lg
+                                text-xs font-bold uppercase tracking-wide
                                 transition-all duration-200 shrink-0 border
                                 ${isActive
                                     ? 'bg-emerald-900/40 border-emerald-500 text-emerald-300 shadow-lg shadow-emerald-900/20 scale-105'
@@ -98,8 +89,8 @@ const EntryTabQueue: React.FC<EntryTabQueueProps> = ({ onTabSelect }) => {
                 <button
                     onClick={handleManualMode}
                     className={`
-                        flex items-center gap-1 px-2.5 py-1.5 rounded-lg
-                        text-[10px] font-bold uppercase tracking-wide
+                        flex items-center gap-1 px-2 py-1 rounded-lg
+                        text-xs font-bold uppercase tracking-wide
                         transition-all shrink-0 border
                         ${activeTabIndex === -1
                             ? 'bg-gray-800 border-gray-600 text-gray-300'

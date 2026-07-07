@@ -26,6 +26,10 @@ export interface Stay {
     anpr_suggested_plate?: string | null;
     barrier_exit_used?: boolean;
     barrier_exit_at?: Date | null;
+    // Prepaid / Anticipado
+    isPrepaid?: boolean;
+    prepaidUntil?: Date | null;
+    prepaidTariffId?: string | null;
 }
 
 export class StayRepository {
@@ -69,6 +73,10 @@ export class StayRepository {
             is_pending_processing: stay.is_pending_processing ?? false,
             anpr_suggested_plate: stay.anpr_suggested_plate ?? null,
             entry_photo_path: stay.entry_photo_path ?? null,
+            // ⏱️ PREPAID: Explicitly preserve prepaid fields
+            isPrepaid: stay.isPrepaid ?? false,
+            prepaidUntil: stay.prepaidUntil ?? null,
+            prepaidTariffId: stay.prepaidTariffId ?? null,
             updatedAt: new Date()
         };
 
@@ -126,6 +134,10 @@ export class StayRepository {
             anpr_suggested_plate: stay.anpr_suggested_plate ?? null,
             barrier_exit_used: stay.barrier_exit_used ?? false,
             barrier_exit_at: stay.barrier_exit_at ?? null,
+            // Prepaid / Anticipado
+            isPrepaid: stay.isPrepaid ?? false,
+            prepaidUntil: stay.prepaidUntil ? new Date(stay.prepaidUntil) : null,
+            prepaidTariffId: stay.prepaidTariffId ?? null,
         };
     }
 

@@ -477,6 +477,11 @@ const CajaPage: React.FC = () => {
     };
 
     // --- Helpers ---
+    const formatNumberWithDots = (val: number | string): string => {
+        if (val === '') return '';
+        return val.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+    };
+
     const getReprintTypeBadge = (type: ReprintItem['type']) => {
         switch (type) {
             case 'Entrada':
@@ -637,9 +642,13 @@ const CajaPage: React.FC = () => {
                                         <div className="relative">
                                             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold">$</span>
                                             <input
-                                                type="number"
-                                                value={totalInCash}
-                                                onChange={e => setTotalInCash(e.target.value ? Number(e.target.value) : '')}
+                                                type="text"
+                                                inputMode="numeric"
+                                                value={formatNumberWithDots(totalInCash)}
+                                                onChange={e => {
+                                                    const rawValue = e.target.value.replace(/\D/g, '');
+                                                    setTotalInCash(rawValue === '' ? '' : Number(rawValue));
+                                                }}
                                                 className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 pl-8 text-white font-mono text-xl focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
                                                 placeholder="0.00"
                                             />
@@ -657,9 +666,13 @@ const CajaPage: React.FC = () => {
                                         <div className="relative">
                                             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold">$</span>
                                             <input
-                                                type="number"
-                                                value={stayingInCash}
-                                                onChange={e => setStayingInCash(e.target.value ? Number(e.target.value) : '')}
+                                                type="text"
+                                                inputMode="numeric"
+                                                value={formatNumberWithDots(stayingInCash)}
+                                                onChange={e => {
+                                                    const rawValue = e.target.value.replace(/\D/g, '');
+                                                    setStayingInCash(rawValue === '' ? '' : Number(rawValue));
+                                                }}
                                                 className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 pl-8 text-white font-mono text-xl focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none"
                                                 placeholder="0.00"
                                             />
@@ -759,9 +772,13 @@ const CajaPage: React.FC = () => {
                                         <div className="relative">
                                             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold">$</span>
                                             <input
-                                                type="number"
-                                                value={partialAmount}
-                                                onChange={e => setPartialAmount(e.target.value ? Number(e.target.value) : '')}
+                                                type="text"
+                                                inputMode="numeric"
+                                                value={formatNumberWithDots(partialAmount)}
+                                                onChange={e => {
+                                                    const rawValue = e.target.value.replace(/\D/g, '');
+                                                    setPartialAmount(rawValue === '' ? '' : Number(rawValue));
+                                                }}
                                                 className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 pl-8 text-white font-mono text-xl focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-none"
                                                 placeholder="0.00"
                                             />

@@ -36,8 +36,12 @@ async function executePrintJob(htmlContent, printerConfig = {}) {
                 const sf = screen.getPrimaryDisplay().scaleFactor;
                 const safeZoom = 1.0 / sf;
 
-                // Ancho dinámico: 600px para 80mm, 384px para 58mm/default
-                const viewportWidth = (printerConfig.dimensions && printerConfig.dimensions.width === 80000) ? 600 : 384;
+                // Viewport = @page size en px a 96 CSS-dpi (1mm ≈ 3.78px)
+                // 80mm → 302px | 58mm → 384px (legacy, no tocar)
+                // El viewport DEBE coincidir con @page size para que Chromium
+                // renderice 1:1. El centrado lo maneja margin:0 auto sobre un
+                // contenedor que, incluso con zoom, NO desborda el @page.
+                const viewportWidth = (printerConfig.dimensions && printerConfig.dimensions.width === 80000) ? 302 : 384;
 
                 printWindow = new BrowserWindow({
                     show: false,

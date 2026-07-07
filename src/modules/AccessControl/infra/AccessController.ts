@@ -39,6 +39,11 @@ export class AccessController {
         try {
             const rawPlate = req.body.plate;
             const vehicleTypeId = req.body.vehicleTypeId;
+            // Prepaid / Anticipado fields
+            const prepaidTariffId = req.body.prepaidTariffId;
+            const prepaidPaymentMethod = req.body.prepaidPaymentMethod || 'Efectivo';
+            const prepaidInvoiceType = req.body.prepaidInvoiceType || 'Final';
+            const operator = req.body.operator || 'Sistema';
             const garageId = (req.headers['x-garage-id'] as string);
 
             if (!rawPlate) return res.status(400).json({ error: 'Plate is required' });
@@ -124,6 +129,54 @@ export class AccessController {
             // 4. Generate Correlative Ticket Code
             const ticketCode = await CorrelativeGenerator.nextStayTicket(garageId);
 
+            // 4.5. Resolve Prepaid / Anticipado Options
+            let prepaidOptions: { isPrepaid: boolean; prepaidUntil: Date; prepaidTariffId: string } | undefined;
+            let prepaidAmount = 0;
+            let prepaidTariffName = '';
+
+            if (prepaidTariffId) {
+                // Lookup tariff in local DB
+                const tariff: any = await db.tariffs.findOne({
+                    $or: [{ id: prepaidTariffId }, { _id: prepaidTariffId }],
+                    garageId
+                });
+
+                if (tariff) {
+                    prepaidTariffName = tariff.name || 'Anticipado';
+                    const d = Number(tariff.days || 0);
+                    const h = Number(tariff.hours || 0);
+                    const m = Number(tariff.minutes || 0);
+                    const blockMs = ((d * 1440) + (h * 60) + m) * 60000;
+
+                    if (blockMs > 0) {
+                        const now = new Date();
+                        const prepaidUntil = new Date(now.getTime() + blockMs);
+
+                        prepaidOptions = {
+                            isPrepaid: true,
+                            prepaidUntil,
+                            prepaidTariffId
+                        };
+
+                        // Lookup price from price matrix
+                        const repoMethod = prepaidPaymentMethod === 'Efectivo' ? 'standard' : 'electronic';
+                        const priceRecord: any = await db.prices.findOne({
+                            garageId,
+                            tariffId: prepaidTariffId,
+                            vehicleTypeId: vehicleTypeId,
+                            priceList: repoMethod
+                        });
+                        prepaidAmount = priceRecord ? Number(priceRecord.amount || 0) : 0;
+
+                        console.log(`⏱️ Entry: Prepaid activated for ${plate}. Tariff: ${prepaidTariffName}, Until: ${prepaidUntil.toISOString()}, Amount: $${prepaidAmount}`);
+                    } else {
+                        console.warn(`⚠️ Entry: Prepaid tariff ${prepaidTariffId} has zero duration. Ignoring prepaid.`);
+                    }
+                } else {
+                    console.warn(`⚠️ Entry: Prepaid tariff ${prepaidTariffId} not found in NeDB. Ignoring prepaid.`);
+                }
+            }
+
             // 5. Process Entry
             const entry = AccessManager.processEntry(
                 plate,
@@ -131,7 +184,8 @@ export class AccessController {
                 null,
                 isSubscriber,
                 subscriptionId,
-                ticketCode
+                ticketCode,
+                prepaidOptions
             );
 
             // Patch linking details
@@ -145,13 +199,53 @@ export class AccessController {
                 barrier_exit_used: false,
                 is_pending_processing: false,
                 anpr_suggested_plate: null,
-                entry_photo_path: null,
+                entry_photo_path: req.body.photoPath || null,
                 exit_authorized_at: null,
                 barrier_exit_at: null
             });
 
             const savedStay = await this.stayRepository.save(entry as any);
-            res.json(savedStay);
+
+            // 6. Generate Prepaid Movement (if applicable)
+            if (prepaidOptions && prepaidAmount > 0) {
+                // Fetch Owner ID from Garage Config
+                let ownerId: string | undefined;
+                if (garageId) {
+                    const garage: any = await db.garages.findOne({ id: garageId });
+                    if (garage) ownerId = garage.owner_id || garage.ownerId;
+                }
+
+                const receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
+                const ticketNumber = Number(Date.now().toString().slice(-9));
+
+                const prepaidMovement = {
+                    id: uuidv4(),
+                    garageId,
+                    ownerId,
+                    ticketNumber,
+                    relatedEntityId: entry.id,
+                    type: 'CobroEstadia' as const,
+                    timestamp: new Date(),
+                    amount: prepaidAmount,
+                    paymentMethod: prepaidPaymentMethod,
+                    operator: operator,
+                    invoiceType: prepaidInvoiceType,
+                    plate: plate,
+                    notes: `Pago Anticipado - ${prepaidTariffName}`,
+                    receipt_number: receiptNumber,
+                    ticket_code: receiptNumber,
+                    createdAt: new Date(),
+                };
+
+                await this.movementRepository.save(prepaidMovement as any);
+                console.log(`💰 Entry: Prepaid Movement saved for ${plate}. Amount: $${prepaidAmount}, Method: ${prepaidPaymentMethod}`);
+
+                // Attach prepaid info to response so frontend can confirm
+                (savedStay as any).prepaidMovement = prepaidMovement;
+                return res.status(201).json({ stay: savedStay, prepaidMovement });
+            }
+
+            res.status(201).json({ stay: savedStay });
         } catch (error: any) {
             console.error('Entry Error:', error);
             res.status(500).json({ error: error.message });
@@ -316,9 +410,14 @@ export class AccessController {
             const price = await AccessManager.quoteExit(stay as any, 'Efectivo', garageId, 0);
             (stay as any).price = price;
 
-            // Evaluamos is_grace_period
+            // Prepaid flags for frontend
+            const stayIsPrepaid = (stay as any).isPrepaid === true;
+            (stay as any).isPrepaid = stayIsPrepaid;
+            (stay as any).isPrepaidCovered = stayIsPrepaid && price === 0;
+
+            // Evaluamos is_grace_period (NOT triggered by prepaid — separate concept)
             let isGracePeriod = false;
-            if (!stay.isSubscriber && price === 0) {
+            if (!stay.isSubscriber && !stayIsPrepaid && price === 0) {
                 isGracePeriod = true;
             }
             (stay as any).is_grace_period = isGracePeriod;

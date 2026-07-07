@@ -23,6 +23,12 @@ export class VehicleRepository {
                 (vehicle as any).rfid_tag = existing.rfid_tag;
                 console.log(`🛡️ Repo: Preserved existing rfid_tag "${existing.rfid_tag}" for vehicle ${vehicle.plate}`);
             }
+        } else if (!(vehicle as any).rfid_tag || String((vehicle as any).rfid_tag).trim() === '') {
+            // ── VIRTUAL RFID AUTO-GENERATION ──
+            // If it's a new vehicle without a tag, or an existing vehicle without a tag,
+            // generate a virtual RFID tag.
+            (vehicle as any).rfid_tag = `RFID-${uuidv4().substring(0, 8).toUpperCase()}`;
+            console.log(`🏷️ Repo: Auto-generated virtual RFID tag "${(vehicle as any).rfid_tag}" for vehicle ${vehicle.plate}`);
         }
 
         // ── RFID UNIQUENESS GUARD ──

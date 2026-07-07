@@ -114,9 +114,9 @@ export class SyncService {
 
             if (error) throw error;
         } else if (operation === 'DELETE') {
-            // For DELETE, we might only have ID, but mapLocalToRemote handles safe extraction
-            const { error, status } = await supabase.from(tableName).delete().eq('id', payload.id);
-            console.log(`📡 DEBUG SYNC [${entityType} DELETE]: Status ${status}, Error:`, error);
+            // SOFT DELETE: En lugar de borrar, actualizamos con deleted_at
+            const { error, status } = await supabase.from(tableName).update({ deleted_at: new Date().toISOString() }).eq('id', payload.id);
+            console.log(`📡 DEBUG SYNC [${entityType} SOFT-DELETE]: Status ${status}, Error:`, error);
             if (error) throw error;
         }
     }
@@ -136,14 +136,17 @@ export class SyncService {
         }
 
         try {
-            // Se eliminó la Purga Global y los Timeouts forzados de NeDB. 
-            // Las operaciones se manejan ahora por Wipe & Load Atómico por Colección.
+            // Delta Sync: Leer el estado de la sincronización
+            const syncStateDoc: any = await db.syncState.findOne({ garageId });
+            const lastSyncTimestamp = syncStateDoc?.last_sync_timestamp;
+            let hasErrors = false;
 
             const fetchSafe = async (table: string, gId: string, entity: string) => {
                 try {
-                    await this.fetchTable(table, gId, entity);
+                    await this.fetchTable(table, gId, entity, lastSyncTimestamp);
                 } catch (e: any) {
                     console.error(`❌ Sync: Error cargando tabla ${table}: ${e.message || e}`);
+                    hasErrors = true;
                 }
             };
 
@@ -169,7 +172,20 @@ export class SyncService {
             await fetchSafe('partial_closes', garageId, 'PartialClose');
             await fetchSafe('incidents', garageId, 'Incident');
 
-            console.log('✅ Sync: Bootstrap Complete.');
+            console.log('✅ Sync: Ciclo de sincronización completado.');
+
+            if (!hasErrors) {
+                const newTimestamp = new Date().toISOString();
+                await db.syncState.update(
+                    { garageId }, 
+                    { $set: { garageId, last_sync_timestamp: newTimestamp } }, 
+                    { upsert: true }
+                );
+                console.log(`✅ Sync: Timestamp actualizado exitosamente a ${newTimestamp}`);
+            } else {
+                console.warn(`⚠️ Sync: No se actualizó el timestamp debido a errores parciales en algunas tablas.`);
+            }
+
             if (!isSilent) {
                 this.isGlobalSyncing = false;
             }
@@ -182,9 +198,9 @@ export class SyncService {
         }
     }
 
-    private async fetchTable(tableName: string, garageId: string, entityType: string) {
+    private async fetchTable(tableName: string, garageId: string, entityType: string, lastSyncTimestamp?: string) {
         try {
-            console.log(`🔍 Sync: Fetching table [${tableName}] para [${garageId}]...`);
+            console.log(`🔍 Sync: Fetching table [${tableName}] para [${garageId}] (Delta: ${lastSyncTimestamp || 'Initial Load'})...`);
 
             // --- PAGINATED FETCH: Loop de 1000 en 1000 para superar el límite de Supabase ---
             const PAGE_SIZE = 1000;
@@ -199,6 +215,20 @@ export class SyncService {
                     query = query.eq('id', garageId);
                 } else {
                     query = query.eq('garage_id', garageId);
+                }
+
+                // Aplicar Delta Sync o Límite de carga inicial (30 días para Históricas)
+                if (lastSyncTimestamp) {
+                    query = query.gte('updated_at', lastSyncTimestamp);
+                } else {
+                    // Carga Inicial: Solo filtrar tablas históricas
+                    const historicas = ['stays', 'movements', 'shift_closes', 'partial_closes', 'incidents'];
+                    if (historicas.includes(tableName)) {
+                        const limitDate = new Date();
+                        limitDate.setDate(limitDate.getDate() - 30);
+                        query = query.gte('created_at', limitDate.toISOString());
+                    }
+                    // Las tablas maestras no llevan filtro de fecha en la carga inicial
                 }
 
                 const { data: pageData, error } = await query.range(from, to);
@@ -261,74 +291,52 @@ export class SyncService {
                     throw new Error(`NeDB Store for [${entityType}] is NOT LOADED, operation rejected.`);
                 }
 
-                // --- MUTATION GUARD: Preservar salidas recientes antes del Wipe (Solo para Stay) ---
-                let preservedStays: any[] = [];
+                // --- MUTATION GUARD: Preservar salidas recientes antes del Upsert (Solo para Stay) ---
+                let preservedStayIds = new Set<string>();
                 if (entityType === 'Stay') {
                     const now = Date.now();
                     const GUARD_WINDOW_MS = 60_000; // 60 segundos
                     const allLocalStays: any[] = await collection.find({});
-                    preservedStays = allLocalStays.filter((s: any) => {
-                        if (s.active !== false) return false; // Solo preservar cerradas
-                        if (!s.exitTime) return false;
-                        const exitTs = new Date(s.exitTime).getTime();
-                        return (now - exitTs) <= GUARD_WINDOW_MS;
-                    });
-
-                    if (preservedStays.length > 0) {
-                        console.log(`🛡️ Sync Guard: Preservando ${preservedStays.length} salidas recientes (<60s) antes del Wipe.`);
-                    }
-                }
-
-                console.log(`📥 Sync: Wipe & Load iniciado para [${entityType}] (${localItems.length} registros)...`);
-
-                // --- Watchdog General ---
-                const withTimeout = (op: Promise<any>, timeoutMs: number = 8000, context: string = '') => {
-                    let timeoutId: NodeJS.Timeout;
-                    const timeoutPromise = new Promise((_, reject) => {
-                        timeoutId = setTimeout(() => {
-                            const executor = collection.executor || (collection.nedb && collection.nedb.executor);
-                            const queueLen = executor && executor.queue ? (typeof executor.queue.length === 'number' ? executor.queue.length : executor.queue.length()) : 'desconocido';
-                            reject(new Error(`Local DB Timeout en ${context} (${timeoutMs}ms). Ops en cola: ${queueLen}`));
-                        }, timeoutMs);
-                    });
-
-                    return Promise.race([
-                        op.then((res: any) => { clearTimeout(timeoutId); return res; }).catch((err: any) => { clearTimeout(timeoutId); throw err; }),
-                        timeoutPromise
-                    ]);
-                };
-
-                // --- 1. WIPE LOCAL (Destrucción atómica Segura) ---
-                // Importante: No envolver en new Promise con Callbacks porque estamos usando nedb-promises
-                // Solo ejecutamos remove si la base no está vacía, para ganar velocidad.
-                const count = await withTimeout(collection.count({}), 5000, `Count ${entityType}`);
-                let numRemoved = 0;
-
-                if (count > 0) {
-                    numRemoved = await withTimeout(collection.remove({}, { multi: true }), 10000, `Wipe ${entityType}`);
-                }
-
-                // --- 2. LOAD NEW BATCH (Inserción Masiva) ---
-                if (localItems.length > 0) {
-                    await withTimeout(collection.insert(localItems), 15000, `Load ${entityType}`);
-                }
-
-                // --- 3. RE-INSERT PRESERVED STAYS (Mutation Guard) ---
-                if (entityType === 'Stay' && preservedStays.length > 0) {
-                    for (const preserved of preservedStays) {
-                        // VITAL: Limpiar _id de NeDB para evitar conflictos de llave primaria
-                        const { _id, ...cleanPreserved } = preserved;
-                        try {
-                            // Upsert por id público para no duplicar si la nube ya lo tenía
-                            await collection.update({ id: cleanPreserved.id }, cleanPreserved, { upsert: true });
-                            console.log(`🛡️ Sync Guard: Re-insertada salida preservada: ${cleanPreserved.plate} (${cleanPreserved.id})`);
-                        } catch (upsertErr: any) {
-                            console.warn(`⚠️ Sync Guard: Error al re-insertar stay preservada ${cleanPreserved.id}:`, upsertErr.message);
+                    allLocalStays.forEach((s: any) => {
+                        if (s.active === false && s.exitTime) {
+                            const exitTs = new Date(s.exitTime).getTime();
+                            if ((now - exitTs) <= GUARD_WINDOW_MS) {
+                                preservedStayIds.add(s.id);
+                            }
                         }
+                    });
+
+                    if (preservedStayIds.size > 0) {
+                        console.log(`🛡️ Sync Guard: Omitiendo upsert para ${preservedStayIds.size} salidas recientes (<60s).`);
                     }
                 }
 
-                console.log(`✅ Sync: [${entityType}] Sincronizado OK. (Borrados: ${numRemoved} | Insertados: ${localItems.length}${preservedStays.length > 0 ? ` | Preservados: ${preservedStays.length}` : ''})`);
+                console.log(`📥 Sync: Delta Sync iniciado para [${entityType}] (${localItems.length} registros)...`);
+
+                let numRemoved = 0;
+                let numUpserted = 0;
+                let numOmitted = 0;
+
+                for (const item of localItems) {
+                    // Omitir si es un Stay recién modificado localmente
+                    if (entityType === 'Stay' && preservedStayIds.has(item.id)) {
+                        numOmitted++;
+                        continue;
+                    }
+
+                    // Soft Delete Check local (Remover físicamente de NeDB)
+                    if (item.deleted_at !== null && item.deleted_at !== undefined) {
+                        await collection.remove({ id: item.id }, {});
+                        numRemoved++;
+                    } else {
+                        // Limpiar deleted_at por si acaso antes de guardar local
+                        const { deleted_at, ...itemToSave } = item;
+                        await collection.update({ id: itemToSave.id }, { $set: itemToSave }, { upsert: true });
+                        numUpserted++;
+                    }
+                }
+
+                console.log(`✅ Sync: [${entityType}] Sincronizado OK. (Borrados: ${numRemoved} | Upserted: ${numUpserted} | Omitidos: ${numOmitted})`);
             }
 
         } catch (err: any) {

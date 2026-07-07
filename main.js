@@ -60,6 +60,23 @@ if (isDev) {
 let mainWindow;
 
 function createWindow() {
+    // Helper IPC para leer imágenes locales y enviarlas como Base64 al Renderer
+    ipcMain.handle('fs:readFileBase64', async (event, filePath) => {
+        try {
+            if (fs.existsSync(filePath)) {
+                const ext = path.extname(filePath).toLowerCase();
+                let mimeType = 'image/jpeg';
+                if (ext === '.png') mimeType = 'image/png';
+                else if (ext === '.webp') mimeType = 'image/webp';
+                const buffer = fs.readFileSync(filePath);
+                return `data:${mimeType};base64,${buffer.toString('base64')}`;
+            }
+        } catch (e) {
+            console.error('Error reading local file to base64:', e);
+        }
+        return filePath;
+    });
+
     // Ícono: build/icon.png es la misma fuente que usa electron-builder → siempre presente.
     const iconPath = path.join(__dirname, 'build', 'icon.png');
 
