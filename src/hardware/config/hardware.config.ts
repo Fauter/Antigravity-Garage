@@ -60,6 +60,10 @@ export function loadHardwareConfig(): HardwareConfig {
                     webhook: parsed.camera?.webhook
                         ? { listenPort: 8080, ...parsed.camera.webhook }
                         : undefined,
+                    // Preserve nested hikvision ISAPI config
+                    hikvision: parsed.camera?.hikvision
+                        ? { host: '', username: 'admin', password: '', channel: 101, ...parsed.camera.hikvision }
+                        : undefined,
                 },
                 scanner: { ...DEFAULT_HARDWARE_CONFIG.scanner, ...parsed.scanner },
                 reconnect: { ...DEFAULT_HARDWARE_CONFIG.reconnect, ...parsed.reconnect },

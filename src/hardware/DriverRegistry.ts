@@ -17,6 +17,7 @@ import { MockBarrierDriver } from './drivers/MockBarrierDriver';
 import { MockCameraDriver } from './drivers/MockCameraDriver';
 import { EthernetRelayDriver } from './drivers/EthernetRelayDriver';
 import { ANPRWebhookDriver } from './drivers/ANPRWebhookDriver';
+import { HikvisionISAPIDriver } from './drivers/HikvisionISAPIDriver';
 import { ConnectionMonitor, StateChangeCallback } from './health/ConnectionMonitor';
 
 export class DriverRegistry {
@@ -144,6 +145,13 @@ export class DriverRegistry {
                     return new MockCameraDriver();
                 }
                 return new ANPRWebhookDriver(config.camera.webhook);
+            }
+            case 'HIKVISION_ISAPI': {
+                if (!config.camera.hikvision) {
+                    console.warn('⚠️ [DriverRegistry] HIKVISION_ISAPI selected but no hikvision config provided. Falling back to MOCK.');
+                    return new MockCameraDriver();
+                }
+                return new HikvisionISAPIDriver(config.camera.hikvision);
             }
             case 'DISABLED':
                 // Return a mock that's never connected

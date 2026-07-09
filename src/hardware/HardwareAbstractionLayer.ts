@@ -133,7 +133,7 @@ export interface HardwareStatus {
 // ── Hardware Configuration ───────────────────────────────────────────
 
 export type BarrierDriverType = 'MOCK' | 'ETHERNET_RELAY';
-export type CameraDriverType = 'MOCK' | 'ANPR_WEBHOOK' | 'DISABLED';
+export type CameraDriverType = 'MOCK' | 'ANPR_WEBHOOK' | 'HIKVISION_ISAPI' | 'DISABLED';
 export type ScannerDriverType = 'MOCK' | 'USB_HID';
 
 export interface EthernetRelayConfig {
@@ -147,6 +147,13 @@ export interface EthernetRelayConfig {
 export interface ANPRWebhookConfig {
     listenPort: number;
     authToken?: string;
+}
+
+export interface HikvisionISAPIConfig {
+    host: string;       // IP or hostname (e.g. '192.168.100.77')
+    username: string;   // Default: 'admin'
+    password: string;   // Device password
+    channel?: number;   // ISAPI channel (default: 101 → channel 1, substream 01)
 }
 
 export interface ReconnectConfig {
@@ -165,6 +172,7 @@ export interface HardwareConfig {
     camera: {
         driver: CameraDriverType;
         webhook?: ANPRWebhookConfig;
+        hikvision?: HikvisionISAPIConfig;
     };
     scanner: {
         driver: ScannerDriverType;

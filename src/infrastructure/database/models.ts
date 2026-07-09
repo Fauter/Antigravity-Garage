@@ -102,7 +102,24 @@ const StaySchema = new Schema<import('../../shared/schemas').Stay>({
     exitTime: { type: Date },
     active: { type: Boolean, default: true },
     ticket_code: { type: String },
-    createdAt: { type: Date, default: Date.now }
+    vehicleType: { type: String },
+    isSubscriber: { type: Boolean, default: false },
+    subscriptionId: { type: String },
+    // --- Hardware Integration Fields ---
+    exit_authorized: { type: Boolean, default: false },
+    exit_authorized_at: { type: Date },
+    exit_authorized_by: { type: String },
+    entry_photo_path: { type: String },
+    is_pending_processing: { type: Boolean, default: false },
+    anpr_suggested_plate: { type: String },
+    barrier_exit_used: { type: Boolean, default: false },
+    barrier_exit_at: { type: Date },
+    // --- Prepaid / Anticipado Fields ---
+    isPrepaid: { type: Boolean, default: false },
+    prepaidUntil: { type: Date },
+    prepaidTariffId: { type: String },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now }
 });
 
 export const StayModel = mongoose.model<import('../../shared/schemas').Stay>('Stay', StaySchema);

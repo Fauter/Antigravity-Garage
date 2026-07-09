@@ -268,8 +268,8 @@ export class HardwareOrchestrator {
                     driverType,
                     online,
                     message: online
-                        ? `${driverType === 'ETHERNET_RELAY' ? 'Barreras' : driverType === 'ANPR_WEBHOOK' ? 'Cámara' : driverType} conectado`
-                        : `${driverType === 'ETHERNET_RELAY' ? 'Barreras' : driverType === 'ANPR_WEBHOOK' ? 'Cámara' : driverType} desconectado`,
+                        ? `${driverType === 'ETHERNET_RELAY' ? 'Barreras' : (driverType === 'ANPR_WEBHOOK' || driverType === 'HIKVISION_ISAPI') ? 'Cámara' : driverType} conectado`
+                        : `${driverType === 'ETHERNET_RELAY' ? 'Barreras' : (driverType === 'ANPR_WEBHOOK' || driverType === 'HIKVISION_ISAPI') ? 'Cámara' : driverType} desconectado`,
                 });
             }
         };
@@ -333,8 +333,24 @@ export class HardwareOrchestrator {
                 return event;
             }
 
-            await safeDriverCall(() => camera.triggerCapture(), 5000, '');
-            return { id: 'triggered', timestamp: new Date().toISOString() };
+            // Si hay un driver real (ej: Hikvision), capturamos y armamos el evento
+            let photoPath = '';
+            try {
+                photoPath = await safeDriverCall(() => camera.triggerCapture(), 3000, '');
+            } catch (err: any) {
+                console.warn(`[HardwareOrchestrator] Simulator real-camera capture failed: ${err.message}`);
+            }
+
+            const event: HardwareEntryEvent = {
+                id: uuidv4(),
+                timestamp: new Date().toISOString(),
+                photoPath, // Base64 comprimido o vacío si falló
+                suggestedPlate: '', // ISAPI no hace OCR por defecto
+                source: 'SIMULATOR',
+            };
+
+            this.handleEntryEvent(event);
+            return event;
         });
 
         // ── Barcode scan at exit barrier ──
@@ -483,6 +499,9 @@ export class HardwareOrchestrator {
                         webhook: newConfig.camera.webhook
                             ? { ...DEFAULT_HARDWARE_CONFIG.camera.webhook, ...newConfig.camera.webhook }
                             : this.config.camera.webhook,
+                        hikvision: newConfig.camera.hikvision
+                            ? { host: '', username: 'admin', password: '', channel: 101, ...newConfig.camera.hikvision }
+                            : this.config.camera.hikvision,
                     },
                     scanner: { ...DEFAULT_HARDWARE_CONFIG.scanner, ...newConfig.scanner },
                     reconnect: { ...DEFAULT_HARDWARE_CONFIG.reconnect, ...newConfig.reconnect },
@@ -490,18 +509,29 @@ export class HardwareOrchestrator {
                 console.log(`[HW-DEBUG] Config after merge: barrier.ethernet =`, JSON.stringify(this.config.barrier.ethernet));
                 saveHardwareConfig(this.config);
 
-                await this.registry.reconfigure(
-                    this.getEffectiveConfig(),
-                    this.createStatusChangeCallback()
-                );
+                // Fire-and-forget: reconfigure drivers asynchronously.
+                // Driver connection timeouts (e.g. EthernetRelay 10s) must NOT block
+                // the IPC response. Status will propagate via onDriverStatusToast.
+                const effectiveConfig = this.getEffectiveConfig();
+                const statusCallback = this.createStatusChangeCallback();
+                (async () => {
+                    try {
+                        await this.registry.reconfigure(effectiveConfig, statusCallback);
+                        this.wireCameraEvents();
+                        this.wireBarrierEvents();
+                        this.emitStatusToRenderer();
+                    } catch (reconfigErr: any) {
+                        console.error(
+                            `⚠️ [HardwareOrchestrator] Driver reconfigure failed (non-blocking): ${reconfigErr.message}`
+                        );
+                        // Status indicators will reflect the offline state naturally
+                        this.emitStatusToRenderer();
+                    }
+                })();
 
-                this.wireCameraEvents();
-                this.wireBarrierEvents();
-
-                this.emitStatusToRenderer();
                 return { success: true, config: this.config };
             } catch (err: any) {
-                console.error('❌ [HardwareOrchestrator] Config change failed:', err);
+                console.error('❌ [HardwareOrchestrator] Config save failed:', err);
                 return { success: false, error: err.message };
             }
         });

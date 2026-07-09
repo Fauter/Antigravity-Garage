@@ -314,17 +314,34 @@ const PanelSalida: React.FC = () => {
 
                 {/* Evidence Viewer (Left) - NOT A LIVE CAMERA */}
                 {/* ... Evidence Viewer code ... */}
-                <div className="w-1/2 relative bg-gray-900 border-r border-gray-800 p-2 flex items-center justify-center overflow-hidden">
+                <div className="w-1/2 relative bg-gray-900 border-r border-gray-800 p-2 flex items-center justify-center overflow-hidden min-h-[200px]">
                     {stay ? (
-                        <div className="relative z-10 w-full h-full flex flex-col items-center justify-center bg-black/20 rounded-lg border border-gray-800/50">
-                            {/* In a real app, this would be <img src={stay.photoUrl} /> */}
-                            <Car className="w-16 h-16 text-gray-700 mb-2 opacity-50" />
-                            <div className="text-gray-500 font-mono text-xs mb-1">FOTO DE ENTRADA</div>
-                            <div className="text-white font-mono text-xl font-bold tracking-widest bg-black/50 px-3 py-1 rounded">
-                                {stay.plate}
+                        <div className="relative w-full h-full bg-black/40 rounded-lg border border-gray-800/50 overflow-hidden">
+                            {stay.entry_photo_path ? (
+                                <>
+                                    <img 
+                                        src={stay.entry_photo_path} 
+                                        alt={`Foto ingreso ${stay.plate}`}
+                                        className="absolute inset-0 z-0 w-full h-full object-cover opacity-80"
+                                    />
+                                    {/* Gradient overlay for better text readability */}
+                                    <div className="absolute inset-0 z-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent pointer-events-none" />
+                                </>
+                            ) : (
+                                <div className="absolute inset-0 z-0 flex flex-col items-center justify-center gap-3">
+                                    <Car className="w-16 h-16 text-gray-700 opacity-50" />
+                                    <div className="text-gray-500 font-mono text-xs">SIN FOTO DE ENTRADA</div>
+                                </div>
+                            )}
+                            
+                            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 w-max">
+                                <div className="text-white font-mono text-xl font-bold tracking-widest bg-black/70 backdrop-blur-sm px-4 py-1.5 rounded-lg border border-gray-700/50 shadow-xl text-center">
+                                    {stay.plate}
+                                </div>
                             </div>
-                            <span className="absolute top-2 left-2 text-[9px] font-bold text-gray-500 bg-black/50 px-1.5 py-0.5 rounded border border-gray-700">
-                                {new Date(stay.entryTime).toLocaleDateString()}
+                            
+                            <span className="absolute top-2 left-2 z-10 text-[9px] font-bold text-gray-300 bg-black/60 backdrop-blur-sm px-2 py-1 rounded border border-gray-700/50 shadow-md">
+                                {new Date(stay.entryTime).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
                             </span>
                         </div>
                     ) : (

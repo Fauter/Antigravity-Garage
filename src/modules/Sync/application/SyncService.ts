@@ -485,12 +485,15 @@ export class SyncService {
                 ticket_code: item.ticket_code || null,
                 entry_time: item.entryTime ? new Date(item.entryTime).toISOString() : (item.entry_time || null),
                 exit_time: item.exitTime ? new Date(item.exitTime).toISOString() : (item.exit_time || null),
-                // 🔓 HARDWARE: Only sync fields that EXIST in the Supabase 'stays' table.
-                // exit_authorized is the core flag. All other hardware fields
-                // (exit_authorized_at, authorized_at, exit_authorized_by, barrier_exit_*,
-                //  is_pending_processing, anpr_suggested_plate, entry_photo_path)
-                // are LOCAL-ONLY (NeDB). Sending them causes PGRST204 infinite retry loops.
+                // 🔓 HARDWARE: Sync fields that exist in the Supabase 'stays' table.
                 exit_authorized: item.exit_authorized ?? false,
+                exit_authorized_at: item.exit_authorized_at ? new Date(item.exit_authorized_at).toISOString() : null,
+                exit_authorized_by: item.exit_authorized_by || null,
+                entry_photo_path: item.entry_photo_path || null,
+                is_pending_processing: item.is_pending_processing ?? false,
+                anpr_suggested_plate: item.anpr_suggested_plate || null,
+                barrier_exit_used: item.barrier_exit_used ?? false,
+                barrier_exit_at: item.barrier_exit_at ? new Date(item.barrier_exit_at).toISOString() : null,
             };
 
             console.log(`📡 DEBUG SYNC [Stay]: exit_authorized=${stayPayload.exit_authorized}, ticket=${stayPayload.ticket_code}`);

@@ -1,5 +1,5 @@
 {
-  "mockMode": true,
+  "mockMode": false,
   "barrier": {
     "driver": "ETHERNET_RELAY",
     "ethernet": {
@@ -11,7 +11,13 @@
     }
   },
   "camera": {
-    "driver": "MOCK"
+    "driver": "HIKVISION_ISAPI",
+    "hikvision": {
+      "host": "192.168.100.77",
+      "username": "admin",
+      "password": "Parking132",
+      "channel": 101
+    }
   },
   "scanner": {
     "driver": "MOCK"
