@@ -37,13 +37,15 @@ const PriceMatrix: React.FC = () => {
             const [resTarifas, resVehiculos, resPrecios, resParams] = await Promise.all([
                 api.get('/tarifas'),
                 api.get('/tipos-vehiculo'),
-                api.get(`/precios?metodo=${paymentMethod}`),
+                api.get('/precios'),
                 api.get('/parametros')
             ]);
-            setTarifas(resTarifas.data);
-            setVehiculos(resVehiculos.data);
-            setPrecios(resPrecios.data);
-            setParams(prev => ({ ...prev, recargoDia11: resParams.data.recargoDia11, recargoDia22: resParams.data.recargoDia22 }));
+            setTarifas(resTarifas.data || []);
+            setVehiculos(resVehiculos.data || []);
+            setParams(resParams.data || { recargoDia11: 0, recargoDia22: 0 });
+
+            const isEfectivo = paymentMethod === 'efectivo';
+            setPrecios(isEfectivo ? (resPrecios.data.standard || {}) : (resPrecios.data.electronic || {}));
         } catch (e) {
             console.error(e);
             toast.error('Error cargando datos');

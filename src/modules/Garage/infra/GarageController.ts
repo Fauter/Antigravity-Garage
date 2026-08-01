@@ -676,11 +676,40 @@ export class GarageController {
                 (newSubscription as any).garageId = garageId;
             }
 
-            // Override price if prorata amount passed (trusting frontend or separate calculation logic)
-            // Ideally we calculate prorata here too.
-            if (amount !== undefined) {
-                newSubscription.price = amount;
+            // --- SERVER-SIDE PRICE CALCULATION (Authoritative) ---
+            const isElectronic = paymentMethod !== 'Efectivo';
+            const priceListFilter = isElectronic ? 'electronic' : 'standard';
+
+            const [allVehicleTypes, allTariffs, allPrices] = await Promise.all([
+                db.vehicleTypes.find({ garageId }),
+                db.tariffs.find({ garageId }),
+                db.prices.find({ garageId, priceList: priceListFilter })
+            ]);
+
+            const vType = allVehicleTypes.find((vt: any) => vt.name === vehicle.type);
+            const tType = allTariffs.find((t: any) => t.name === subscriptionType);
+
+            let calculatedAmount = 0;
+            if (vType && tType) {
+                const pRecord = allPrices.find((p: any) => (p.vehicleTypeId || p.vehicle_type_id) === (vType as any).id && (p.tariffId || p.tariff_id) === (tType as any).id);
+                if (pRecord) {
+                    const currentPrice = Number((pRecord as any).amount) || 0;
+                    const now = new Date();
+                    const currentDay = now.getDate();
+                    const ultimoDiaMes = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+                    const diasRestantes = (ultimoDiaMes - currentDay) + 1;
+                    const exactCalc = (currentPrice / ultimoDiaMes) * diasRestantes;
+                    calculatedAmount = Math.round(exactCalc);
+                }
             }
+
+            if (calculatedAmount === 0) {
+                return res.status(400).json({ error: `Precio no configurado en la base de datos para ${vehicle.type} y Tarifa ${subscriptionType} (${paymentMethod}).` });
+            }
+
+            // Enforce server-calculated price unconditionally
+            newSubscription.price = calculatedAmount;
+            // -----------------------------------------------------
 
             const savedSub = await this.subscriptionRepo.save(newSubscription);
             createdSubscriptionId = savedSub.id; // Track for rollback
@@ -1527,7 +1556,7 @@ export class GarageController {
 
     partialClose = async (req: Request, res: Response) => {
         try {
-            const { operator, amount, recipient_name, notes, garageId } = req.body;
+            const { operator, amount, recipient_name, notes, garageId, movement_type } = req.body;
             const finalGarageId = (req.headers['x-garage-id'] as string) || garageId;
 
             const partialClose = {
@@ -1537,7 +1566,8 @@ export class GarageController {
                 amount: Number(amount) || 0,
                 recipient_name: recipient_name || 'Desconocido',
                 notes: notes || '',
-                timestamp: new Date()
+                timestamp: new Date(),
+                movement_type: movement_type === 'expense' ? 'expense' : 'withdrawal'
             };
 
             await db.partialCloses.insert(partialClose);

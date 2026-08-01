@@ -102,7 +102,6 @@ const StaySchema = new Schema<import('../../shared/schemas').Stay>({
     exitTime: { type: Date },
     active: { type: Boolean, default: true },
     ticket_code: { type: String },
-    vehicleType: { type: String },
     isSubscriber: { type: Boolean, default: false },
     subscriptionId: { type: String },
     // --- Hardware Integration Fields ---
@@ -185,7 +184,8 @@ const PartialCloseSchema = new Schema<PartialClose>({
     amount: { type: Number, required: true },
     recipient_name: { type: String, required: true },
     notes: { type: String },
-    timestamp: { type: Date, default: Date.now }
+    timestamp: { type: Date, default: Date.now },
+    movement_type: { type: String, enum: ['withdrawal', 'expense'], default: 'withdrawal' }
 });
 
 export const PartialCloseModel = mongoose.model<PartialClose>('PartialClose', PartialCloseSchema);

@@ -49,7 +49,7 @@ const ConfigAuditPage: React.FC = () => {
             ]);
             setVehicleTypes(vRes.data);
             setTariffs(tRes.data);
-            setPrices(pRes.data);
+            setPrices(pRes.data.standard || {});
         } catch (error) {
             console.error('Error loading config audit data', error);
             toast.error('Error cargando configuración sincronizada');

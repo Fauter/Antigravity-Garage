@@ -11,13 +11,19 @@
 
 // ── Event Types ──────────────────────────────────────────────────────
 
+export type OcrStatus = 'DETECTED' | 'NOT_FOUND' | 'ERROR';
+
 /** Evento emitido cuando el hardware detecta un ingreso */
 export interface HardwareEntryEvent {
     id: string;                 // UUID del evento
     timestamp: string;          // ISO string (serializable para IPC)
     photoPath: string;          // Ruta absoluta a la foto capturada
-    suggestedPlate: string;     // OCR de la cámara (vacío si no soporta)
-    source: 'ANPR' | 'MANUAL' | 'SIMULATOR';
+    suggestedPlate: string;     // ANPR OCR suggestion
+    ocrStatus: OcrStatus;
+    ocrConfidence?: number;
+    ocrMessage?: string;
+    ocrProcessingTimeMs?: number;
+    source: 'ANPR' | 'MANUAL' | 'SIMULATOR' | 'IP_CAMERA_ALPR';
 }
 
 /** Evento emitido cuando el ESP32 escanea una tarjeta RFID */
@@ -133,7 +139,7 @@ export interface HardwareStatus {
 // ── Hardware Configuration ───────────────────────────────────────────
 
 export type BarrierDriverType = 'MOCK' | 'ETHERNET_RELAY';
-export type CameraDriverType = 'MOCK' | 'ANPR_WEBHOOK' | 'HIKVISION_ISAPI' | 'DISABLED';
+export type CameraDriverType = 'MOCK' | 'ANPR_WEBHOOK' | 'HIKVISION_ISAPI' | 'IP_CAMERA_ALPR' | 'DISABLED';
 export type ScannerDriverType = 'MOCK' | 'USB_HID';
 
 export interface EthernetRelayConfig {
@@ -156,6 +162,17 @@ export interface HikvisionISAPIConfig {
     channel?: number;   // ISAPI channel (default: 101 → channel 1, substream 01)
 }
 
+export interface IPCameraALPRConfig {
+    snapshotUrl: string;
+    username?: string;
+    password?: string;
+    snapshotTimeoutMs: number;
+    alprTimeoutMs: number;
+    alprServiceUrl: string;
+    minConfidence: number;
+    saveCaptures: boolean;
+}
+
 export interface ReconnectConfig {
     enabled: boolean;
     intervalMs: number;             // Default: 5000
@@ -173,6 +190,7 @@ export interface HardwareConfig {
         driver: CameraDriverType;
         webhook?: ANPRWebhookConfig;
         hikvision?: HikvisionISAPIConfig;
+        ipCameraAlpr?: IPCameraALPRConfig;
     };
     scanner: {
         driver: ScannerDriverType;

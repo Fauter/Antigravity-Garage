@@ -49,11 +49,13 @@ export class ANPRWebhookDriver implements ICameraDriver {
                 req.on('end', () => {
                     try {
                         const data = JSON.parse(body);
+                        const plate = (data.plate || data.plateNumber || data.results?.[0]?.plate || '').toUpperCase();
                         const event: HardwareEntryEvent = {
                             id: uuidv4(),
                             timestamp: new Date().toISOString(),
                             photoPath: data.photo_url || data.photoPath || '',
-                            suggestedPlate: (data.plate || data.plateNumber || data.results?.[0]?.plate || '').toUpperCase(),
+                            suggestedPlate: plate,
+                            ocrStatus: plate ? 'DETECTED' : 'NOT_FOUND',
                             source: 'ANPR',
                         };
 

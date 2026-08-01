@@ -411,7 +411,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     };
 
     return (
-        <div className="h-screen overflow-hidden bg-black text-gray-200 font-sans selection:bg-emerald-500/30 flex flex-col">
+        <div className="h-full min-h-0 overflow-hidden bg-black text-gray-200 font-sans selection:bg-emerald-500/30 flex flex-col">
             <SyncOverlay isVisible={isGlobalSyncing} />
 
             {/* --- HEADER --- */}
@@ -513,7 +513,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
 
             {/* --- CONTENT AREA --- */}
             <SyncRefreshContext.Provider value={{ refreshKey }}>
-                <main className="flex-1 overflow-auto relative">
+                <main className={`flex-1 overflow-auto relative ${location.pathname.startsWith('/abonos') ? 'app-scrollbar' : ''}`}>
                     {children}
                 </main>
             </SyncRefreshContext.Provider>

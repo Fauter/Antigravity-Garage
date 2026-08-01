@@ -11,6 +11,30 @@ interface Stay {
     isPrepaid?: boolean;
     prepaidUntil?: string | null;
 }
+const formatEntryDate = (entryTime: string) => {
+    try {
+        const date = new Date(entryTime);
+        if (isNaN(date.getTime())) {
+            return { dateStr: '—', timeStr: '—' };
+        }
+        
+        const dateStr = date.toLocaleDateString('es-AR', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+        });
+        
+        const timeStr = date.toLocaleTimeString('es-AR', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+        
+        return { dateStr, timeStr };
+    } catch (e) {
+        return { dateStr: '—', timeStr: '—' };
+    }
+};
 
 const AuditoriaVehiculos: React.FC = () => {
     // 1. Get Garage ID from Local Storage Configuration
@@ -86,7 +110,7 @@ const AuditoriaVehiculos: React.FC = () => {
                         <ShieldCheck className="w-5 h-5" /> Vehículos Activos
                     </h3>
                 </div>
-                <div className="overflow-auto flex-1">
+                <div className="overflow-auto flex-1 app-scrollbar">
                     <table className="w-full text-left border-collapse">
                         <thead className="bg-slate-950 text-slate-400 uppercase text-xs font-bold sticky top-0 z-10">
                             <tr>
@@ -115,8 +139,16 @@ const AuditoriaVehiculos: React.FC = () => {
                                         <td className="p-4 font-mono font-bold text-white text-lg">
                                             {stay.plate}
                                         </td>
-                                        <td className="p-4 font-mono text-slate-400">
-                                            {new Date(stay.entryTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                        <td className="p-4 font-mono">
+                                            {(() => {
+                                                const { dateStr, timeStr } = formatEntryDate(stay.entryTime);
+                                                return (
+                                                    <div className="leading-tight">
+                                                        <div className="text-sm font-medium text-slate-200">{dateStr}</div>
+                                                        <div className="mt-0.5 text-xs font-medium text-slate-400">{timeStr}</div>
+                                                    </div>
+                                                );
+                                            })()}
                                         </td>
                                         <td className="p-4 font-mono font-medium text-emerald-400">
                                             <div>{calculateDuration(stay.entryTime)}</div>

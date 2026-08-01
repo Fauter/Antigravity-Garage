@@ -236,22 +236,21 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     useEffect(() => {
         const loadConfig = async () => {
             try {
-                const fetchStandardPrices = api.get('/precios?metodo=efectivo').catch(e => { console.error("Standard price load error:", e); return null; });
-                const fetchElectronicPrices = api.get('/precios?metodo=otros').catch(e => { console.error("Electronic price load error:", e); return null; });
+                const fetchPrices = api.get('/precios').catch(e => { console.error("Price load error:", e); return null; });
                 const fetchTypes = api.get('/tipos-vehiculo').catch(e => { console.error("Type load error:", e); return null; });
                 const fetchFinancialConfig = api.get('/configuracion-financiera').catch(e => { console.error("Fin config load error:", e); return null; });
 
-                const [standardPricesRes, electronicPricesRes, typesRes, finConfigRes] = await Promise.all([fetchStandardPrices, fetchElectronicPrices, fetchTypes, fetchFinancialConfig]);
+                const [pricesRes, typesRes, finConfigRes] = await Promise.all([fetchPrices, fetchTypes, fetchFinancialConfig]);
 
                 if (typesRes && typesRes.data && vehicleTypes.length === 0) {
                     setVehicleTypes(typesRes.data);
                 }
-                if (standardPricesRes && standardPricesRes.data) {
-                    setStandardPricesMatrix(standardPricesRes.data.efectivo || standardPricesRes.data);
-                    setPricesMatrix(standardPricesRes.data.efectivo || standardPricesRes.data); // Fallback until refactored completely
-                }
-                if (electronicPricesRes && electronicPricesRes.data) {
-                    setElectronicPricesMatrix(electronicPricesRes.data.otros || electronicPricesRes.data.efectivo || electronicPricesRes.data);
+                if (pricesRes && pricesRes.data) {
+                    const standardMatrix = pricesRes.data.standard || {};
+                    const electronicMatrix = pricesRes.data.electronic || {};
+                    setStandardPricesMatrix(standardMatrix);
+                    setPricesMatrix(standardMatrix); // Fallback until refactored completely
+                    setElectronicPricesMatrix(electronicMatrix);
                 }
                 if (finConfigRes && finConfigRes.data) {
                     setFinancialConfig(finConfigRes.data);
@@ -1613,7 +1612,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
                 {isNewCocheraOpen && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-                        <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-4xl p-4 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+                        <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-4xl p-4 shadow-2xl relative max-h-[90vh] overflow-y-auto app-scrollbar">
                             <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
                                 <Plus className="w-5 h-5 text-emerald-400" />
                                 Nueva Cochera

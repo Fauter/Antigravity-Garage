@@ -116,7 +116,7 @@ const LoginPage: React.FC = () => {
     };
 
     return (
-        <div className="min-h-screen bg-gray-950 flex items-center justify-center font-sans text-gray-100 p-4 relative overflow-hidden">
+        <div className="h-full min-h-0 overflow-y-auto bg-gray-950 flex items-center justify-center font-sans text-gray-100 p-4 relative">
 
             {/* Background Effects */}
             <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-emerald-900/20 via-gray-950 to-gray-950"></div>

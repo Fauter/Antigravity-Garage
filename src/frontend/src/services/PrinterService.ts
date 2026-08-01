@@ -255,10 +255,7 @@ export const PrinterService = {
                             <td style="text-align: left;">Tarifa:</td>
                             <td style="text-align: right; font-weight: bold;">${tariffName}</td>
                         </tr>
-                        <tr>
-                            <td style="text-align: left;">Cobro:</td>
-                            <td style="text-align: right; font-weight: bold;">$${movement.amount} (${movement.paymentMethod})</td>
-                        </tr>
+
                     </table>
                 </div>
 
@@ -267,14 +264,30 @@ export const PrinterService = {
                     <div style="font-size: 28px; font-weight: bold; letter-spacing: 1px;">${stay.plate}</div>
                 </div>
 
-                <div style="border: 2px dashed #000; padding: 4px; margin: 8px 0;">
-                    <div style="font-size: 11px; font-weight: bold;">VÁLIDO HASTA:</div>
-                    <div style="font-size: 24px; font-weight: bold; margin-top: 2px;">${formattedUntil}</div>
-                </div>
-
                 ${photoHtml}
 
                 <div style="border-bottom: 1px solid #000; margin: 4px 0;"></div>
+
+                <div style="margin: 8px 0;">
+                    <div style="font-size: 14px; font-weight: bold;">TOTAL</div>
+                    <div style="font-size: 32px; font-weight: bold; letter-spacing: -1px;">$${Number(movement.amount).toFixed(2)}</div>
+                    
+                    <div style="margin-top: 8px; font-size: 11px; font-weight: bold;">VÁLIDO HASTA:</div>
+                    <div style="font-size: 24px; font-weight: bold; margin-top: 2px;">${formattedUntil}</div>
+                </div>
+
+                <div style="border-bottom: 1px solid #000; margin: 4px 0;"></div>
+
+                <table style="width: 100%; font-size: 11px; line-height: 1.3; font-family: 'Courier New', Courier, monospace;">
+                    <tr>
+                        <td style="text-align: left;">Medio de Pago:</td>
+                        <td style="text-align: right; font-weight: bold;">${movement.paymentMethod}</td>
+                    </tr>
+                    <tr>
+                        <td style="text-align: left;">Operador:</td>
+                        <td style="text-align: right; font-weight: bold;">${movement.operator ? movement.operator.substring(0, 15) : 'Sys'}</td>
+                    </tr>
+                </table>
 
                 <div style="font-size: 9px; line-height: 1.2; margin-top: 5px; white-space: nowrap;">
                     <div>Conserve este ticket para retirar su vehículo.</div>
@@ -290,8 +303,8 @@ export const PrinterService = {
                 </div>
             </div>
         `;
-        printHtml(content + CUT_SPACER, config.paperWidth);
-        toast.info(`🖨️ Imprimiendo Anticipado: ${stay.plate}`);
+        printHtml(content + TICKET_SEPARATOR + content + CUT_SPACER, config.paperWidth);
+        toast.info(`🖨️ Imprimiendo Anticipado (x2): ${stay.plate}`);
     },
 
     printExitTicket: (stay: any, movement: any) => {
@@ -692,6 +705,11 @@ export const PrinterService = {
 
     printPartialCloseTicket: (data: any) => {
         const config = getGarageConfig();
+        const isExpense = data.movement_type === 'expense';
+        const mainTitle = isExpense ? 'EGRESO DE CAJA' : 'RETIRO PARCIAL';
+        const recipientLabel = isExpense ? 'Pagado a:' : 'Entregado a:';
+        const notesLabel = isExpense ? 'Concepto:' : 'Notas:';
+        const bottomText = isExpense ? 'Egreso operativo de caja' : 'Retiro parcial de caja';
 
         const generateTicket = () => `
             <div style="font-family: 'Courier New', Courier, monospace; width: 48mm; margin: 0; color: #000; padding: 0; text-align: center;">
@@ -711,7 +729,7 @@ export const PrinterService = {
                 <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
                 <div style="margin-bottom: 5px;">
-                    <div style="font-size: 14px; font-weight: bold; margin-top: 3px;">RETIRO PARCIAL</div>
+                    <div style="font-size: 14px; font-weight: bold; margin-top: 3px;">${mainTitle}</div>
                 </div>
 
                 <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
@@ -727,12 +745,12 @@ export const PrinterService = {
                             <td style="text-align: right; font-weight: bold;">${data.operatorName ? data.operatorName.substring(0, 15) : '---'}</td>
                         </tr>
                         <tr>
-                            <td style="text-align: left;">A:</td>
+                            <td style="text-align: left;">${recipientLabel}</td>
                             <td style="text-align: right; font-weight: bold;">${data.recipientName}</td>
                         </tr>
                         ${data.partialNotes ? `
                         <tr>
-                            <td style="text-align: left;">Notas:</td>
+                            <td style="text-align: left;">${notesLabel}</td>
                             <td style="text-align: right; font-weight: bold;">${data.partialNotes}</td>
                         </tr>
                         ` : ''}
@@ -742,7 +760,7 @@ export const PrinterService = {
                 <div style="border-bottom: 1px solid #000; margin: 4px 0;"></div>
 
                 <div style="margin: 8px 0 12px 0;">
-                    <div style="font-size: 14px; font-weight: bold;">TOTAL RETIRADO</div>
+                    <div style="font-size: 14px; font-weight: bold;">TOTAL ${isExpense ? 'EGRESADO' : 'RETIRADO'}</div>
                     <div style="font-size: 32px; font-weight: bold; letter-spacing: -1px;">$${Number(data.partialAmount).toLocaleString('es-AR')}</div>
                 </div>
 
@@ -752,7 +770,7 @@ export const PrinterService = {
                 </div>
 
                 <div style="font-size: 10px; line-height: 1.3; margin-top: 8px; white-space: nowrap;">
-                    <div>Retiro parcial de caja</div>
+                    <div>${bottomText}</div>
                 </div>
                 
                 ${PrinterService.getLegalFooter()}

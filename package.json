@@ -1,6 +1,6 @@
 {
   "name": "GarageIA",
-  "version": "3.5.0",
+  "version": "3.4.4",
   "description": "Este documento contiene la Hoja de Ruta Técnica y el Análisis Crítico para la reconstrucción del sistema, diseñado bajo arquitectura **Offline-First**.",
   "main": "main.js",
   "scripts": {
@@ -37,6 +37,7 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^25.2.0",
+    "@types/sharp": "^0.31.1",
     "concurrently": "^9.2.1",
     "electron": "^40.6.1",
     "electron-builder": "^26.8.1",
@@ -64,11 +65,23 @@
       "SimulatorPreload.js",
       "simulator.html",
       "src/**/*",
+      "build/**/*",
       "dist_main/**/*",
       "node_modules/**/*",
       "!src/frontend/node_modules",
       "!src/frontend/src",
       "src/frontend/dist/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "alpr_service",
+        "to": "alpr_service",
+        "filter": [
+          "**/*",
+          "!venv/**/*",
+          "!__pycache__/**/*"
+        ]
+      }
     ],
     "asar": true
   }

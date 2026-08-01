@@ -128,22 +128,21 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
     }, [formData.dni, existingDnis]);
 
     const loadConfig = async () => {
-        // Fetch prices based on current payment method
-        const queryMethod = formData.metodoPago === 'Efectivo' ? 'efectivo' : 'otros';
-
-        // Parallel independent fetches
-        const fetchPrices = api.get(`/precios?metodo=${queryMethod}`).catch(e => { console.error("Price load error:", e); return null; });
-        const fetchStandardPrices = api.get('/precios?metodo=efectivo').catch(e => { console.error("Standard price load error:", e); return null; });
+        // Fetch prices once (contains both standard and electronic)
+        const fetchPrices = api.get('/precios').catch(e => { console.error("Price load error:", e); return null; });
         const fetchTypes = api.get('/tipos-vehiculo').catch(e => { console.error("Type load error:", e); return null; });
 
-        const [priceRes, standardPriceRes, typeRes] = await Promise.all([fetchPrices, fetchStandardPrices, fetchTypes]);
+        const [priceRes, typeRes] = await Promise.all([fetchPrices, fetchTypes]);
 
         if (priceRes && priceRes.data) {
-            // endpoint /precios?metodo=... returns the object directly
-            setPricesMatrix(priceRes.data.efectivo || priceRes.data);
-        }
-        if (standardPriceRes && standardPriceRes.data) {
-            setStandardPricesMatrix(standardPriceRes.data.efectivo || standardPriceRes.data);
+            // New canonical DTO: { standard: Matrix, electronic: Matrix }
+            const standardMatrix = priceRes.data.standard || {};
+            const electronicMatrix = priceRes.data.electronic || {};
+            
+            setStandardPricesMatrix(standardMatrix);
+            // Current price matrix depends on payment method
+            const isEfectivo = formData.metodoPago === 'Efectivo';
+            setPricesMatrix(isEfectivo ? standardMatrix : electronicMatrix);
         }
 
         if (typeRes && typeRes.data && Array.isArray(typeRes.data)) {
@@ -195,19 +194,20 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
             return finalPrice;
         };
 
-        const standardPrice = findPrice(standardPricesMatrix);
-        const currentPrice = findPrice(pricesMatrix);
+        // We don't need standardPrice directly anymore because pricesMatrix is already dynamically set to standard or electronic based on metodoPago
+        const selectedMonthlyPrice = findPrice(pricesMatrix);
 
-        // 4. Update Display (Base Price is Standard)
-        setBasePriceDisplay(standardPrice);
+        // 4. Update Display to show the actual monthly price for the selected method
+        setBasePriceDisplay(selectedMonthlyPrice);
 
         // 5. Calculate Prorated based on current price matrix
         const now = new Date();
         const currentDay = now.getDate();
         const ultimoDiaMes = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
         const diasRestantes = (ultimoDiaMes - currentDay) + 1;
-        // Nuevo código con redondeo exacto
-        const exactCalc = (currentPrice / ultimoDiaMes) * diasRestantes;
+        
+        // Prorrateo exacto
+        const exactCalc = (selectedMonthlyPrice / ultimoDiaMes) * diasRestantes;
 
         setProratedPrice(Math.round(exactCalc));
     };

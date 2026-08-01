@@ -53,26 +53,17 @@ router.get('/tipos-vehiculo', async (req, res) => {
 router.get('/precios', async (req, res) => {
     try {
         const garageId = (req.query.garageId as string) || (req.headers['x-garage-id'] as string);
-        if (!garageId) return res.json({});
+        if (!garageId) return res.json({ standard: {}, electronic: {} });
 
-        const metodoParam = req.query.metodo as string;
-        // Map UI Method -> Repo Method
-        // 'EFECTIVO' -> 'standard', anything else -> 'electronic'
-        const listFilter = (metodoParam && metodoParam.toUpperCase() === 'EFECTIVO') ? 'standard' : 'electronic';
-
-        // Fetch Data from Local DB (Sync Source of Truth)
-        // We use the local DB because SyncService ensures it's up to date.
-        // This avoids round-trips and ensures property consistency (camelCase).
         const [prices, vehicleTypes, tariffs] = await Promise.all([
-            db.prices.find({ garageId, priceList: listFilter }),
+            db.prices.find({ garageId }),
             db.vehicleTypes.find({ garageId }),
             db.tariffs.find({ garageId })
         ]);
 
-        // Transform to Nested Structure: { "Auto": { "Hora": 1000, "Estadia": 5000 } }
-        const matrix: Record<string, Record<string, number>> = {};
+        const standardMatrix: Record<string, Record<string, number>> = {};
+        const electronicMatrix: Record<string, Record<string, number>> = {};
 
-        // Helper maps for ID -> Name (Source of Truth: DB Name)
         const vTypeMap = new Map(vehicleTypes.map((v: any) => [v.id.trim(), v.name]));
         const tariffMap = new Map(tariffs.map((t: any) => [t.id.trim(), t.name]));
 
@@ -81,29 +72,29 @@ router.get('/precios', async (req, res) => {
         }
 
         prices.forEach((p: any) => {
-            // Dual Property Check (Bulletproof: camelCase OR snake_case)
             const vIdRaw = (p.vehicleTypeId || p.vehicle_type_id || '').trim();
             const tIdRaw = (p.tariffId || p.tariff_id || '').trim();
 
             if (!vIdRaw || !tIdRaw) return;
 
-            // Resolve Name by ID
             const vName = vTypeMap.get(vIdRaw);
             const tName = tariffMap.get(tIdRaw);
 
             if (vName && tName) {
                 const vKey = String(vName);
                 const tKey = String(tName);
-                if (!matrix[vKey]) matrix[vKey] = {};
-                // Use p.amount 
-                matrix[vKey][tKey] = Number(p.amount || 0);
-            } else {
-                // Only warn if IDs are present but not found in maps (avoid noise for phantom records)
-                // console.warn(`⚠️ ConfigMatrix Mapping Fail: Price ${p.id} -> VType: ${vIdRaw} [${vName || 'NOT_FOUND'}], Tariff: ${tIdRaw} [${tName || 'NOT_FOUND'}]`);
+                const isElectronic = p.priceList === 'electronic';
+                const targetMatrix = isElectronic ? electronicMatrix : standardMatrix;
+
+                if (!targetMatrix[vKey]) targetMatrix[vKey] = {};
+                targetMatrix[vKey][tKey] = Number(p.amount || 0);
             }
         });
 
-        res.json(matrix);
+        res.json({
+            standard: standardMatrix,
+            electronic: electronicMatrix
+        });
     } catch (e) {
         res.status(500).json({ error: e });
     }

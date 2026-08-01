@@ -161,6 +161,7 @@ export const StaySchema = z.object({
   prepaidUntil: TimestampSchema.optional().nullable(),
   prepaidTariffId: z.string().optional().nullable(),
   createdAt: TimestampSchema.default(() => new Date()),
+  updatedAt: TimestampSchema.optional(),
 });
 export type Stay = z.infer<typeof StaySchema>;
 
@@ -234,6 +235,9 @@ export type ShiftClose = z.infer<typeof ShiftCloseSchema>;
  * PartialClose / Retiro Parcial de Caja
  * Representa retiros de dinero de la caja (Ej: Pagos a proveedores).
  */
+export const PartialCloseMovementTypeEnum = z.enum(['withdrawal', 'expense']);
+export type PartialCloseMovementType = z.infer<typeof PartialCloseMovementTypeEnum>;
+
 export const PartialCloseSchema = z.object({
   id: UuidSchema,
   garageId: UuidSchema.optional(),
@@ -242,6 +246,7 @@ export const PartialCloseSchema = z.object({
   recipient_name: z.string(),
   notes: z.string().optional(),
   timestamp: TimestampSchema.default(() => new Date()),
+  movement_type: PartialCloseMovementTypeEnum.default('withdrawal'),
 });
 export type PartialClose = z.infer<typeof PartialCloseSchema>;
 

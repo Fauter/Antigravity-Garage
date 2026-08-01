@@ -62,7 +62,10 @@ const EntryTabQueue: React.FC<EntryTabQueueProps> = ({ onTabSelect }) => {
 
                             {/* Tab content */}
                             <span className="font-mono text-[11px]">
-                                {entry.suggestedPlate || `#${index + 1}`}
+                                {entry.ocrStatus === 'DETECTED' ? entry.suggestedPlate 
+                                 : entry.ocrStatus === 'NOT_FOUND' ? 'SIN LECTURA' 
+                                 : entry.ocrStatus === 'ERROR' ? 'ERROR OCR' 
+                                 : (entry.suggestedPlate || `#${index + 1}`)}
                             </span>
 
                             {/* Time badge */}

@@ -28,6 +28,7 @@ interface PartialClose {
     timestamp: string;
     recipient_name?: string;
     notes?: string;
+    movement_type?: 'withdrawal' | 'expense';
 }
 
 interface RecentStay {
@@ -64,6 +65,36 @@ interface ReprintItem {
     _movement?: Movement;
 }
 
+const getPartialCloseReference = (
+    partialClose: PartialClose
+): {
+    recipient: string;
+    notes: string;
+    text: string;
+    hasReference: boolean;
+} => {
+    const rawRecipient = partialClose.recipient_name?.trim() || '';
+
+    const recipient =
+        rawRecipient.toLocaleLowerCase('es') === 'desconocido'
+            ? ''
+            : rawRecipient;
+
+    const notes = partialClose.notes?.trim() || '';
+
+    const text =
+        recipient && notes
+            ? `${recipient} - ${notes}`
+            : recipient || notes || 'Sin referencia';
+
+    return {
+        recipient,
+        notes,
+        text,
+        hasReference: Boolean(recipient || notes),
+    };
+};
+
 const CajaPage: React.FC = () => {
     const { user, operatorName, logout } = useAuth();
     const [unifiedRows, setUnifiedRows] = useState<UnifiedRow[]>([]);
@@ -87,6 +118,7 @@ const CajaPage: React.FC = () => {
     const [partialAmount, setPartialAmount] = useState<number | ''>('');
     const [recipientName, setRecipientName] = useState('');
     const [partialNotes, setPartialNotes] = useState('');
+    const [movementType, setMovementType] = useState<'withdrawal' | 'expense' | null>(null);
 
     // Reprint Center state
     const [reprintItems, setReprintItems] = useState<ReprintItem[]>([]);
@@ -448,27 +480,66 @@ const CajaPage: React.FC = () => {
         }
     };
 
+    const validatePartialCloseForm = (): boolean => {
+        if (!movementType) {
+            toast.warning('Seleccioná si el movimiento es un retiro o un egreso.');
+            return false;
+        }
+
+        const amountNum = Number(partialAmount);
+        if (partialAmount === '' || !Number.isFinite(amountNum) || amountNum <= 0) {
+            toast.warning('Ingresá un monto mayor a cero.');
+            return false;
+        }
+
+        const normalizedName = recipientName.trim();
+        const normalizedNotes = partialNotes.trim();
+
+        if (normalizedName.length === 0 && normalizedNotes.length === 0) {
+            toast.warning('Completá el nombre o las notas para continuar.');
+            return false;
+        }
+
+        return true;
+    };
+
+    const resetPartialCloseForm = () => {
+        setPartialCloseStep(1);
+        setPartialAmount('');
+        setRecipientName('');
+        setPartialNotes('');
+        setMovementType(null);
+    };
+
+    const closePartialCloseModal = () => {
+        setIsPartialCloseModalOpen(false);
+        resetPartialCloseForm();
+    };
+
     const handlePartialClose = async () => {
+        if (!validatePartialCloseForm()) return;
+
+        const normalizedName = recipientName.trim();
+        const normalizedNotes = partialNotes.trim();
+
         try {
             await api.post('/caja/cierre-parcial', {
                 operator: operatorName,
                 amount: Number(partialAmount),
-                recipient_name: recipientName,
-                notes: partialNotes
+                recipient_name: normalizedName,
+                notes: normalizedNotes,
+                movement_type: movementType
             });
-            toast.success('RETIRO PARCIAL REGISTRADO CORRECTAMENTE');
+            toast.success(movementType === 'expense' ? 'EGRESO REGISTRADO CORRECTAMENTE' : 'RETIRO PARCIAL REGISTRADO CORRECTAMENTE');
             PrinterService.printPartialCloseTicket({
                 timestamp: new Date().toISOString(),
                 operatorName: operatorName,
-                recipientName: recipientName,
-                partialNotes: partialNotes,
-                partialAmount: Number(partialAmount)
+                recipientName: normalizedName,
+                partialNotes: normalizedNotes,
+                partialAmount: Number(partialAmount),
+                movement_type: movementType
             });
-            setIsPartialCloseModalOpen(false);
-            setPartialCloseStep(1);
-            setPartialAmount('');
-            setRecipientName('');
-            setPartialNotes('');
+            closePartialCloseModal();
             loadMovements(); // Refrescar movimientos + retiros
         } catch (error) {
             console.error("Error al registrar cierre parcial", error);
@@ -527,7 +598,10 @@ const CajaPage: React.FC = () => {
             {/* Acciones Rápidas */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                 <button
-                    onClick={() => setIsPartialCloseModalOpen(true)}
+                    onClick={() => {
+                        resetPartialCloseForm();
+                        setIsPartialCloseModalOpen(true);
+                    }}
                     className="flex justify-center items-center gap-3 bg-slate-800 hover:bg-slate-700 text-white p-4 rounded-xl border border-slate-700 transition-colors shadow-lg group"
                 >
                     <ArrowDownRight className="w-6 h-6 text-amber-500 group-hover:scale-110 transition-transform" />
@@ -557,8 +631,15 @@ const CajaPage: React.FC = () => {
                         <FileText className="w-5 h-5" /> Movimientos del Turno
                     </h3>
                 </div>
-                <div className="overflow-auto flex-1">
-                    <table className="w-full text-left border-collapse">
+                <div className="overflow-auto flex-1 app-scrollbar">
+                    <table className="w-full table-fixed text-left border-collapse">
+                        <colgroup>
+                            <col className="w-[15%]" />
+                            <col className="w-[20%]" />
+                            <col className="w-[25%]" />
+                            <col className="w-[25%]" />
+                            <col className="w-[15%]" />
+                        </colgroup>
                         <thead className="bg-slate-950 text-slate-400 uppercase text-xs font-bold sticky top-0 z-10">
                             <tr>
                                 <th className="p-4 border-b border-slate-800">Hora</th>
@@ -576,16 +657,53 @@ const CajaPage: React.FC = () => {
                             ) : (
                                 unifiedRows.map((row, idx) => {
                                     if (row._kind === 'partial_close') {
+                                        const isExpense = row.movement_type === 'expense';
+                                        const reference = getPartialCloseReference(row);
+
                                         return (
                                             <tr key={`pc-${idx}`} className="hover:bg-slate-800/50 transition-colors bg-slate-900/30">
                                                 <td className="p-4 font-mono text-slate-400">
                                                     {new Date(row.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                                 </td>
-                                                <td className="p-4 text-amber-400 font-semibold flex items-center gap-1.5">
-                                                    <ArrowDownRight className="w-4 h-4" /> Cierre Parcial
+                                                <td className={`p-4 font-semibold ${isExpense ? 'text-sky-400' : 'text-amber-400'}`}>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <ArrowDownRight className="w-4 h-4" />
+                                                        <span>{isExpense ? 'Egreso' : 'Cierre Parcial'}</span>
+                                                    </div>
                                                 </td>
-                                                <td className="p-4 font-mono text-slate-600">---</td>
-                                                <td className="p-4 text-slate-600">---</td>
+                                                <td
+                                                    colSpan={2}
+                                                    className="p-4 align-middle min-w-0"
+                                                    aria-label={`Referencia del ${isExpense ? 'egreso' : 'retiro'}: ${reference.text}`}
+                                                >
+                                                    <div className="grid w-full min-w-0 grid-cols-2">
+                                                        <div className="col-start-1 min-w-0 flex justify-center">
+                                                            <div
+                                                                className={`max-w-full min-w-0 truncate text-center ${
+                                                                    reference.hasReference ? 'text-slate-300' : 'text-slate-600 italic'
+                                                                }`}
+                                                                title={reference.text}
+                                                            >
+                                                                {reference.recipient && reference.notes ? (
+                                                                    <>
+                                                                        <span className="font-semibold text-slate-200">
+                                                                            {reference.recipient}
+                                                                        </span>
+                                                                        <span className="text-slate-500">
+                                                                            {' - '}
+                                                                        </span>
+                                                                        <span className="text-slate-400">
+                                                                            {reference.notes}
+                                                                        </span>
+                                                                    </>
+                                                                ) : (
+                                                                    reference.text
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                        <div aria-hidden="true" />
+                                                    </div>
+                                                </td>
                                                 <td className="p-4 font-mono font-bold text-slate-500 text-right">
                                                     -${Number(row.amount).toLocaleString()}
                                                 </td>
@@ -763,60 +881,109 @@ const CajaPage: React.FC = () => {
                         {partialCloseStep === 1 && (
                             <>
                                 <h3 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
-                                    <ArrowDownRight className="text-amber-500 w-6 h-6" /> Retiro Parcial
+                                    <ArrowDownRight className={movementType === 'expense' ? 'text-sky-400 w-6 h-6' : 'text-amber-500 w-6 h-6'} /> {movementType === 'expense' ? 'Registrar Egreso' : (movementType === 'withdrawal' ? 'Registrar Retiro Parcial' : 'Registrar Retiro')}
                                 </h3>
 
                                 <div className="space-y-4 mb-8">
                                     <div>
-                                        <label className="block text-slate-400 text-sm font-bold mb-2">Monto a retirar</label>
-                                        <div className="relative">
-                                            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold">$</span>
-                                            <input
-                                                type="text"
-                                                inputMode="numeric"
-                                                value={formatNumberWithDots(partialAmount)}
-                                                onChange={e => {
-                                                    const rawValue = e.target.value.replace(/\D/g, '');
-                                                    setPartialAmount(rawValue === '' ? '' : Number(rawValue));
-                                                }}
-                                                className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 pl-8 text-white font-mono text-xl focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-none"
-                                                placeholder="0.00"
-                                            />
+                                        <label className="block text-slate-400 text-sm font-bold mb-2">
+                                            Tipo de movimiento <span className="text-amber-500">*</span>
+                                        </label>
+                                        <div 
+                                            role="radiogroup" 
+                                            aria-label="Tipo de movimiento"
+                                            className="flex p-1 bg-slate-950 border border-slate-700 rounded-xl"
+                                        >
+                                            <button
+                                                type="button"
+                                                role="radio"
+                                                aria-checked={movementType === 'withdrawal'}
+                                                onClick={() => setMovementType('withdrawal')}
+                                                className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
+                                                    movementType === 'withdrawal' 
+                                                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/50 shadow-sm' 
+                                                    : 'text-slate-400 hover:text-slate-300 hover:bg-slate-800 border border-transparent'
+                                                }`}
+                                            >
+                                                Retiro
+                                            </button>
+                                            <button
+                                                type="button"
+                                                role="radio"
+                                                aria-checked={movementType === 'expense'}
+                                                onClick={() => setMovementType('expense')}
+                                                className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                                                    movementType === 'expense' 
+                                                    ? 'bg-sky-500/20 text-sky-400 border border-sky-500/50 shadow-sm' 
+                                                    : 'text-slate-400 hover:text-slate-300 hover:bg-slate-800 border border-transparent'
+                                                }`}
+                                            >
+                                                Egreso
+                                            </button>
                                         </div>
                                     </div>
-                                    <div>
-                                        <label className="block text-slate-400 text-sm font-bold mb-2">Nombre quien retira / Paga a</label>
-                                        <input
-                                            type="text"
-                                            value={recipientName}
-                                            onChange={e => setRecipientName(e.target.value)}
-                                            className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-none"
-                                            placeholder="Proveedor, Dueño, etc."
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-slate-400 text-sm font-bold mb-2">Notas (Opcional)</label>
-                                        <textarea
-                                            value={partialNotes}
-                                            onChange={e => setPartialNotes(e.target.value)}
-                                            className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-none min-h-[80px]"
-                                            placeholder="Detalles del retiro..."
-                                        />
-                                    </div>
+
+                                    {!movementType && (
+                                        <p className="text-slate-400 text-sm italic mb-2">Seleccioná Retiro o Egreso para habilitar los campos.</p>
+                                    )}
+
+                                    <fieldset 
+                                        disabled={!movementType}
+                                        className={`space-y-4 transition-opacity duration-300 ${!movementType ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                    >
+                                        <div>
+                                            <label className="block text-slate-400 text-sm font-bold mb-2">Monto</label>
+                                            <div className="relative">
+                                                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold">$</span>
+                                                <input
+                                                    type="text"
+                                                    inputMode="numeric"
+                                                    value={formatNumberWithDots(partialAmount)}
+                                                    onChange={e => {
+                                                        const rawValue = e.target.value.replace(/\D/g, '');
+                                                        setPartialAmount(rawValue === '' ? '' : Number(rawValue));
+                                                    }}
+                                                    className={`w-full bg-slate-950 border border-slate-700 rounded-xl p-3 pl-8 text-white font-mono text-xl outline-none ${movementType ? 'focus:border-amber-500 focus:ring-1 focus:ring-amber-500' : ''} disabled:bg-slate-900 disabled:text-slate-500 disabled:cursor-not-allowed`}
+                                                    placeholder="0.00"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-slate-400 text-sm font-bold mb-2">{movementType === 'expense' ? 'Pagado a / Beneficiario' : 'Nombre de quien retira / Paga a'}</label>
+                                            <input
+                                                type="text"
+                                                value={recipientName}
+                                                onChange={e => setRecipientName(e.target.value)}
+                                                className={`w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white outline-none ${movementType ? 'focus:border-amber-500 focus:ring-1 focus:ring-amber-500' : ''} disabled:bg-slate-900 disabled:text-slate-500 disabled:cursor-not-allowed`}
+                                                placeholder={movementType === 'expense' ? 'Nombre del proveedor, entidad, etc.' : 'Proveedor, Dueño, etc.'}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-slate-400 text-sm font-bold mb-2">{movementType === 'expense' ? 'Concepto / Notas del egreso' : 'Notas del retiro'}</label>
+                                            <textarea
+                                                value={partialNotes}
+                                                onChange={e => setPartialNotes(e.target.value)}
+                                                className={`w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white outline-none min-h-[80px] ${movementType ? 'focus:border-amber-500 focus:ring-1 focus:ring-amber-500' : ''} disabled:bg-slate-900 disabled:text-slate-500 disabled:cursor-not-allowed`}
+                                                placeholder="Detalles..."
+                                            />
+                                        </div>
+                                        <p className="text-slate-500 text-xs italic">Completá al menos uno de estos dos campos.</p>
+                                    </fieldset>
                                 </div>
                                 <div className="flex gap-3 mt-6">
                                     <button
-                                        onClick={() => setIsPartialCloseModalOpen(false)}
+                                        onClick={closePartialCloseModal}
                                         className="flex-1 bg-slate-800 text-slate-300 py-3 rounded-xl font-bold hover:bg-slate-700 transition"
                                     >
                                         Cancelar
                                     </button>
                                     <button
                                         onClick={() => {
-                                            if (partialAmount === '' || !recipientName.trim()) return toast.warning('Complete monto y destinatario');
-                                            setPartialCloseStep(2);
+                                            if (validatePartialCloseForm()) {
+                                                setPartialCloseStep(2);
+                                            }
                                         }}
-                                        className="flex-1 bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-500 transition"
+                                        className={`flex-1 text-white py-3 rounded-xl font-bold transition flex items-center justify-center gap-2 ${!movementType ? 'bg-slate-700 hover:bg-slate-600' : movementType === 'expense' ? 'bg-sky-600 hover:bg-sky-500' : 'bg-emerald-600 hover:bg-emerald-500'}`}
                                     >
                                         Siguiente
                                     </button>
@@ -827,23 +994,23 @@ const CajaPage: React.FC = () => {
                         {partialCloseStep === 2 && (
                             <>
                                 <h3 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
-                                    <CheckCircle className="text-emerald-500 w-6 h-6" /> Confirmar Retiro
+                                    <CheckCircle className={movementType === 'expense' ? 'text-sky-500 w-6 h-6' : 'text-emerald-500 w-6 h-6'} /> {movementType === 'expense' ? 'Confirmar Egreso' : 'Confirmar Retiro'}
                                 </h3>
 
                                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-4 mb-6 relative overflow-hidden">
                                     <div className="flex justify-between items-center text-slate-300">
                                         <span>Nombre:</span>
-                                        <span className="font-bold text-white">{recipientName}</span>
+                                        <span className="font-bold text-white">{recipientName.trim() || 'No informado'}</span>
                                     </div>
                                     <div className="flex flex-col text-slate-300 mt-2">
                                         <span className="mb-1 text-sm text-slate-500">Notas:</span>
                                         <p className="text-sm bg-slate-900 p-2 rounded border border-slate-800 italic">
-                                            {partialNotes || 'Sin notas.'}
+                                            {partialNotes.trim() || 'Sin notas.'}
                                         </p>
                                     </div>
                                     <div className="h-px w-full bg-slate-800 my-4"></div>
                                     <div className="flex justify-between items-center text-white">
-                                        <span className="font-bold text-lg text-amber-500">Monto a retirar:</span>
+                                        <span className="font-bold text-lg text-amber-500">{movementType === 'expense' ? 'Importe del egreso:' : 'Monto a retirar:'}</span>
                                         <span className="font-mono font-black text-3xl text-amber-400">${Number(partialAmount).toLocaleString()}</span>
                                     </div>
                                 </div>
@@ -857,9 +1024,9 @@ const CajaPage: React.FC = () => {
                                     </button>
                                     <button
                                         onClick={handlePartialClose}
-                                        className="flex-1 bg-amber-600 text-white py-3 rounded-xl font-bold hover:bg-amber-500 transition flex items-center justify-center gap-2"
+                                        className={`flex-1 text-white py-3 rounded-xl font-bold transition flex items-center justify-center gap-2 ${movementType === 'expense' ? 'bg-sky-600 hover:bg-sky-500' : 'bg-amber-600 hover:bg-amber-500'}`}
                                     >
-                                        Confirmar Retiro
+                                        {movementType === 'expense' ? 'Confirmar Egreso' : 'Confirmar Retiro'}
                                     </button>
                                 </div>
                             </>
@@ -928,7 +1095,7 @@ const CajaPage: React.FC = () => {
                         </div>
 
                         {/* List */}
-                        <div className="overflow-auto flex-1 px-2">
+                        <div className="overflow-auto flex-1 px-2 app-scrollbar">
                             {reprintLoading ? (
                                 <div className="flex flex-col items-center justify-center py-16 gap-3 text-slate-500">
                                     <Loader2 className="w-8 h-8 animate-spin text-sky-500" />

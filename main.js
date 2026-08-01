@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, protocol } = require('electron');
 const path = require('path');
 const { initPrintManager } = require('./PrintManager');
 const { initHardwareService } = require('./HardwareService');
@@ -80,11 +80,20 @@ function createWindow() {
     // Ícono: build/icon.png es la misma fuente que usa electron-builder → siempre presente.
     const iconPath = path.join(__dirname, 'build', 'icon.png');
 
+    const isWindows = process.platform === 'win32';
+
     mainWindow = new BrowserWindow({
         width: 1280,
         height: 800,
         title: 'GarageIA - Control de Estacionamiento',
         icon: iconPath,
+        ...(isWindows ? {
+            titleBarStyle: 'hidden',
+            titleBarOverlay: {
+                color: '#030712', // Dark blue background (Tailwind bg-gray-950)
+                symbolColor: '#E6EDF7' // Light text color
+            }
+        } : {}),
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: true,
@@ -135,6 +144,17 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+    protocol.registerFileProtocol('garagemedia', (request, callback) => {
+        const url = request.url.replace('garagemedia://', '');
+        try {
+            const decodedUrl = decodeURI(url);
+            const absolutePath = path.join(process.cwd(), '.data', decodedUrl);
+            callback({ path: absolutePath });
+        } catch (error) {
+            console.error('❌ [Protocol] Error parsing garagemedia URL:', error);
+        }
+    });
+
     createWindow();
     initPrintManager();
     initHardwareService(mainWindow, isDev);

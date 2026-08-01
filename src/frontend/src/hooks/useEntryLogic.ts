@@ -70,18 +70,18 @@ export const useEntryLogic = () => {
 
     // --- Dual Fetch Prices (for dynamic display in Prepaid UI) ---
     const { data: pricesStd = {} } = useQuery({
-        queryKey: ['prices', 'Efectivo'],
+        queryKey: ['prices', 'standard'],
         queryFn: async () => {
-            const res = await api.get('/precios', { params: { metodo: 'Efectivo' } });
-            return res.data || {};
+            const res = await api.get('/precios');
+            return res.data?.standard || {};
         }
     });
 
     const { data: pricesElec = {} } = useQuery({
-        queryKey: ['prices', 'Transferencia'],
+        queryKey: ['prices', 'electronic'],
         queryFn: async () => {
-            const res = await api.get('/precios', { params: { metodo: 'Transferencia' } });
-            return res.data || {};
+            const res = await api.get('/precios');
+            return res.data?.electronic || {};
         }
     });
 

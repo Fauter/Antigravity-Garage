@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+html, body, #root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    overflow: hidden; /* Propietario del scroll delegado a hijos */
+}
+
 body {
     background-color: #1a1c23;
     color: white;
@@ -13,4 +20,29 @@ body {
 
 .animate-shake {
     animation: shake 0.5s ease-in-out;
+}
+
+/* Custom scrollbar for dark UI */
+.app-scrollbar {
+    /* Firefox */
+    scrollbar-width: thin;
+    scrollbar-color: #334155 transparent;
+}
+
+/* Chrome, Edge, Safari */
+.audit-scrollbar::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+.audit-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+.audit-scrollbar::-webkit-scrollbar-thumb {
+    background-color: #334155; /* slate-700 */
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+.audit-scrollbar::-webkit-scrollbar-thumb:hover {
+    background-color: #475569; /* slate-600 */
 }

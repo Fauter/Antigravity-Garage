@@ -18,6 +18,7 @@ import { MockCameraDriver } from './drivers/MockCameraDriver';
 import { EthernetRelayDriver } from './drivers/EthernetRelayDriver';
 import { ANPRWebhookDriver } from './drivers/ANPRWebhookDriver';
 import { HikvisionISAPIDriver } from './drivers/HikvisionISAPIDriver';
+import { IPCameraALPRDriver } from './drivers/IPCameraALPRDriver';
 import { ConnectionMonitor, StateChangeCallback } from './health/ConnectionMonitor';
 
 export class DriverRegistry {
@@ -152,6 +153,13 @@ export class DriverRegistry {
                     return new MockCameraDriver();
                 }
                 return new HikvisionISAPIDriver(config.camera.hikvision);
+            }
+            case 'IP_CAMERA_ALPR': {
+                if (!config.camera.ipCameraAlpr) {
+                    console.warn('⚠️ [DriverRegistry] IP_CAMERA_ALPR selected but no config provided. Falling back to MOCK.');
+                    return new MockCameraDriver();
+                }
+                return new IPCameraALPRDriver(config.camera.ipCameraAlpr);
             }
             case 'DISABLED':
                 // Return a mock that's never connected

@@ -734,9 +734,13 @@
 
             try {
                 const result = await window.simulatorAPI.simulateEntry();
-                addLog('ok', `Entrada simulada → Patente: ${result.suggestedPlate}`);
+                let msg = `Patente: ${result.suggestedPlate || 'No detectada'}`;
+                if (result.ocrStatus === 'ERROR') msg = `OCR Error: ${result.ocrMessage}`;
+                else if (result.ocrStatus === 'NOT_FOUND') msg = 'OCR: Sin lectura';
+
+                addLog('ok', `Entrada simulada → ${msg}`);
                 showResult('entryResult', 'success',
-                    `✅ Evento enviado → Patente: ${result.suggestedPlate} | ID: ${result.id.slice(0, 8)}`);
+                    `✅ Evento enviado → ${msg} | ID: ${result.id.slice(0, 8)}`);
             } catch (err) {
                 addLog('err', `Error: ${err.message}`);
                 showResult('entryResult', 'error', `❌ Error: ${err.message}`);

@@ -12,6 +12,7 @@ export class SyncService {
     constructor() {
         console.log('🔄 SyncService Initialized (Offline-First Worker)');
         this.startBackgroundSync();
+        this.startCleanupRoutine();
     }
 
     /**
@@ -28,6 +29,61 @@ export class SyncService {
         this.syncInterval = setInterval(async () => {
             await this.processQueue();
         }, 10000); // Check every 10 seconds
+    }
+
+    private startCleanupRoutine() {
+        // Run once on startup after 1 minute, then every 12 hours
+        setTimeout(() => this.cleanupOldCaptures(), 60000);
+        setInterval(() => this.cleanupOldCaptures(), 12 * 60 * 60 * 1000);
+    }
+
+    private async cleanupOldCaptures() {
+        try {
+            const fs = require('fs');
+            const path = require('path');
+            const capturesDir = path.join(process.cwd(), '.data', 'captures');
+            
+            if (!fs.existsSync(capturesDir)) return;
+            
+            const files = fs.readdirSync(capturesDir);
+            const now = Date.now();
+            const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+            
+            let deletedCount = 0;
+            
+            for (const file of files) {
+                if (!file.endsWith('.webp')) continue;
+                
+                const filePath = path.join(capturesDir, file);
+                const stats = fs.statSync(filePath);
+                
+                // Si el archivo tiene más de 7 días
+                if (now - stats.mtimeMs > SEVEN_DAYS_MS) {
+                    // Fase 4 Regla de Oro: Verificar si hay una mutación de Stay pendiente que contenga este archivo
+                    const pendingMutations = await db.mutations.find({ entityType: 'Stay' });
+                    
+                    const isPending = pendingMutations.some((m: any) => 
+                        m.payload && 
+                        typeof m.payload.entry_photo_path === 'string' &&
+                        m.payload.entry_photo_path.includes(file)
+                    );
+                    
+                    if (isPending) {
+                        console.warn(`🛡️ Cleanup Guard: Omitiendo borrado de ${file} porque aún no se ha sincronizado con la nube.`);
+                        continue;
+                    }
+                    
+                    fs.unlinkSync(filePath);
+                    deletedCount++;
+                }
+            }
+            
+            if (deletedCount > 0) {
+                console.log(`🧹 Cleanup: Se eliminaron ${deletedCount} capturas antiguas (>7 días) y ya sincronizadas.`);
+            }
+        } catch (error) {
+            console.error('❌ Cleanup: Error limpiando capturas antiguas', error);
+        }
     }
 
     async processQueue() {
@@ -106,6 +162,56 @@ export class SyncService {
 
         // Sanitize Payload
         const payload = this.mapLocalToRemote(rawData, entityType);
+
+        // --- PHASE 3: Intercept Storage Upload for Stays ---
+        if (entityType === 'Stay' && payload.entry_photo_path?.startsWith('garagemedia://')) {
+            try {
+                const fs = require('fs');
+                const path = require('path');
+                
+                // Extract relative path (captures/filename.webp)
+                const urlPath = payload.entry_photo_path.replace('garagemedia://', '');
+                const absolutePath = path.join(process.cwd(), '.data', decodeURI(urlPath));
+                
+                if (fs.existsSync(absolutePath)) {
+                    console.log(`☁️ Sync: Subiendo imagen a Supabase Storage: ${absolutePath}`);
+                    const fileBuffer = fs.readFileSync(absolutePath);
+                    const filename = path.basename(absolutePath);
+                    
+                    // Upload to Supabase Storage bucket 'captures'
+                    const { data, error: uploadError } = await supabase.storage
+                        .from('captures')
+                        .upload(filename, fileBuffer, {
+                            contentType: 'image/webp',
+                            upsert: true
+                        });
+                        
+                    if (uploadError) {
+                        console.error('❌ Sync: Error uploading capture to Supabase Storage', uploadError);
+                        throw uploadError; // Propagate error so the queue retries the entire mutation later
+                    }
+                    
+                    // Get Public URL
+                    const { data: urlData } = supabase.storage
+                        .from('captures')
+                        .getPublicUrl(filename);
+                        
+                    if (urlData && urlData.publicUrl) {
+                        // Replace photo path in payload for Supabase DB
+                        payload.entry_photo_path = urlData.publicUrl;
+                        
+                        // Defensivo: Actualizar NeDB local para que no reintente subir si la inserción en DB falla después
+                        await db.stays.update({ id: payload.id }, { $set: { entry_photo_path: urlData.publicUrl } });
+                        await db.mutations.update({ id: mutation.id }, { $set: { 'payload.entry_photo_path': urlData.publicUrl } });
+                        console.log(`✅ Sync: Imagen subida con éxito. URL: ${urlData.publicUrl}`);
+                    }
+                }
+            } catch (storageError) {
+                console.error('❌ Sync: Excepción durante la subida a Storage', storageError);
+                throw storageError; // Re-throw to trigger retry mechanism
+            }
+        }
+        // --- FIN PHASE 3 ---
 
         if (operation === 'CREATE' || operation === 'UPDATE') {
             // UPSERT strategy for resilience
@@ -217,10 +323,17 @@ export class SyncService {
                     query = query.eq('garage_id', garageId);
                 }
 
+                const isConfigTable = ['vehicle_types', 'tariffs', 'prices'].includes(tableName);
+
                 // Aplicar Delta Sync o Límite de carga inicial (30 días para Históricas)
-                if (lastSyncTimestamp) {
+                if (lastSyncTimestamp && !isConfigTable) {
+                    // Fallback to GREATEST(created_at, updated_at) logic by not using updated_at strictly if it fails
+                    // Actually, to fix the issue where updated_at < created_at, we should query both.
+                    // But Supabase JS doesn't easily support OR with gte without custom string.
+                    // The easiest fix for incremental sync on other tables is just using updated_at but 
+                    // for config tables, we bypass this entirely!
                     query = query.gte('updated_at', lastSyncTimestamp);
-                } else {
+                } else if (!lastSyncTimestamp) {
                     // Carga Inicial: Solo filtrar tablas históricas
                     const historicas = ['stays', 'movements', 'shift_closes', 'partial_closes', 'incidents'];
                     if (historicas.includes(tableName)) {
@@ -316,6 +429,23 @@ export class SyncService {
                 let numRemoved = 0;
                 let numUpserted = 0;
                 let numOmitted = 0;
+                
+                const isConfigTable = ['VehicleType', 'Tariff', 'Price'].includes(entityType);
+
+                if (isConfigTable) {
+                    // FULL AUTHORITATIVE SYNC FOR CONFIG TABLES
+                    const allLocalRecords = await collection.find({ garageId });
+                    const remoteIds = new Set(localItems.map(item => item.id));
+                    
+                    let deletedCount = 0;
+                    for (const localRecord of allLocalRecords) {
+                        if (!remoteIds.has(localRecord.id)) {
+                            await collection.remove({ id: localRecord.id }, {});
+                            deletedCount++;
+                        }
+                    }
+                    console.log(`🧹 Sync: Autoritative cleanup for [${entityType}], removed ${deletedCount} obsolete local records.`);
+                }
 
                 for (const item of localItems) {
                     // Omitir si es un Stay recién modificado localmente
@@ -441,6 +571,7 @@ export class SyncService {
         if (type === 'PartialClose') {
             if (local.recipient_name !== undefined) { local.recipientName = local.recipient_name; delete local.recipient_name; }
             if (local.amount !== undefined) { local.amount = Number(local.amount); }
+            local.movement_type = local.movement_type === 'expense' ? 'expense' : 'withdrawal';
         }
 
         if (type === 'Incident') {
@@ -630,8 +761,10 @@ export class SyncService {
             if (base.recipientName !== undefined) { base.recipient_name = base.recipientName; delete base.recipientName; }
             if (base.garageId !== undefined) { base.garage_id = base.garageId; delete base.garageId; }
             if (base.timestamp !== undefined) { base.timestamp = new Date(base.timestamp).toISOString(); }
+            if (base.movementType !== undefined) { base.movement_type = base.movementType; delete base.movementType; }
+            base.movement_type = base.movement_type === 'expense' ? 'expense' : 'withdrawal';
 
-            const allowedFields = ['id', 'garage_id', 'operator', 'amount', 'recipient_name', 'notes', 'timestamp'];
+            const allowedFields = ['id', 'garage_id', 'operator', 'amount', 'recipient_name', 'notes', 'timestamp', 'movement_type'];
             Object.keys(base).forEach(key => {
                 if (!allowedFields.includes(key)) {
                     delete base[key];

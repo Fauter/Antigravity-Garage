@@ -35,6 +35,7 @@ import { DriverRegistry } from './DriverRegistry';
 import { loadHardwareConfig, saveHardwareConfig } from './config/hardware.config';
 import { MockCameraDriver } from './drivers/MockCameraDriver';
 import { MockBarrierDriver } from './drivers/MockBarrierDriver';
+import { AlprServiceManager } from './alpr/AlprServiceManager';
 
 // ── Safe Driver Call Wrapper ─────────────────────────────────────────
 // Prevents hardware I/O from blocking the Electron event loop.
@@ -153,6 +154,7 @@ function markBarrierExitUsed(stayId: string): void {
 export class HardwareOrchestrator {
     private mainWindow: BrowserWindow | null = null;
     private simulatorWindow: BrowserWindow | null = null;
+    private alprManager: AlprServiceManager | null = null;
     private registry: DriverRegistry;
     private config: HardwareConfig;
     private isDev = false;
@@ -283,6 +285,12 @@ export class HardwareOrchestrator {
         this.mainWindow = mainWindow;
         this.isDev = isDev;
 
+        // Start ALPR Service
+        this.alprManager = new AlprServiceManager();
+        this.alprManager.start().catch(err => {
+            console.error(`[HW-DEBUG] ❌ Failed to start ALPR service:`, err);
+        });
+
         // ── Step 1: Load persistent config (synchronous, never throws) ──
         this.config = loadHardwareConfig();
         console.log(`[HW-DEBUG] Config loaded: barrier=${this.config.barrier.driver}, camera=${this.config.camera.driver}`);
@@ -328,7 +336,7 @@ export class HardwareOrchestrator {
             const camera = this.registry.camera;
 
             if (camera instanceof MockCameraDriver) {
-                const event = camera.simulateDetection();
+                const event = await camera.simulateDetection();
                 this.handleEntryEvent(event);
                 return event;
             }
@@ -346,6 +354,7 @@ export class HardwareOrchestrator {
                 timestamp: new Date().toISOString(),
                 photoPath, // Base64 comprimido o vacío si falló
                 suggestedPlate: '', // ISAPI no hace OCR por defecto
+                ocrStatus: 'NOT_FOUND',
                 source: 'SIMULATOR',
             };
 
@@ -500,7 +509,7 @@ export class HardwareOrchestrator {
                             ? { ...DEFAULT_HARDWARE_CONFIG.camera.webhook, ...newConfig.camera.webhook }
                             : this.config.camera.webhook,
                         hikvision: newConfig.camera.hikvision
-                            ? { host: '', username: 'admin', password: '', channel: 101, ...newConfig.camera.hikvision }
+                            ? { ...DEFAULT_HARDWARE_CONFIG.camera.hikvision, ...newConfig.camera.hikvision }
                             : this.config.camera.hikvision,
                     },
                     scanner: { ...DEFAULT_HARDWARE_CONFIG.scanner, ...newConfig.scanner },
@@ -598,6 +607,7 @@ export class HardwareOrchestrator {
             timestamp: new Date().toISOString(),
             photoPath,
             suggestedPlate,
+            ocrStatus: suggestedPlate ? 'DETECTED' : 'NOT_FOUND',
             source: 'MANUAL', // Always MANUAL when triggered by the button
         };
 

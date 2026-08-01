@@ -1,5 +1,5 @@
 {
-  "mockMode": false,
+  "mockMode": true,
   "barrier": {
     "driver": "ETHERNET_RELAY",
     "ethernet": {

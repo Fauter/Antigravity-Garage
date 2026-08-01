@@ -12,6 +12,10 @@ export interface PendingEntry {
     vehicleTypeId: string;      // Selected by operator
     status: 'PENDING' | 'PROCESSING' | 'CONFIRMED' | 'DISMISSED';
     staleMinutes: number;       // Minutes since creation (updated by timer)
+    ocrStatus?: 'DETECTED' | 'NOT_FOUND' | 'ERROR';
+    ocrConfidence?: number;
+    ocrMessage?: string;
+    ocrProcessingTimeMs?: number;
 }
 
 interface HardwareState {
@@ -164,6 +168,12 @@ export const HardwareProvider: React.FC<{ children: ReactNode }> = ({ children }
 
         // Listen for entry events
         const cleanupEntry = electronAPI.onHardwareEntry?.((event: any) => {
+            // Inferir estado para retrocompatibilidad
+            let inferredStatus: 'DETECTED' | 'NOT_FOUND' | 'ERROR' = event.ocrStatus;
+            if (!inferredStatus) {
+                inferredStatus = event.suggestedPlate ? 'DETECTED' : 'NOT_FOUND';
+            }
+
             const pending: PendingEntry = {
                 id: event.id,
                 timestamp: event.timestamp,
@@ -173,6 +183,10 @@ export const HardwareProvider: React.FC<{ children: ReactNode }> = ({ children }
                 vehicleTypeId: '',
                 status: 'PENDING',
                 staleMinutes: 0,
+                ocrStatus: inferredStatus,
+                ocrConfidence: event.ocrConfidence,
+                ocrMessage: event.ocrMessage,
+                ocrProcessingTimeMs: event.ocrProcessingTimeMs,
             };
 
             dispatch({ type: 'ADD_PENDING_ENTRY', payload: pending });
@@ -210,6 +224,12 @@ export const HardwareProvider: React.FC<{ children: ReactNode }> = ({ children }
 
     // ── Convenience Methods ──
     const addEntry = useCallback((event: any) => {
+        // Inferir estado para retrocompatibilidad
+        let inferredStatus: 'DETECTED' | 'NOT_FOUND' | 'ERROR' = event.ocrStatus;
+        if (!inferredStatus) {
+            inferredStatus = event.suggestedPlate ? 'DETECTED' : 'NOT_FOUND';
+        }
+
         const pending: PendingEntry = {
             id: event.id,
             timestamp: event.timestamp,
@@ -219,6 +239,10 @@ export const HardwareProvider: React.FC<{ children: ReactNode }> = ({ children }
             vehicleTypeId: '',
             status: 'PENDING',
             staleMinutes: 0,
+            ocrStatus: inferredStatus,
+            ocrConfidence: event.ocrConfidence,
+            ocrMessage: event.ocrMessage,
+            ocrProcessingTimeMs: event.ocrProcessingTimeMs,
         };
         dispatch({ type: 'ADD_PENDING_ENTRY', payload: pending });
     }, []);

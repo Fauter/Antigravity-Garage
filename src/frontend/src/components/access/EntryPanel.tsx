@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useEntryLogic } from '../../hooks/useEntryLogic';
 import { useAuth } from '../../context/AuthContext';
 import { useHardware, type PendingEntry } from '../../context/HardwareContext';
@@ -82,16 +82,28 @@ const EntryPanel: React.FC = () => {
         }
     }, [activeEntry?.id]); // Only when active tab changes
 
+    const submittedEntryIdRef = useRef<string | null>(null);
+
+    const onFormSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        submittedEntryIdRef.current = activeEntry?.id ?? null;
+        await handleSubmit(e);
+    };
+
     // ── When entry is confirmed, remove from queue ──
     useEffect(() => {
-        if (isSuccess && activeEntry) {
+        if (isSuccess && submittedEntryIdRef.current) {
+            const targetEntryId = submittedEntryIdRef.current;
             // Small delay so user sees the success feedback
             const timer = setTimeout(() => {
-                removeEntry(activeEntry.id);
+                removeEntry(targetEntryId);
+                if (submittedEntryIdRef.current === targetEntryId) {
+                    submittedEntryIdRef.current = null;
+                }
             }, 800);
             return () => clearTimeout(timer);
         }
-    }, [isSuccess, activeEntry?.id]);
+    }, [isSuccess, removeEntry]);
 
     // ── Sync plate changes back to context ──
     const handlePlateChange = (value: string) => {
@@ -180,8 +192,8 @@ const EntryPanel: React.FC = () => {
                 {/* Camera / Photo Area */}
                 <div className="relative flex-1 flex items-center justify-center bg-black border-b border-gray-800 transition-all duration-300 overflow-hidden min-h-[60px]">
                     {activeEntry ? (
-                        // Renderizar imagen Base64 real o fallback si es data:image
-                        activeEntry.photoPath && activeEntry.photoPath.startsWith('data:image') ? (
+                        // Renderizar imagen
+                        activeEntry.photoPath && (activeEntry.photoPath.startsWith('data:image') || activeEntry.photoPath.startsWith('garagemedia://')) ? (
                             <>
                                 <img
                                     src={activeEntry.photoPath}
@@ -192,9 +204,19 @@ const EntryPanel: React.FC = () => {
                                     <span className="text-emerald-400 font-mono text-[10px] bg-black/90 px-2 py-0.5 rounded border border-emerald-500/50 uppercase tracking-wider backdrop-blur-sm">
                                         Captura ANPR
                                     </span>
-                                    {activeEntry.suggestedPlate && (
-                                        <span className="text-white font-mono text-xs font-bold bg-emerald-900/90 px-2 py-0.5 rounded border border-emerald-500/80 backdrop-blur-sm">
-                                            OCR: {activeEntry.suggestedPlate}
+                                    {activeEntry.ocrStatus === 'DETECTED' && activeEntry.suggestedPlate && (
+                                        <span className={`font-mono text-xs font-bold px-2 py-0.5 rounded border backdrop-blur-sm ${activeEntry.ocrConfidence && activeEntry.ocrConfidence < 0.5 ? 'text-amber-300 bg-amber-900/90 border-amber-500/80' : 'text-white bg-emerald-900/90 border-emerald-500/80'}`}>
+                                            OCR: {activeEntry.suggestedPlate} {activeEntry.ocrConfidence ? `· ${Math.round(activeEntry.ocrConfidence * 100)}%` : ''}
+                                        </span>
+                                    )}
+                                    {activeEntry.ocrStatus === 'NOT_FOUND' && (
+                                        <span className="text-amber-300 font-mono text-xs font-bold bg-amber-900/90 px-2 py-0.5 rounded border border-amber-500/80 backdrop-blur-sm">
+                                            OCR: No se detectó patente
+                                        </span>
+                                    )}
+                                    {activeEntry.ocrStatus === 'ERROR' && (
+                                        <span className="text-red-300 font-mono text-xs font-bold bg-red-900/90 px-2 py-0.5 rounded border border-red-500/80 backdrop-blur-sm" title={activeEntry.ocrMessage}>
+                                            OCR: Error
                                         </span>
                                     )}
                                 </div>
@@ -205,9 +227,19 @@ const EntryPanel: React.FC = () => {
                                 <span className="text-emerald-400/80 font-mono text-xs font-bold">
                                     CAPTURA ANPR
                                 </span>
-                                {activeEntry.suggestedPlate && (
-                                    <span className="text-white/60 font-mono text-[10px] bg-white/5 px-2 py-0.5 rounded">
-                                        OCR: {activeEntry.suggestedPlate}
+                                {activeEntry.ocrStatus === 'DETECTED' && activeEntry.suggestedPlate && (
+                                    <span className={`font-mono text-[10px] px-2 py-0.5 rounded ${activeEntry.ocrConfidence && activeEntry.ocrConfidence < 0.5 ? 'text-amber-300/80 bg-white/5' : 'text-white/60 bg-white/5'}`}>
+                                        OCR: {activeEntry.suggestedPlate} {activeEntry.ocrConfidence ? `· ${Math.round(activeEntry.ocrConfidence * 100)}%` : ''}
+                                    </span>
+                                )}
+                                {activeEntry.ocrStatus === 'NOT_FOUND' && (
+                                    <span className="text-amber-300/80 font-mono text-[10px] bg-white/5 px-2 py-0.5 rounded">
+                                        OCR: No se detectó patente
+                                    </span>
+                                )}
+                                {activeEntry.ocrStatus === 'ERROR' && (
+                                    <span className="text-red-300/80 font-mono text-[10px] bg-white/5 px-2 py-0.5 rounded" title={activeEntry.ocrMessage}>
+                                        OCR: Error
                                     </span>
                                 )}
                             </div>
@@ -224,7 +256,7 @@ const EntryPanel: React.FC = () => {
 
                 {/* Form Area */}
                 <div className="shrink-0 px-2 py-1.5 flex flex-col justify-end bg-gray-900 z-10">
-                    <form onSubmit={handleSubmit} className={`flex flex-col transition-all duration-300 ${isPrepaid ? 'gap-1' : 'gap-3'}`}>
+                    <form onSubmit={onFormSubmit} className={`flex flex-col transition-all duration-300 ${isPrepaid ? 'gap-1' : 'gap-3'}`}>
 
                         {/* Plate Input */}
                         <div>

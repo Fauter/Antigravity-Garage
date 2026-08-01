@@ -64,6 +64,10 @@ export function loadHardwareConfig(): HardwareConfig {
                     hikvision: parsed.camera?.hikvision
                         ? { host: '', username: 'admin', password: '', channel: 101, ...parsed.camera.hikvision }
                         : undefined,
+                    // Preserve nested ipCameraAlpr config
+                    ipCameraAlpr: parsed.camera?.ipCameraAlpr
+                        ? { snapshotUrl: '', snapshotTimeoutMs: 3000, alprTimeoutMs: 3000, alprServiceUrl: 'http://127.0.0.1:8100', minConfidence: 0.5, saveCaptures: false, ...parsed.camera.ipCameraAlpr }
+                        : undefined,
                 },
                 scanner: { ...DEFAULT_HARDWARE_CONFIG.scanner, ...parsed.scanner },
                 reconnect: { ...DEFAULT_HARDWARE_CONFIG.reconnect, ...parsed.reconnect },

@@ -1,13 +1,6 @@
-/**
- * MockCameraDriver.ts — Simulated ANPR camera for development.
- *
- * Does not produce events on its own. The simulator triggers entries
- * via the orchestrator which calls triggerCapture().
- */
-
 import { v4 as uuidv4 } from 'uuid';
 import type { ICameraDriver, DriverHealth, HardwareEntryEvent } from '../HardwareAbstractionLayer';
-import { randomPlate, generatePlaceholderPhoto } from './MockBarrierDriver';
+import { FastAlprClient } from '../alpr/FastAlprClient';
 import fs from 'fs';
 import path from 'path';
 
@@ -19,6 +12,14 @@ export class MockCameraDriver implements ICameraDriver {
     private _connectedAt: Date | null = null;
     private _lastCapture: string | null = null;
     private _plateCallbacks: ((event: HardwareEntryEvent) => void)[] = [];
+    private alprClient: FastAlprClient;
+
+    constructor() {
+        this.alprClient = new FastAlprClient({
+            serviceUrl: 'http://127.0.0.1:8100', // Default local service
+            timeoutMs: 3000
+        });
+    }
 
     async connect(): Promise<void> {
         this._connected = true;
@@ -49,38 +50,11 @@ export class MockCameraDriver implements ICameraDriver {
         this._plateCallbacks.push(callback);
     }
 
-    /**
-     * Intenta cargar la imagen local de prueba y la convierte a Base64.
-     * Retorna fallback (placeholder) en caso de fallo para degradación elegante.
-     */
-    private _capturePhoto(): string {
-        try {
-            const imagePath = path.resolve(process.cwd(), '.data/mock/vehiculo_test.jpg');
-            if (fs.existsSync(imagePath)) {
-                const imageBuffer = fs.readFileSync(imagePath);
-                return `data:image/jpeg;base64,${imageBuffer.toString('base64')}`;
-            }
-        } catch (error) {
-            console.warn('⚠️ [MockCameraDriver] Error leyendo imagen local, usando fallback.', error);
-        }
-        return generatePlaceholderPhoto(); // Fallback si no existe
-    }
-
     async triggerCapture(): Promise<string> {
-        const photoPath = this._capturePhoto();
-        this._lastCapture = photoPath;
-
-        const event: HardwareEntryEvent = {
-            id: uuidv4(),
-            timestamp: new Date().toISOString(),
-            photoPath, // Ahora contiene el Base64
-            suggestedPlate: randomPlate(),
-            source: 'SIMULATOR',
-        };
-
-        // Notify listeners
+        const eventId = uuidv4();
+        const event = await this.simulateDetectionInternal(eventId);
         this._plateCallbacks.forEach(cb => cb(event));
-        return photoPath;
+        return event.photoPath;
     }
 
     getLastCapture(): string | null {
@@ -89,24 +63,86 @@ export class MockCameraDriver implements ICameraDriver {
 
     /**
      * Manually emit a plate detection event (used by simulator).
-     * Returns the generated event for IPC forwarding.
      */
-    simulateDetection(): HardwareEntryEvent {
-        const photoPath = this._capturePhoto();
+    async simulateDetection(): Promise<HardwareEntryEvent> {
+        return this.simulateDetectionInternal(uuidv4());
+    }
+
+    private async simulateDetectionInternal(eventId: string): Promise<HardwareEntryEvent> {
+        let imageBuffer: Buffer;
+        let mimeType: string = 'image/jpeg';
+        let base64Image = '';
+
+        const imagePath = path.resolve(process.cwd(), '.data/mock/vehiculo_test.jpg');
+
+        if (!fs.existsSync(imagePath)) {
+            console.warn(`⚠️ [MockCameraDriver] Imagen mock no encontrada en: ${imagePath}`);
+            const event: HardwareEntryEvent = {
+                id: eventId,
+                timestamp: new Date().toISOString(),
+                photoPath: '',
+                suggestedPlate: '',
+                ocrStatus: 'ERROR',
+                ocrMessage: 'No se encontró la imagen mock',
+                ocrProcessingTimeMs: 0,
+                source: 'SIMULATOR',
+            };
+            return event;
+        }
+
+        let photoPath = '';
+        try {
+            imageBuffer = fs.readFileSync(imagePath);
+            
+            const dir = path.join(process.cwd(), '.data', 'captures');
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            
+            const filename = `${eventId}.webp`;
+            const filePath = path.join(dir, filename);
+            
+            const sharp = require('sharp');
+            await sharp(imageBuffer)
+                .resize({ width: 1280, withoutEnlargement: true })
+                .webp({ quality: 80 })
+                .toFile(filePath);
+                
+            photoPath = `garagemedia://captures/${filename}`;
+        } catch (error: any) {
+            console.error(`❌ [MockCameraDriver] Error al leer o procesar la imagen mock:`, error);
+            const event: HardwareEntryEvent = {
+                id: eventId,
+                timestamp: new Date().toISOString(),
+                photoPath: '',
+                suggestedPlate: '',
+                ocrStatus: 'ERROR',
+                ocrMessage: 'No se pudo leer/procesar la imagen mock',
+                ocrProcessingTimeMs: 0,
+                source: 'SIMULATOR',
+            };
+            return event;
+        }
+
         this._lastCapture = photoPath;
 
+        // Call ALPR
+        const alprResult = await this.alprClient.recognize({
+            eventId,
+            imageBuffer,
+            mimeType: 'image/jpeg'
+        });
+
         const event: HardwareEntryEvent = {
-            id: uuidv4(),
+            id: eventId,
             timestamp: new Date().toISOString(),
-            photoPath,
-            suggestedPlate: randomPlate(),
+            photoPath: photoPath,
+            suggestedPlate: alprResult.plate || '',
+            ocrStatus: alprResult.status,
+            ocrConfidence: alprResult.confidence,
+            ocrMessage: alprResult.message,
+            ocrProcessingTimeMs: alprResult.processingTimeMs,
             source: 'SIMULATOR',
         };
 
-        // NOTE: Do NOT fire _plateCallbacks here.
-        // The Orchestrator calls handleEntryEvent(event) directly for simulate-entry.
-        // Firing callbacks here would cause a DUPLICATE entry (one from callback,
-        // one from the direct handleEntryEvent call).
         return event;
     }
 }
