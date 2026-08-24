@@ -23,11 +23,19 @@ api.interceptors.request.use((config) => {
     return config;
 });
 
-// Response Interceptor
 api.interceptors.response.use(
     response => response,
     error => {
-        console.error('API Error:', error.response?.data || error.message);
+        if (import.meta.env.DEV) {
+            console.error('[FRONTEND:HTTP-ERROR]', {
+                method: error.config?.method?.toUpperCase(),
+                url: error.config?.url,
+                status: error.response?.status,
+                statusText: error.response?.statusText,
+                message: error.message,
+                data: error.response?.data ? String(error.response.data).substring(0, 200) : null
+            });
+        }
         return Promise.reject(error);
     }
 );

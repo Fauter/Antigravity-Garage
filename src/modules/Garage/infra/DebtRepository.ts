@@ -1,8 +1,10 @@
 import { Debt } from '../../../shared/schemas';
 import { db } from '../../../infrastructure/database/datastore.js';
 import { QueueService } from '../../Sync/application/QueueService.js';
+import { StorageEngine } from '../../../infrastructure/database/StorageEngine.js';
+import { SqliteDebtRepository } from './SqliteDebtRepository.js';
 
-export class DebtRepository {
+export class NeDBDebtRepository {
     private queue = new QueueService();
 
     async findBySubscriptionIdAndMonth(subscriptionId: string, monthStart: Date, monthEnd: Date): Promise<Debt[]> {
@@ -21,23 +23,15 @@ export class DebtRepository {
         const existingDebt = await db.debts.findOne({ id: debt.id }) as Debt | undefined;
 
         if (existingDebt) {
-            // IDEMPOTENCY DEEP CHECK: Prevent infinite loop of identical updates
             if (existingDebt.amount === debt.amount && existingDebt.status === debt.status && (existingDebt as any).remaining_amount === (debt as any).remaining_amount) {
-                // If the critical fields haven't changed, ignore the save and don't queue.
                 return existingDebt;
             }
-
             await db.debts.update({ id: debt.id }, { $set: debt }, { multi: false });
-            // Fetch updated to ensure correct data
             const updated = await db.debts.findOne({ id: debt.id }) as Debt;
-
-            // Emit queue mutation to Supabase ONLY if it actually changed
             await this.queue.enqueue('Debt', 'UPDATE', updated);
             return updated;
         } else {
-            // Note: NeDB auto-generates _id, but we keep 'id' as our primary
             await db.debts.insert(debt);
-            // Emit queue mutation to Supabase
             await this.queue.enqueue('Debt', 'CREATE', debt);
             return debt;
         }
@@ -50,4 +44,16 @@ export class DebtRepository {
     async findBySubscriptionId(subscriptionId: string): Promise<Debt[]> {
         return await db.debts.find({ subscriptionId }) as Debt[];
     }
+}
+
+export class DebtRepository {
+    private impl: any;
+    constructor() {
+        this.impl = StorageEngine.getEngine() === 'SQLITE' ? new SqliteDebtRepository() : new NeDBDebtRepository();
+    }
+    async findBySubscriptionIdAndMonth(subscriptionId: string, monthStart: Date, monthEnd: Date): Promise<Debt[]> { return this.impl.findBySubscriptionIdAndMonth(subscriptionId, monthStart, monthEnd); }
+    async findById(id: string): Promise<Debt | undefined> { return this.impl.findById(id); }
+    async save(debt: Debt): Promise<Debt> { return this.impl.save(debt); }
+    async findByCustomerId(customerId: string): Promise<Debt[]> { return this.impl.findByCustomerId(customerId); }
+    async findBySubscriptionId(subscriptionId: string): Promise<Debt[]> { return this.impl.findBySubscriptionId(subscriptionId); }
 }

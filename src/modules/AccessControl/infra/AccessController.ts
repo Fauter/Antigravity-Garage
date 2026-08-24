@@ -90,39 +90,33 @@ export class AccessController {
                 console.log(`💎 Entry: Subscriber Detected for ${plate}`);
             }
 
-            // 2. Resolve Vehicle Identity & Persist Subscriber Status
+            // 2. Resolve Vehicle Identity & Prepare
             let vehicleId: string;
             let existingVehicle = await this.vehicleRepository.findByPlate(plate, garageId);
+            let vehicleToSave: any = null;
 
             if (existingVehicle) {
                 // REUSE & UPDATE
                 vehicleId = existingVehicle.id!;
-                // Update is_subscriber status ONLY if we are granting a new subscription (false -> true)
                 const currentlySubscribed = existingVehicle.isSubscriber || (existingVehicle as any).is_subscriber;
-
                 if (!currentlySubscribed && isSubscriber) {
-                    (existingVehicle as any).is_subscriber = true;
-                    existingVehicle.isSubscriber = true; // Keep obj sync
-                    await this.vehicleRepository.save(existingVehicle);
-                    console.log(`🚗 Entry: Updated Vehicle ${vehicleId} subscriber status to true`);
-                } else if (currentlySubscribed && !isSubscriber) {
-                    // Protegemos el estado: nunca pasamos de true a false aquí al registrar entrada
-                    console.log(`🚗 Entry: Vehicle ${vehicleId} kept subscriber status true despite no active sub found`);
+                    vehicleToSave = { ...existingVehicle };
+                    vehicleToSave.is_subscriber = true;
+                    vehicleToSave.isSubscriber = true;
                 }
             } else {
                 // CREATE NEW
                 vehicleId = uuidv4();
                 if (garageId) {
-                    await this.vehicleRepository.save({
+                    vehicleToSave = {
                         id: vehicleId,
                         plate,
                         type: resolvedType,
                         garageId,
-                        is_subscriber: isSubscriber, // Persist status
+                        is_subscriber: isSubscriber,
                         createdAt: new Date(),
                         updatedAt: new Date(),
-                    } as any);
-                    console.log(`🆕 Entry: Created new vehicle ${vehicleId} for ${plate} (Subscriber: ${isSubscriber})`);
+                    };
                 }
             }
 
@@ -130,54 +124,99 @@ export class AccessController {
             const ticketCode = await CorrelativeGenerator.nextStayTicket(garageId);
 
             // 4.5. Resolve Prepaid / Anticipado Options
-            let prepaidOptions: { isPrepaid: boolean; prepaidUntil: Date; prepaidTariffId: string } | undefined;
+            let prepaidOptions: { isPrepaid: boolean; prepaidUntil: Date; prepaidTariffId: string; prepaidAmount: number; prepaidMovementId: string | null } | undefined;
             let prepaidAmount = 0;
             let prepaidTariffName = '';
+            let prepaidMovement: any = null;
+            const entryTime = new Date();
 
             if (prepaidTariffId) {
+                if (!prepaidPaymentMethod || !prepaidInvoiceType) {
+                    return res.status(400).json({ error: 'Faltan datos requeridos para el cobro anticipado (método de pago o tipo de factura).' });
+                }
+
                 // Lookup tariff in local DB
                 const tariff: any = await db.tariffs.findOne({
                     $or: [{ id: prepaidTariffId }, { _id: prepaidTariffId }],
                     garageId
                 });
 
-                if (tariff) {
-                    prepaidTariffName = tariff.name || 'Anticipado';
-                    const d = Number(tariff.days || 0);
-                    const h = Number(tariff.hours || 0);
-                    const m = Number(tariff.minutes || 0);
-                    const blockMs = ((d * 1440) + (h * 60) + m) * 60000;
-
-                    if (blockMs > 0) {
-                        const now = new Date();
-                        const prepaidUntil = new Date(now.getTime() + blockMs);
-
-                        prepaidOptions = {
-                            isPrepaid: true,
-                            prepaidUntil,
-                            prepaidTariffId
-                        };
-
-                        // Lookup price from price matrix
-                        const repoMethod = prepaidPaymentMethod === 'Efectivo' ? 'standard' : 'electronic';
-                        const priceRecord: any = await db.prices.findOne({
-                            garageId,
-                            tariffId: prepaidTariffId,
-                            vehicleTypeId: vehicleTypeId,
-                            priceList: repoMethod
-                        });
-                        prepaidAmount = priceRecord ? Number(priceRecord.amount || 0) : 0;
-
-                        console.log(`⏱️ Entry: Prepaid activated for ${plate}. Tariff: ${prepaidTariffName}, Until: ${prepaidUntil.toISOString()}, Amount: $${prepaidAmount}`);
-                    } else {
-                        console.warn(`⚠️ Entry: Prepaid tariff ${prepaidTariffId} has zero duration. Ignoring prepaid.`);
-                    }
-                } else {
-                    console.warn(`⚠️ Entry: Prepaid tariff ${prepaidTariffId} not found in NeDB. Ignoring prepaid.`);
+                if (!tariff || (tariff.type || '').toLowerCase() !== 'turno') {
+                    return res.status(400).json({ error: 'La tarifa anticipada no existe o no es de tipo turno.' });
                 }
+
+                prepaidTariffName = tariff.name || 'Anticipado';
+                const d = Number(tariff.days || 0);
+                const h = Number(tariff.hours || 0);
+                const m = Number(tariff.minutes || 0);
+                const durationMs = (d * 86400000) + (h * 3600000) + (m * 60000);
+
+                if (durationMs <= 0) {
+                    return res.status(400).json({ error: 'La tarifa anticipada tiene una duración nula. No es válida para cobro anticipado.' });
+                }
+
+                const prepaidUntil = new Date(entryTime.getTime() + durationMs);
+
+                // Lookup price from price matrix
+                const isElectronic = ['Transferencia', 'Débito', 'Crédito', 'QR'].includes(prepaidPaymentMethod);
+                const repoMethod = isElectronic ? 'electronic' : 'standard';
+                const priceRecord: any = await db.prices.findOne({
+                    garageId,
+                    tariffId: prepaidTariffId,
+                    vehicleTypeId: vehicleTypeId,
+                    priceList: repoMethod
+                });
+                prepaidAmount = priceRecord ? Number(priceRecord.amount || 0) : 0;
+
+                const promoPercentage = Number(req.body.prepaidPromoPercentage || 0);
+                if (promoPercentage > 0 && promoPercentage <= 100) {
+                    prepaidAmount = prepaidAmount * (1 - promoPercentage / 100);
+                }
+
+                if (prepaidAmount <= 0 && promoPercentage !== 100) {
+                    return res.status(400).json({ error: 'La tarifa anticipada seleccionada no posee un precio válido para este vehículo.' });
+                }
+
+                // Prepare Movement
+                let ownerId: string | undefined;
+                if (garageId) {
+                    const garage: any = await db.garages.findOne({ id: garageId });
+                    if (garage) ownerId = garage.owner_id || garage.ownerId;
+                }
+                const receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
+                const ticketNumber = Number(Date.now().toString().slice(-9));
+                
+                prepaidMovement = {
+                    id: uuidv4(),
+                    garageId,
+                    ownerId,
+                    ticketNumber,
+                    relatedEntityId: null, // Will be set after Stay generation
+                    type: 'CobroEstadia' as const,
+                    timestamp: entryTime,
+                    amount: prepaidAmount,
+                    paymentMethod: prepaidPaymentMethod,
+                    operator: operator,
+                    invoiceType: prepaidInvoiceType,
+                    plate: plate,
+                    notes: `Pago Anticipado - ${prepaidTariffName}`,
+                    receipt_number: receiptNumber,
+                    ticket_code: receiptNumber,
+                    createdAt: new Date(),
+                };
+
+                prepaidOptions = {
+                    isPrepaid: true,
+                    prepaidUntil,
+                    prepaidTariffId,
+                    prepaidAmount,
+                    prepaidMovementId: prepaidMovement.id
+                };
+
+                console.log(`⏱️ Entry: Prepaid validated for ${plate}. Tariff: ${prepaidTariffName}, Until: ${prepaidUntil.toISOString()}, Amount: $${prepaidAmount}`);
             }
 
-            // 5. Process Entry
+            // 5. Process Entry (in memory)
             const entry = AccessManager.processEntry(
                 plate,
                 existingVehicle || ({ id: vehicleId } as any),
@@ -185,7 +224,8 @@ export class AccessController {
                 isSubscriber,
                 subscriptionId,
                 ticketCode,
-                prepaidOptions
+                prepaidOptions,
+                entryTime
             );
 
             // Patch linking details
@@ -204,44 +244,31 @@ export class AccessController {
                 barrier_exit_at: null
             });
 
-            const savedStay = await this.stayRepository.save(entry as any);
+            if (prepaidMovement) {
+                prepaidMovement.relatedEntityId = entry.id;
+            }
 
-            // 6. Generate Prepaid Movement (if applicable)
-            if (prepaidOptions && prepaidAmount > 0) {
-                // Fetch Owner ID from Garage Config
-                let ownerId: string | undefined;
-                if (garageId) {
-                    const garage: any = await db.garages.findOne({ id: garageId });
-                    if (garage) ownerId = garage.owner_id || garage.ownerId;
+            // 6. Persist in sequence (Atomicity workaround)
+            let savedStay;
+            try {
+                savedStay = await this.stayRepository.save(entry as any);
+                
+                if (prepaidMovement) {
+                    await this.movementRepository.save(prepaidMovement as any);
+                    console.log(`💰 Entry: Prepaid Movement saved for ${plate}. Amount: $${prepaidAmount}, Method: ${prepaidPaymentMethod}`);
+                    (savedStay as any).prepaidMovement = prepaidMovement;
                 }
 
-                const receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
-                const ticketNumber = Number(Date.now().toString().slice(-9));
+                if (vehicleToSave) {
+                    await this.vehicleRepository.save(vehicleToSave);
+                    console.log(`🚗 Entry: Vehicle ${vehicleId} saved/updated for ${plate}`);
+                }
+            } catch (persistError) {
+                console.error(`❌ Entry: Persistence error for ${plate}:`, persistError);
+                return res.status(500).json({ error: 'Ocurrió un error al guardar la entrada en la base de datos.' });
+            }
 
-                const prepaidMovement = {
-                    id: uuidv4(),
-                    garageId,
-                    ownerId,
-                    ticketNumber,
-                    relatedEntityId: entry.id,
-                    type: 'CobroEstadia' as const,
-                    timestamp: new Date(),
-                    amount: prepaidAmount,
-                    paymentMethod: prepaidPaymentMethod,
-                    operator: operator,
-                    invoiceType: prepaidInvoiceType,
-                    plate: plate,
-                    notes: `Pago Anticipado - ${prepaidTariffName}`,
-                    receipt_number: receiptNumber,
-                    ticket_code: receiptNumber,
-                    createdAt: new Date(),
-                };
-
-                await this.movementRepository.save(prepaidMovement as any);
-                console.log(`💰 Entry: Prepaid Movement saved for ${plate}. Amount: $${prepaidAmount}, Method: ${prepaidPaymentMethod}`);
-
-                // Attach prepaid info to response so frontend can confirm
-                (savedStay as any).prepaidMovement = prepaidMovement;
+            if (prepaidMovement) {
                 return res.status(201).json({ stay: savedStay, prepaidMovement });
             }
 
@@ -376,7 +403,7 @@ export class AccessController {
                 (stay as any).is_subscriber = subStatus;
             }
 
-            const price = await AccessManager.quoteExit(
+            const { price } = await AccessManager.quoteExit(
                 stay as any,
                 paymentMethod || 'Efectivo',
                 garageId,
@@ -389,6 +416,30 @@ export class AccessController {
             res.status(500).json({ error: error.message });
         }
     };
+
+    static serializeStay(stay: any) {
+        return {
+            id: stay.id || stay._id,
+            vehicleId: stay.vehicleId || stay.vehicle_id || null,
+            plate: stay.plate,
+            entryTime: stay.entryTime || stay.entry_time,
+            exitTime: stay.exitTime || stay.exit_time || null,
+            vehicleType: stay.vehicleType || stay.vehicle_type || 'Auto',
+            active: stay.active ?? true,
+            isPrepaid: Boolean(stay.isPrepaid || stay.is_prepaid),
+            prepaidUntil: stay.prepaidUntil || stay.prepaid_until || null,
+            prepaidTariffId: stay.prepaidTariffId || stay.prepaid_tariff_id || null,
+            prepaidAmount: typeof stay.prepaidAmount === 'number' ? stay.prepaidAmount : (typeof stay.prepaid_amount === 'number' ? stay.prepaid_amount : null),
+            prepaidMovementId: stay.prepaidMovementId || stay.prepaid_movement_id || null,
+            // Mantener propiedades extras que el frontend pueda necesitar por ahora
+            ticket_code: stay.ticket_code,
+            isSubscriber: Boolean(stay.isSubscriber || stay.is_subscriber),
+            subscriptionId: stay.subscriptionId || stay.subscription_id || null,
+            price: stay.price,
+            isPrepaidCovered: stay.isPrepaidCovered,
+            isGracePeriod: stay.isGracePeriod || stay.is_grace_period || false
+        };
+    }
 
     getActiveStay = async (req: Request, res: Response) => {
         try {
@@ -407,22 +458,30 @@ export class AccessController {
             }
 
             // --- NUEVO: Cotización Automática y Tiempo de Gracia ---
-            const price = await AccessManager.quoteExit(stay as any, 'Efectivo', garageId, 0);
-            (stay as any).price = price;
+            const feeResult = await AccessManager.quoteExit(stay as any, 'Efectivo', garageId, 0);
+            (stay as any).price = feeResult.price;
 
             // Prepaid flags for frontend
-            const stayIsPrepaid = (stay as any).isPrepaid === true;
+            const stayIsPrepaid = (stay as any).isPrepaid === true || (stay as any).is_prepaid === true;
+            const stayPrepaidUntil = (stay as any).prepaidUntil || (stay as any).prepaid_until;
             (stay as any).isPrepaid = stayIsPrepaid;
-            (stay as any).isPrepaidCovered = stayIsPrepaid && price === 0;
-
-            // Evaluamos is_grace_period (NOT triggered by prepaid — separate concept)
-            let isGracePeriod = false;
-            if (!stay.isSubscriber && !stayIsPrepaid && price === 0) {
-                isGracePeriod = true;
+            
+            if (stayIsPrepaid && stayPrepaidUntil) {
+                const now = new Date();
+                const validUntil = new Date(stayPrepaidUntil);
+                if (!isNaN(validUntil.getTime()) && now <= validUntil) {
+                    (stay as any).isPrepaidCovered = true;
+                } else {
+                    (stay as any).isPrepaidCovered = false;
+                }
+            } else {
+                (stay as any).isPrepaidCovered = false;
             }
-            (stay as any).is_grace_period = isGracePeriod;
 
-            res.json(stay);
+            // Evaluamos isGracePeriod basada puramente en la respuesta determinística del Engine
+            (stay as any).isGracePeriod = feeResult.isGracePeriod;
+
+            res.json(AccessController.serializeStay(stay));
         } catch (error: any) {
             res.status(500).json({ error: error.message });
         }
@@ -435,32 +494,49 @@ export class AccessController {
             // Pass garageId to repository
             const stays = await this.stayRepository.findAllActive(garageId);
 
-            // Enrichment: If stay doesn't have explicit vehicle type, try to find it via VehicleModel
-            // We need to import VehicleModel locally or use Repository if available.
-            // Since this is "Infra", we can use the Model directly for this enrichment step or use VehicleRepository.
-            // Let's use VehicleRepository if it has findByPlate. check: this.vehicleRepository
-            // Actually, for bulk efficiency, let's just do a Model query if needed, or iterate.
+            // Batch fetching vehicles to prevent N+1 query and correctly resolve isSubscriber
+            const vehicleIds = stays.map(s => s.vehicleId || (s as any).vehicle_id).filter(Boolean);
+            const plates = stays.filter(s => !(s.vehicleId || (s as any).vehicle_id)).map(s => s.plate).filter(Boolean);
 
-            // Note: Since we are in Mongoose migration, let's use VehicleModel directly for speed in this step
-            // to avoid modifying VehicleRepository right now.
-            // Import real path (Refactored to Source of Truth)
-            const { VehicleModel: VM } = await import('../../../infrastructure/database/models.js');
+            const query: any = { $or: [] };
+            if (vehicleIds.length > 0) {
+                query.$or.push({ id: { $in: vehicleIds } });
+            }
+            if (plates.length > 0) {
+                const plateQuery: any = { plate: { $in: plates } };
+                if (garageId) plateQuery.garageId = garageId;
+                query.$or.push(plateQuery);
+            }
 
-            const populatedStays = await Promise.all(stays.map(async (stay) => {
-                let vType = stay.vehicleType;
+            let vehicles: any[] = [];
+            if (query.$or.length > 0) {
+                vehicles = await db.vehicles.find(query);
+            }
 
-                if (!vType && VM) {
-                    const vehicle = await VM.findOne({ plate: stay.plate, garageId });
-                    if (vehicle) {
-                        vType = vehicle.type; // e.g. "Auto"
-                    }
+            const vehiclesById = new Map(vehicles.map(v => [v.id, v]));
+            const vehiclesByPlate = new Map(vehicles.map(v => [v.plate, v]));
+
+            const populatedStays = stays.map((stay) => {
+                const vId = stay.vehicleId || (stay as any).vehicle_id;
+                let vehicle = vId ? vehiclesById.get(vId) : vehiclesByPlate.get(stay.plate);
+                
+                // Fallback check if garageId matches for plate lookup
+                if (!vId && vehicle && vehicle.garageId !== garageId) {
+                    vehicle = undefined;
                 }
 
-                return {
-                    ...stay,
-                    vehicleType: vType || 'Auto' // Default to Auto if unknown
-                };
-            }));
+                if (vehicle) {
+                    stay.vehicleId = vehicle.id;
+                    const subStatus = Boolean(vehicle.is_subscriber || vehicle.isSubscriber);
+                    (stay as any).isSubscriber = subStatus;
+                    (stay as any).is_subscriber = subStatus; // Overwrite original field to prevent serializeStay fallback
+                    (stay as any).vehicleType = vehicle.type || stay.vehicleType || (stay as any).vehicle_type || 'Auto';
+                } else {
+                    (stay as any).vehicleType = stay.vehicleType || (stay as any).vehicle_type || 'Auto';
+                }
+
+                return AccessController.serializeStay(stay);
+            });
 
             res.json(populatedStays);
         } catch (error: any) {

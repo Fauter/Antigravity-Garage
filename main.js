@@ -57,6 +57,50 @@ if (isDev) {
     startServer(); // Solo arranca el servidor interno si NO estamos en desarrollo
 }
 
+function attachRendererDiagnostics(win) {
+    if (!isDev) return;
+
+    // 1. Console Forwarding
+    win.webContents.on('console-message', (event, level, message, line, sourceId) => {
+        const levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR'];
+        const levelStr = levels[level] || 'LOG';
+        const src = sourceId ? `${path.basename(sourceId)}:${line}` : 'unknown';
+        if (level >= 2) {
+            console.error(`[RENDERER:${levelStr}] ${message}\n  source: ${src}`);
+        } else {
+            console.log(`[RENDERER:${levelStr}] ${message}\n  source: ${src}`);
+        }
+    });
+
+    // 2. Lifecycle & Errors
+    win.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+        if (errorCode !== -3) { // ERR_ABORTED is typically benign
+            console.error(`[RENDERER:FAILED-LOAD] ${errorDescription} (${errorCode}) at ${validatedURL}`);
+        }
+    });
+
+    win.webContents.on('render-process-gone', (event, details) => {
+        console.error(`[RENDERER:CRASH] Render process gone! Reason: ${details.reason}, ExitCode: ${details.exitCode}`);
+    });
+
+    win.webContents.on('preload-error', (event, preloadPath, error) => {
+        console.error(`[RENDERER:PRELOAD-ERROR] Error in preload: ${preloadPath}`, error);
+    });
+
+    win.webContents.on('unresponsive', () => {
+        console.error(`[RENDERER:UNRESPONSIVE] Window became unresponsive`);
+    });
+
+    win.webContents.on('responsive', () => {
+        console.log(`[RENDERER:RESPONSIVE] Window became responsive again`);
+    });
+
+    // 3. Auto-open DevTools
+    win.webContents.once('did-finish-load', () => {
+        win.webContents.openDevTools({ mode: 'detach', activate: true });
+    });
+}
+
 let mainWindow;
 
 function createWindow() {
@@ -109,10 +153,11 @@ function createWindow() {
     // In production, load the Express server (which serves the static SPA)
     if (isDev) {
         mainWindow.loadURL('http://localhost:5173');
-        // mainWindow.webContents.openDevTools();
     } else {
         mainWindow.loadURL('http://localhost:3000');
     }
+
+    attachRendererDiagnostics(mainWindow);
 
     // Force Logout Quirúrgico: Ahora manejado sincrónicamente en preload.js
     // para evitar race conditions con React y Supabase.
@@ -126,6 +171,9 @@ function createWindow() {
             event.preventDefault();
         } else if (input.key === 'Escape' && mainWindow.isFullScreen()) {
             mainWindow.setFullScreen(false);
+            event.preventDefault();
+        } else if (isDev && (input.key === 'F12' || ((input.control || input.meta) && input.shift && input.key.toLowerCase() === 'i'))) {
+            mainWindow.webContents.toggleDevTools();
             event.preventDefault();
         }
     });

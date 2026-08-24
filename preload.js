@@ -34,95 +34,100 @@ try {
 }
 // --------------------------------------------------------
 
-contextBridge.exposeInMainWorld('electronAPI', {
-    /**
-     * Envía HTML al Main Process para impresión silenciosa.
-     * @param {string} html - HTML completo del ticket
-     * @param {object} [printerConfig] - { deviceName?: string, pageWidth?: number (micrones) }
-     * @returns {Promise<{success: boolean, error?: string}>}
-     */
-    silentPrint: (html, printerConfig) => ipcRenderer.invoke('print:silent', html, printerConfig || {}),
+try {
+    contextBridge.exposeInMainWorld('electronAPI', {
+        /**
+         * Envía HTML al Main Process para impresión silenciosa.
+         * @param {string} html - HTML completo del ticket
+         * @param {object} [printerConfig] - { deviceName?: string, pageWidth?: number (micrones) }
+         * @returns {Promise<{success: boolean, error?: string}>}
+         */
+        silentPrint: (html, printerConfig) => ipcRenderer.invoke('print:silent', html, printerConfig || {}),
 
-    /**
-     * Obtiene la lista de impresoras del sistema.
-     * @returns {Promise<Array<{name: string, isDefault: boolean, status: number}>>}
-     */
-    getPrinters: () => ipcRenderer.invoke('print:get-printers'),
+        /**
+         * Obtiene la lista de impresoras del sistema.
+         * @returns {Promise<Array<{name: string, isDefault: boolean, status: number}>>}
+         */
+        getPrinters: () => ipcRenderer.invoke('print:get-printers'),
 
-    /**
-     * Lee un archivo local y lo devuelve en Base64.
-     */
-    readFileBase64: (filePath) => ipcRenderer.invoke('fs:readFileBase64', filePath),
+        /**
+         * Lee un archivo local y lo devuelve en Base64.
+         */
+        readFileBase64: (filePath) => ipcRenderer.invoke('fs:readFileBase64', filePath),
 
-    // ── Hardware Integration ──────────────────────────────────
+        // ── Hardware Integration ──────────────────────────────────
 
-    /** Listener: evento de entrada detectado por hardware/simulador */
-    onHardwareEntry: (callback) => {
-        const handler = (_event, payload) => callback(payload);
-        ipcRenderer.on('hw:entry-detected', handler);
-        return () => ipcRenderer.removeListener('hw:entry-detected', handler);
-    },
+        /** Listener: evento de entrada detectado por hardware/simulador */
+        onHardwareEntry: (callback) => {
+            const handler = (_event, payload) => callback(payload);
+            ipcRenderer.on('hw:entry-detected', handler);
+            return () => ipcRenderer.removeListener('hw:entry-detected', handler);
+        },
 
-    /** Listener: resultado de autorización de barrera de salida */
-    onBarrierAuthResult: (callback) => {
-        const handler = (_event, payload) => callback(payload);
-        ipcRenderer.on('hw:barrier-auth-result', handler);
-        return () => ipcRenderer.removeListener('hw:barrier-auth-result', handler);
-    },
+        /** Listener: resultado de autorización de barrera de salida */
+        onBarrierAuthResult: (callback) => {
+            const handler = (_event, payload) => callback(payload);
+            ipcRenderer.on('hw:barrier-auth-result', handler);
+            return () => ipcRenderer.removeListener('hw:barrier-auth-result', handler);
+        },
 
-    /** Listener: cambios generales de estado online/offline del HW */
-    onHardwareStatusChanged: (callback) => {
-        const handler = (_event, payload) => callback(payload);
-        ipcRenderer.on('hw:status-changed', handler);
-        return () => ipcRenderer.removeListener('hw:status-changed', handler);
-    },
+        /** Listener: cambios generales de estado online/offline del HW */
+        onHardwareStatusChanged: (callback) => {
+            const handler = (_event, payload) => callback(payload);
+            ipcRenderer.on('hw:status-changed', handler);
+            return () => ipcRenderer.removeListener('hw:status-changed', handler);
+        },
 
-    /** Obtener estado actual del hardware */
-    getHardwareStatus: () => ipcRenderer.invoke('hw:get-status'),
+        /** Obtener estado actual del hardware */
+        getHardwareStatus: () => ipcRenderer.invoke('hw:get-status'),
 
-    /** Obtener y guardar configuración de hardware */
-    getHardwareConfig: () => ipcRenderer.invoke('hw:get-config'),
-    setHardwareConfig: (config) => ipcRenderer.invoke('hw:set-config', config),
+        /** Obtener y guardar configuración de hardware */
+        getHardwareConfig: () => ipcRenderer.invoke('hw:get-config'),
+        setHardwareConfig: (config) => ipcRenderer.invoke('hw:set-config', config),
 
-    /** Mock Mode control */
-    getMockMode: () => ipcRenderer.invoke('hw:get-mock-mode'),
-    setMockMode: (enabled) => ipcRenderer.invoke('hw:set-mock-mode', enabled),
+        /** Mock Mode control */
+        getMockMode: () => ipcRenderer.invoke('hw:get-mock-mode'),
+        setMockMode: (enabled) => ipcRenderer.invoke('hw:set-mock-mode', enabled),
 
-    /** Listener: mock mode changed (from Simulator toggle) */
-    onMockModeChanged: (callback) => {
-        const handler = (_event, payload) => callback(payload);
-        ipcRenderer.on('hw:mock-mode-changed', handler);
-        return () => ipcRenderer.removeListener('hw:mock-mode-changed', handler);
-    },
+        /** Listener: mock mode changed (from Simulator toggle) */
+        onMockModeChanged: (callback) => {
+            const handler = (_event, payload) => callback(payload);
+            ipcRenderer.on('hw:mock-mode-changed', handler);
+            return () => ipcRenderer.removeListener('hw:mock-mode-changed', handler);
+        },
 
-    /** Listener: driver connection status toast (online/offline notifications) */
-    onDriverStatusToast: (callback) => {
-        const handler = (_event, payload) => callback(payload);
-        ipcRenderer.on('hw:driver-status-toast', handler);
-        return () => ipcRenderer.removeListener('hw:driver-status-toast', handler);
-    },
+        /** Listener: driver connection status toast (online/offline notifications) */
+        onDriverStatusToast: (callback) => {
+            const handler = (_event, payload) => callback(payload);
+            ipcRenderer.on('hw:driver-status-toast', handler);
+            return () => ipcRenderer.removeListener('hw:driver-status-toast', handler);
+        },
 
-    /** Control manual */
-    openBarrier: (type) => ipcRenderer.invoke('hw:open-barrier', type),
-    openHardwareSimulator: () => ipcRenderer.invoke('hw:open-simulator'),
+        /** Control manual */
+        openBarrier: (type) => ipcRenderer.invoke('hw:open-barrier', type),
+        openHardwareSimulator: () => ipcRenderer.invoke('hw:open-simulator'),
 
-    /** DEV / Simulación */
-    simulateEntry: () => ipcRenderer.invoke('hw:simulate-entry'),
-    simulateBarcodeScan: (code) => ipcRenderer.invoke('hw:simulate-barcode', code),
+        /** DEV / Simulación */
+        simulateEntry: () => ipcRenderer.invoke('hw:simulate-entry'),
+        simulateBarcodeScan: (code) => ipcRenderer.invoke('hw:simulate-barcode', code),
 
-    // ── Bidirectional ESP32 Events ──────────────────────────────
+        // ── Bidirectional ESP32 Events ──────────────────────────────
 
-    /** Listener: RFID authorization result (auto-exit flow) */
-    onRfidAuthResult: (callback) => {
-        const handler = (_event, payload) => callback(payload);
-        ipcRenderer.on('hw:rfid-auth-result', handler);
-        return () => ipcRenderer.removeListener('hw:rfid-auth-result', handler);
-    },
+        /** Listener: RFID authorization result (auto-exit flow) */
+        onRfidAuthResult: (callback) => {
+            const handler = (_event, payload) => callback(payload);
+            ipcRenderer.on('hw:rfid-auth-result', handler);
+            return () => ipcRenderer.removeListener('hw:rfid-auth-result', handler);
+        },
 
-    /** Listener: anti-crush sensor state changes (OCCUPIED/CLEAR) */
-    onSensorStateChanged: (callback) => {
-        const handler = (_event, payload) => callback(payload);
-        ipcRenderer.on('hw:sensor-state-changed', handler);
-        return () => ipcRenderer.removeListener('hw:sensor-state-changed', handler);
-    },
-});
+        /** Listener: anti-crush sensor state changes (OCCUPIED/CLEAR) */
+        onSensorStateChanged: (callback) => {
+            const handler = (_event, payload) => callback(payload);
+            ipcRenderer.on('hw:sensor-state-changed', handler);
+            return () => ipcRenderer.removeListener('hw:sensor-state-changed', handler);
+        },
+    });
+} catch (error) {
+    console.error('[PRELOAD:ERROR] Error exposing electronAPI to MainWorld:', error);
+    throw error;
+}

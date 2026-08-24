@@ -6,16 +6,41 @@ import { api } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { PrinterService } from '../../services/PrinterService';
 
-// API Hook simplified for this component
+interface ExitStay {
+    id: string;
+    plate: string;
+    entryTime: string;
+    exitTime?: string | null;
+    vehicleId?: string | null;
+    vehicleType?: string;
+    isSubscriber: boolean;
+    isPrepaid: boolean;
+    isPrepaidCovered: boolean;
+    prepaidUntil?: string | null;
+    isGracePeriod: boolean;
+    price?: number | null;
+}
+
+type ExitMode = 'SUBSCRIBER' | 'PREPAID_COVERED' | 'GRACE_PERIOD' | 'PREPAID_EXCEEDED' | 'NORMAL';
+
+const getExitMode = (stay: ExitStay | null, currentPrice: number | null): ExitMode => {
+    if (!stay) return 'NORMAL';
+    if (stay.isSubscriber) return 'SUBSCRIBER';
+    if (stay.isPrepaid && stay.isPrepaidCovered) return 'PREPAID_COVERED';
+    if (stay.isGracePeriod) return 'GRACE_PERIOD';
+    if (stay.isPrepaid && !stay.isPrepaidCovered && currentPrice !== null && currentPrice > 0) return 'PREPAID_EXCEEDED';
+    return 'NORMAL';
+};
+
 const useExitLogic = () => {
     const [loading, setLoading] = useState(false);
-    const [stay, setStay] = useState<any>(null);
+    const [stay, setStay] = useState<ExitStay | null>(null);
     const [price, setPrice] = useState<number | null>(null);
     const [basePrice, setBasePrice] = useState<number | null>(null);
     const [error, setError] = useState<string | null>(null);
     const { operatorName } = useAuth();
 
-    const isSubscriber = Boolean(stay?.is_subscriber);
+    const exitMode = getExitMode(stay, price);
 
     const searchStay = async (plate: string) => {
         setLoading(true);
@@ -26,21 +51,17 @@ const useExitLogic = () => {
 
         try {
             const res = await api.get(`/estadias/activa/${plate}`);
-            console.log('📡 [API Response] Data recibida:', res.data);
-            console.log('🔍 [Subscriber Check] Valor de is_subscriber:', res.data.is_subscriber);
+            const data: ExitStay = res.data;
+            setStay(data);
 
-            setStay(res.data);
-
-            if (res.data) {
-                if (res.data.is_subscriber) {
+            if (data) {
+                const mode = getExitMode(data, data.price ?? null);
+                if (['SUBSCRIBER', 'PREPAID_COVERED', 'GRACE_PERIOD'].includes(mode)) {
                     setBasePrice(0);
                     setPrice(0);
-                } else if (res.data.isPrepaid || res.data.price === 0) {
-                    setBasePrice(res.data.price ?? null);
-                    setPrice(res.data.price ?? null);
                 } else {
-                    setBasePrice(res.data.price ?? null);
-                    setPrice(null);
+                    setBasePrice(data.price ?? null);
+                    setPrice(null); // This null triggers quote loop for normal/exceeded
                 }
             }
 
@@ -93,7 +114,7 @@ const useExitLogic = () => {
         setError(null);
     };
 
-    return { searchStay, stay, price, setPrice, basePrice, loading, error, isSubscriber, quotePrice, processExit: processExit as (plate: string, paymentMethod: string, invoiceType: string, promoPercentage: number) => Promise<any>, resetLogic };
+    return { searchStay, stay, price, setPrice, basePrice, loading, error, exitMode, quotePrice, processExit: processExit as (plate: string, paymentMethod: string, invoiceType: string, promoPercentage: number) => Promise<any>, resetLogic };
 };
 
 const PanelSalida: React.FC = () => {
@@ -104,16 +125,11 @@ const PanelSalida: React.FC = () => {
     const [selectedPromo, setSelectedPromo] = useState<any>(null);
     const [showSuccess, setShowSuccess] = useState(false);
 
-    const { searchStay, stay, price, setPrice, error, isSubscriber, quotePrice, processExit, resetLogic } = useExitLogic();
+    const { searchStay, stay, price, setPrice, error, exitMode, quotePrice, processExit, resetLogic } = useExitLogic();
     const { isGlobalSyncing } = useAuth();
     const [isCalculating, setIsCalculating] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
-
-    const isGracePeriod = Boolean(stay && !isSubscriber && stay.is_grace_period && price === 0);
-
-    // --- Prepaid / Anticipado Detection ---
-    const isPrepaidCovered = Boolean(stay && stay.isPrepaidCovered);
-    const isPrepaidExceedance = Boolean(stay && stay.isPrepaid && !isPrepaidCovered && price !== null && price > 0);
+    const [processedExitMode, setProcessedExitMode] = useState<ExitMode | null>(null);
 
     // ── Anti-Crush Sensor State + Barrier LED ──
     const [sensorState, setSensorState] = useState<'OCCUPIED' | 'CLEAR' | 'UNKNOWN'>('UNKNOWN');
@@ -179,7 +195,7 @@ const PanelSalida: React.FC = () => {
 
     // Price Quote: Ask backend for exact price (Single Source of Truth)
     useEffect(() => {
-        if (isSubscriber) return;
+        if (['SUBSCRIBER', 'PREPAID_COVERED', 'GRACE_PERIOD'].includes(exitMode)) return;
         if (!stay || !paymentMethod) return;
 
         const fetchQuote = async () => {
@@ -202,7 +218,7 @@ const PanelSalida: React.FC = () => {
         };
 
         fetchQuote();
-    }, [paymentMethod, stay, selectedPromo, isSubscriber]);
+    }, [paymentMethod, stay, selectedPromo, exitMode]);
 
 
 
@@ -213,18 +229,17 @@ const PanelSalida: React.FC = () => {
         if (!stay || isProcessing) return;
         setIsProcessing(true);
 
+        // Record the exitMode being processed to use in the Success Overlay
+        setProcessedExitMode(exitMode);
+
         try {
 
             let method = paymentMethod || 'Efectivo';
             let invoice = invoiceType || 'Final';
 
-            if (isSubscriber) {
-                method = 'Efectivo';
-                invoice = 'Final';
-            } else if (isPrepaidCovered) {
-                method = 'Efectivo';
-                invoice = 'Final';
-            } else if (isGracePeriod) {
+            const isFreeExit = ['SUBSCRIBER', 'PREPAID_COVERED', 'GRACE_PERIOD'].includes(exitMode);
+
+            if (isFreeExit) {
                 method = 'Efectivo';
                 invoice = 'Final';
             }
@@ -246,12 +261,12 @@ const PanelSalida: React.FC = () => {
                 const exitStay = result.stay ?? { ...stay, exitTime: new Date() };
                 const exitMovement = result.movement ?? null;
 
-                if (!isSubscriber && exitMovement) {
+                if (exitMovement) {
                     PrinterService.printExitTicket(exitStay, exitMovement);
                 }
 
                 toast.success(`Salida ok: ${stay.plate}`, {
-                    description: isPrepaidCovered ? 'Anticipado (Sin Cargo)' : isGracePeriod ? 'Tiempo de Gracia (Sin Cargo)' : (isSubscriber ? 'Abonado (Sin Cargo)' : `Cobro: ${paymentMethod || 'Aut.'}`)
+                    description: exitMode === 'PREPAID_COVERED' ? 'Anticipado (Sin Cargo)' : exitMode === 'GRACE_PERIOD' ? 'Tiempo de Gracia (Sin Cargo)' : (exitMode === 'SUBSCRIBER' ? 'Abonado (Sin Cargo)' : `Cobro: ${paymentMethod || 'Aut.'}`)
                 });
 
                 setShowSuccess(true);
@@ -399,7 +414,7 @@ const PanelSalida: React.FC = () => {
             </div>
 
             {/* --- MIDDLE SECTION & FOOTER (STRICT BIFURCATION) --- */}
-            {stay && isSubscriber ? (
+            {stay && exitMode === 'SUBSCRIBER' ? (
                 <>
                     <div className="flex-1 p-3 bg-gray-950 flex flex-col justify-evenly overflow-hidden">
                         <div className="flex-1 flex items-center justify-center bg-emerald-900/20 rounded-xl border border-dashed border-emerald-800/50 p-4">
@@ -422,7 +437,7 @@ const PanelSalida: React.FC = () => {
                         </button>
                     </div>
                 </>
-            ) : stay && isPrepaidCovered ? (
+            ) : stay && exitMode === 'PREPAID_COVERED' ? (
                 <>
                     <div className="flex-1 p-3 bg-gray-950 flex flex-col justify-evenly overflow-hidden">
                         <div className="flex-1 flex items-center justify-center bg-violet-900/20 rounded-xl border border-dashed border-violet-800/50 p-4">
@@ -445,7 +460,7 @@ const PanelSalida: React.FC = () => {
                         </button>
                     </div>
                 </>
-            ) : stay && isGracePeriod ? (
+            ) : stay && exitMode === 'GRACE_PERIOD' ? (
                 <>
                     <div className="flex-1 p-3 bg-gray-950 flex flex-col justify-evenly overflow-hidden">
                         <div className="flex-1 flex items-center justify-center bg-cyan-900/20 rounded-xl border border-dashed border-cyan-800/50 p-4">
@@ -472,9 +487,9 @@ const PanelSalida: React.FC = () => {
                 <>
                     <div className="flex-1 p-3 bg-gray-950 flex flex-col justify-evenly overflow-hidden">
                         {/* Exceedance Badge (only for prepaid vehicles with surplus) */}
-                        {isPrepaidExceedance && (
+                        {exitMode === 'PREPAID_EXCEEDED' && (
                             <div className="bg-amber-900/20 border border-amber-600/30 rounded-lg p-2 flex items-center justify-center gap-2">
-                                <span className="text-amber-400 text-xs font-bold uppercase tracking-wider">Excedente de Anticipado</span>
+                                <span className="text-amber-400 text-xs font-bold uppercase tracking-wider">Anticipado Vencido - Cobro de Excedente</span>
                             </div>
                         )}
                         {/* Payment Row */}
@@ -575,20 +590,20 @@ const PanelSalida: React.FC = () => {
             ) : null}
 
             {/* SUCCESS OVERLAY */}
-            {showSuccess && stay && (
+            {showSuccess && stay && processedExitMode && (
                 <div className="absolute inset-0 z-50 bg-gray-950/95 backdrop-blur-md flex flex-col items-center justify-center animate-in fade-in duration-300">
-                    <div className={`w-28 h-28 mb-6 rounded-full flex items-center justify-center shadow-2xl ${isSubscriber ? 'bg-emerald-500/20 shadow-emerald-500/20' : isPrepaidCovered ? 'bg-violet-500/20 shadow-violet-500/20' : (isGracePeriod ? 'bg-cyan-500/20 shadow-cyan-500/20' : 'bg-blue-500/20 shadow-blue-500/20')}`}>
-                        <CheckCircle className={`w-16 h-16 animate-[pulse_1s_ease-in-out_infinite] ${isSubscriber ? 'text-emerald-500' : isPrepaidCovered ? 'text-violet-500' : (isGracePeriod ? 'text-cyan-500' : 'text-blue-500')}`} />
+                    <div className={`w-28 h-28 mb-6 rounded-full flex items-center justify-center shadow-2xl ${processedExitMode === 'SUBSCRIBER' ? 'bg-emerald-500/20 shadow-emerald-500/20' : processedExitMode === 'PREPAID_COVERED' ? 'bg-violet-500/20 shadow-violet-500/20' : (processedExitMode === 'GRACE_PERIOD' ? 'bg-cyan-500/20 shadow-cyan-500/20' : 'bg-blue-500/20 shadow-blue-500/20')}`}>
+                        <CheckCircle className={`w-16 h-16 animate-[pulse_1s_ease-in-out_infinite] ${processedExitMode === 'SUBSCRIBER' ? 'text-emerald-500' : processedExitMode === 'PREPAID_COVERED' ? 'text-violet-500' : (processedExitMode === 'GRACE_PERIOD' ? 'text-cyan-500' : 'text-blue-500')}`} />
                     </div>
                     <div className="text-center font-bold">
-                        <h2 className={`text-4xl font-black tracking-widest uppercase mb-3 ${isSubscriber ? 'text-emerald-400' : isPrepaidCovered ? 'text-violet-400' : (isGracePeriod ? 'text-cyan-400' : 'text-blue-400')}`}>
+                        <h2 className={`text-4xl font-black tracking-widest uppercase mb-3 ${processedExitMode === 'SUBSCRIBER' ? 'text-emerald-400' : processedExitMode === 'PREPAID_COVERED' ? 'text-violet-400' : (processedExitMode === 'GRACE_PERIOD' ? 'text-cyan-400' : 'text-blue-400')}`}>
                             SALIDA REGISTRADA
                         </h2>
                         <div className="text-white font-mono text-5xl tracking-widest bg-black/60 px-6 py-3 rounded-lg border border-gray-800 inline-block mb-4 mt-2">
                             {stay.plate}
                         </div>
                         <p className="text-gray-400 uppercase tracking-widest text-sm font-bold">
-                            {isPrepaidCovered ? 'Pago Anticipado — Sin Cargo' : isGracePeriod ? 'Salida sin Cargo (Tolerancia)' : (isSubscriber ? 'Vehículo Abonado' : `Cobro Efectuado - ${paymentMethod || 'Efectivo'}`)}
+                            {processedExitMode === 'PREPAID_COVERED' ? 'Pago Anticipado — Sin Cargo' : processedExitMode === 'GRACE_PERIOD' ? 'Salida sin Cargo (Tolerancia)' : (processedExitMode === 'SUBSCRIBER' ? 'Vehículo Abonado' : `Cobro Efectuado - ${paymentMethod || 'Efectivo'}`)}
                         </p>
                     </div>
                 </div>

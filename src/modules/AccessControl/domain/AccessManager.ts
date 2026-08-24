@@ -22,7 +22,8 @@ export class AccessManager {
         isSubscriber: boolean = false,
         subscriptionId?: string | null,
         ticket_code?: string,
-        prepaidOptions?: { isPrepaid: boolean; prepaidUntil: Date; prepaidTariffId: string }
+        prepaidOptions?: { isPrepaid: boolean; prepaidUntil: Date; prepaidTariffId: string; prepaidAmount: number; prepaidMovementId: string | null },
+        entryTime: Date = new Date()
     ): Stay {
         // Si no se provee un ticket_code correlativo, fallback a UUID (seguridad)
         const finalTicketCode = ticket_code || uuidv4().slice(0, 8).toUpperCase();
@@ -31,7 +32,7 @@ export class AccessManager {
             id: uuidv4(),
             plate: plate.toUpperCase(),
             vehicleId: vehicle ? vehicle.id : null,
-            entryTime: new Date(),
+            entryTime: entryTime,
             active: true,
             isSubscriber,
             subscriptionId: subscriptionId || null,
@@ -44,6 +45,8 @@ export class AccessManager {
             isPrepaid: prepaidOptions?.isPrepaid ?? false,
             prepaidUntil: prepaidOptions?.prepaidUntil ?? null,
             prepaidTariffId: prepaidOptions?.prepaidTariffId ?? null,
+            prepaidAmount: prepaidOptions?.prepaidAmount ?? null,
+            prepaidMovementId: prepaidOptions?.prepaidMovementId ?? null,
             createdAt: new Date(),
         };
 
@@ -180,12 +183,25 @@ export class AccessManager {
             : stay;
 
         const params = await paramRepo.getParams();
-        price = await engine.calculateParkingFee(
+        const feeResult = await engine.calculateParkingFee(
             stayForPricing,
             exitDate,
             paymentMethod,
             params
         );
+        price = feeResult.price;
+
+        const isGracePeriod = !stay.isSubscriber && !(stayIsPrepaid && stayPrepaidUntil && exitDate <= stayPrepaidUntil) && feeResult.isGracePeriod;
+
+        if (isGracePeriod) {
+            notes = `Tiempo de Gracia (Salida Temprana)`;
+            console.log(`⏳ Exit: Grace Period for ${stay.plate}. Movement Skipped.`);
+            return {
+                closedStay: StaySchema.parse(closedStay),
+                exitMovement: null,
+                price: 0
+            };
+        }
 
         // Apply Promo Discount (purely numeric, no notes impact)
         if (promoPercentage && promoPercentage > 0) {
@@ -240,11 +256,11 @@ export class AccessManager {
         paymentMethod: string = 'Efectivo',
         garageId?: string,
         promoPercentage?: number
-    ): Promise<number> {
+    ): Promise<{ price: number; isGracePeriod: boolean }> {
         const finalGarageId = garageId || (stay as any).garageId;
 
         if ((stay as any).is_subscriber || stay.isSubscriber) {
-            return 0;
+            return { price: 0, isGracePeriod: false };
         }
 
         // --- PREPAID / ANTICIPADO CHECK (Quote) ---
@@ -254,7 +270,7 @@ export class AccessManager {
 
         if (stayIsPrepaid && stayPrepaidUntil && !isNaN(stayPrepaidUntil.getTime())) {
             if (now <= stayPrepaidUntil) {
-                return 0; // Within prepaid window
+                return { price: 0, isGracePeriod: false }; // Within prepaid window
             }
         }
 
@@ -310,12 +326,15 @@ export class AccessManager {
             ? { ...stay, entryTime: stayPrepaidUntil }
             : stay;
 
-        let price = await engine.calculateParkingFee(stayForPricing, exitDate, paymentMethod, params);
+        let feeResult = await engine.calculateParkingFee(stayForPricing, exitDate, paymentMethod, params);
+        let price = feeResult.price;
 
         if (promoPercentage && promoPercentage > 0) {
             price = price * (1 - promoPercentage / 100);
         }
 
-        return price;
+        const isGracePeriod = !stay.isSubscriber && !(stayIsPrepaid && stayPrepaidUntil && exitDate <= stayPrepaidUntil) && feeResult.isGracePeriod;
+
+        return { price, isGracePeriod };
     }
 }

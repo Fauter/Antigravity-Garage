@@ -68,22 +68,53 @@ export const useEntryLogic = () => {
         [rawVehicleTypes, getSortedVehicleTypes]
     );
 
-    // --- Dual Fetch Prices (for dynamic display in Prepaid UI) ---
-    const { data: pricesStd = {} } = useQuery({
-        queryKey: ['prices', 'standard'],
+    // --- Unified Fetch Prices (for dynamic display in Prepaid UI) ---
+    const { data: priceData } = useQuery({
+        queryKey: ['precios-matrix'],
         queryFn: async () => {
+            if (import.meta.env.DEV) console.log('[FRONTEND] prices request started');
             const res = await api.get('/precios');
-            return res.data?.standard || {};
+            const data = res.data || {};
+            if (import.meta.env.DEV) {
+                console.log('[FRONTEND] prices request completed');
+                console.log('[FRONTEND] prices response shape', {
+                    hasStandard: !!data.standard,
+                    hasElectronic: !!data.electronic,
+                    hasById: !!data.byId,
+                    standardVehicleCount: data.standard ? Object.keys(data.standard).length : 0,
+                    electronicVehicleCount: data.electronic ? Object.keys(data.electronic).length : 0
+                });
+            }
+            return data;
         }
     });
 
-    const { data: pricesElec = {} } = useQuery({
-        queryKey: ['prices', 'electronic'],
-        queryFn: async () => {
-            const res = await api.get('/precios');
-            return res.data?.electronic || {};
+    const pricesStd = (priceData?.standard && typeof priceData.standard === 'object') ? priceData.standard : {};
+    const pricesElec = (priceData?.electronic && typeof priceData.electronic === 'object') ? priceData.electronic : {};
+    
+    const byId = priceData?.byId || {};
+    const pricesByIdStd = (byId.standard && typeof byId.standard === 'object') ? byId.standard : {};
+    const pricesByIdElec = (byId.electronic && typeof byId.electronic === 'object') ? byId.electronic : {};
+
+    const resolvePrice = useCallback((vTypeId: string, tId: string, payMethod: string) => {
+        if (!vTypeId || typeof vTypeId !== 'string') return null;
+        if (!tId || typeof tId !== 'string') return null;
+        if (!payMethod || typeof payMethod !== 'string') return null;
+        
+        const isElectronic = ['Transferencia', 'Débito', 'Crédito', 'QR'].includes(payMethod);
+        const matrix = isElectronic ? pricesByIdElec : pricesByIdStd;
+        
+        if (!matrix || typeof matrix !== 'object') return null;
+        
+        const vehiclePrices = matrix[vTypeId];
+        if (!vehiclePrices || typeof vehiclePrices !== 'object') return null;
+        
+        const price = vehiclePrices[tId];
+        if (typeof price === 'number' && Number.isFinite(price)) {
+            return price;
         }
-    });
+        return null;
+    }, [pricesByIdStd, pricesByIdElec]);
 
     // --- Fetch Turno Tariffs (for Prepaid selector) ---
     const { data: turnoTariffs = [] } = useQuery({
@@ -123,6 +154,29 @@ export const useEntryLogic = () => {
             setErrorInfo(null);
         }
     }, [errorInfo]);
+
+    const handleVehicleTypeChange = useCallback((value: string) => {
+        setVehicleType(value);
+        setPrepaidTariffId('');
+        setPrepaidPaymentMethod('');
+        setSelectedPromo(null);
+    }, []);
+
+    const handlePrepaidTariffChange = useCallback((value: string) => {
+        setPrepaidTariffId(value);
+        setPrepaidPaymentMethod('');
+        setSelectedPromo(null);
+    }, []);
+
+    const handleIsPrepaidChange = useCallback((value: boolean) => {
+        setIsPrepaid(value);
+        if (!value) {
+            setPrepaidTariffId('');
+            setPrepaidPaymentMethod('');
+            setPrepaidInvoiceType('');
+            setSelectedPromo(null);
+        }
+    }, []);
 
     // Mutation para registrar entrada
     const entryMutation = useMutation({
@@ -221,14 +275,26 @@ export const useEntryLogic = () => {
 
         if (!plate || !vehicleType) return;
 
-        // Validate prepaid completeness
-        if (isPrepaid && (!prepaidTariffId || !prepaidPaymentMethod || !prepaidInvoiceType)) {
-            setErrorInfo({
-                message: 'Complete todos los datos del pago anticipado.',
-                isConflict: false,
-                plate: plate
-            });
-            return;
+        // Validate prepaid completeness and price validity
+        if (isPrepaid) {
+            if (!prepaidTariffId || !prepaidPaymentMethod || !prepaidInvoiceType) {
+                setErrorInfo({
+                    message: 'Complete todos los datos del pago anticipado.',
+                    isConflict: false,
+                    plate: plate
+                });
+                return;
+            }
+
+            const amount = resolvePrice(vehicleType, prepaidTariffId, prepaidPaymentMethod);
+            if (amount === null || amount <= 0) {
+                setErrorInfo({
+                    message: 'La tarifa anticipada seleccionada no posee un precio válido para este vehículo.',
+                    isConflict: false,
+                    plate: plate
+                });
+                return;
+            }
         }
 
         const formData: EntryFormData = {
@@ -253,7 +319,7 @@ export const useEntryLogic = () => {
         plate,
         setPlate: handlePlateChange,
         vehicleType,
-        setVehicleType,
+        setVehicleType: handleVehicleTypeChange,
         photoPath,
         setPhotoPath,
         vehicleTypes,
@@ -264,9 +330,9 @@ export const useEntryLogic = () => {
         plateInputRef,
         // Prepaid / Anticipado
         isPrepaid,
-        setIsPrepaid,
+        setIsPrepaid: handleIsPrepaidChange,
         prepaidTariffId,
-        setPrepaidTariffId,
+        setPrepaidTariffId: handlePrepaidTariffChange,
         prepaidPaymentMethod,
         setPrepaidPaymentMethod,
         prepaidInvoiceType,
@@ -274,6 +340,7 @@ export const useEntryLogic = () => {
         turnoTariffs,
         pricesStd,
         pricesElec,
+        resolvePrice,
         promos,
         selectedPromo,
         setSelectedPromo

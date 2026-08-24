@@ -1,0 +1,7 @@
+-- Add prepaid columns to stays table
+ALTER TABLE stays
+  ADD COLUMN IF NOT EXISTS is_prepaid BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS prepaid_until TIMESTAMPTZ NULL,
+  ADD COLUMN IF NOT EXISTS prepaid_tariff_id UUID NULL,
+  ADD COLUMN IF NOT EXISTS prepaid_amount NUMERIC NULL,
+  ADD COLUMN IF NOT EXISTS prepaid_movement_id UUID NULL;

@@ -291,6 +291,8 @@ const FinancialConfigSchema = new Schema<FinancialConfig>({
     ownerId: { type: String },
     initialTolerance: { type: Number, default: 15 },
     fractionateAfter: { type: Number, default: 0 },
+    subscriptionFullPriceEnabled: { type: Boolean, default: false },
+    subscriptionFullPriceUntilDay: { type: Number, default: null },
     surchargeConfig: { type: Schema.Types.Mixed },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }

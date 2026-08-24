@@ -7,6 +7,8 @@ import { WebcamModal } from '../common/WebcamModal';
 import { PrinterService } from '../../services/PrinterService';
 import { useVehiclePriceValidation } from '../../hooks/useVehiclePriceValidation';
 import { compressPhotos } from '../../utils/imageCompression';
+import { calculateInitialSubscriptionAmount } from '../../utils/subscriptionPricing';
+import { getLastTwoDaysEligibility } from '../../../../shared/utils/dateEligibility';
 
 interface FormularioAbonoProps {
     onCancel?: () => void;
@@ -22,6 +24,11 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
     const [showSuccessScreen, setShowSuccessScreen] = useState(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const { operatorName } = useAuth();
+
+    // Financial Config State
+    const [financialConfig, setFinancialConfig] = useState<any>(null);
+    const [configLoading, setConfigLoading] = useState(true);
+    const [configError, setConfigError] = useState<string | null>(null);
 
     // Price integrity validation + smart sorting for 'abono' tariffs
     const { getSortedVehicleTypes } = useVehiclePriceValidation('abono');
@@ -47,6 +54,32 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
     const [pricesMatrix, setPricesMatrix] = useState<any>({});
     const [standardPricesMatrix, setStandardPricesMatrix] = useState<any>({});
     const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
+    const [remainingDays, setRemainingDays] = useState(0);
+    const [isFullMonthCharge, setIsFullMonthCharge] = useState(false);
+    
+    // Exoneration State
+    const [exonerateLastDays, setExonerateLastDays] = useState(false);
+    const [lastDaysEligibility, setLastDaysEligibility] = useState(() => getLastTwoDaysEligibility(new Date()));
+
+    useEffect(() => {
+        const checkEligibility = () => setLastDaysEligibility(getLastTwoDaysEligibility(new Date()));
+        const interval = setInterval(checkEligibility, 60000); // Check every minute
+        
+        // Also check on window focus
+        const onFocus = () => checkEligibility();
+        window.addEventListener('focus', onFocus);
+        
+        return () => {
+            clearInterval(interval);
+            window.removeEventListener('focus', onFocus);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!lastDaysEligibility.isLastTwoDays && exonerateLastDays) {
+            setExonerateLastDays(false);
+        }
+    }, [lastDaysEligibility.isLastTwoDays, exonerateLastDays]);
 
     // Sorted + enriched vehicle types (valid first → price asc → alpha)
     const sortedVehicleTypes = useMemo(() =>
@@ -88,7 +121,40 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
     });
 
     useEffect(() => { loadConfig(); }, [formData.metodoPago]);
-    useEffect(() => { calculatePrice(); }, [formData.tipoCochera, formData.exclusivaOverride, formData.tipoVehiculo, pricesMatrix, standardPricesMatrix]);
+    
+    // Load Financial Config once on mount (or garage change if supported via context)
+    useEffect(() => {
+        setConfigLoading(true);
+        setConfigError(null);
+        api.get('/parametros')
+            .then(res => {
+                const raw = res.data?.financialConfig ?? res.data?.config ?? res.data;
+                const rawEnabled = raw?.subscriptionFullPriceEnabled ?? raw?.subscription_full_price_enabled;
+                const rawUntilDay = raw?.subscriptionFullPriceUntilDay ?? raw?.subscription_full_price_until_day ?? null;
+                
+                const enabled = rawEnabled === true;
+                const parsedDay = rawUntilDay === null ? null : Number(rawUntilDay);
+                const untilDay = Number.isInteger(parsedDay) && parsedDay! >= 1 && parsedDay! <= 31 ? parsedDay : null;
+
+                if (!('subscriptionFullPriceEnabled' in raw) && !('subscription_full_price_enabled' in raw)) {
+                    console.warn('[Abonos] /parametros no incluyó la política de precio inicial', res.data);
+                }
+
+                setFinancialConfig({
+                    ...raw,
+                    subscriptionFullPriceEnabled: enabled,
+                    subscriptionFullPriceUntilDay: untilDay
+                });
+                setConfigLoading(false);
+            })
+            .catch(err => {
+                console.error("Financial Config Load Error:", err);
+                setConfigError("Error al cargar la configuración financiera.");
+                setConfigLoading(false);
+            });
+    }, []);
+
+    useEffect(() => { calculatePrice(); }, [formData.tipoCochera, formData.exclusivaOverride, formData.tipoVehiculo, pricesMatrix, standardPricesMatrix, financialConfig]);
     useEffect(() => { setErrorMessage(null); }, [formData.numeroCochera, formData.tipoCochera, formData.tipoVehiculo, formData.patente]);
 
     // Sync montoAbonado whenever proratedPrice changes (default: full amount)
@@ -200,16 +266,23 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
         // 4. Update Display to show the actual monthly price for the selected method
         setBasePriceDisplay(selectedMonthlyPrice);
 
-        // 5. Calculate Prorated based on current price matrix
-        const now = new Date();
-        const currentDay = now.getDate();
-        const ultimoDiaMes = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-        const diasRestantes = (ultimoDiaMes - currentDay) + 1;
-        
-        // Prorrateo exacto
-        const exactCalc = (selectedMonthlyPrice / ultimoDiaMes) * diasRestantes;
-
-        setProratedPrice(Math.round(exactCalc));
+        // 5. Calculate Initial Amount using pure function
+        if (financialConfig) {
+            const pricing = calculateInitialSubscriptionAmount({
+                monthlyPrice: selectedMonthlyPrice,
+                currentDate: new Date(),
+                fullPriceEnabled: financialConfig.subscriptionFullPriceEnabled,
+                fullPriceUntilDay: financialConfig.subscriptionFullPriceUntilDay
+            });
+            setProratedPrice(pricing.totalInitial);
+            setRemainingDays(pricing.remainingDays);
+            setIsFullMonthCharge(pricing.isFullMonthCharge);
+        } else {
+            // Fallback while loading or error (Confirm will be disabled anyway)
+            setProratedPrice(0);
+            setRemainingDays(0);
+            setIsFullMonthCharge(false);
+        }
     };
 
     const openCamera = (field: string) => { setActivePhotoField(field); setShowCameraModal(true); };
@@ -327,12 +400,16 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                 spotNumber: finalType === 'Movil' ? '' : formData.numeroCochera,
                 piso: formData.piso,
                 paymentMethod: formData.metodoPago,
-                basePrice: basePriceDisplay,
-                amount: proratedPrice,
-                totalInicial: proratedPrice,
-                montoAbonado: montoAbonado,
-                billingType: formData.tipoFactura,
                 operator: operatorName,
+                billingType: formData.tipoFactura,
+                basePrice: basePriceDisplay,
+                totalInicial: proratedPrice,
+                montoAbonado: exonerateLastDays ? 0 : montoAbonado,
+                exonerateLastDays,
+                initialChargeExemptionReason: exonerateLastDays ? 'LAST_TWO_DAYS_OF_MONTH' : null,
+                photos: {
+                    ...photos
+                },
                 startDate: new Date().toISOString()
             };
 
@@ -345,22 +422,42 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                 expirationText = ed.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
             }
 
-            // ONLY ON SUCCESS: Print Subscription Ticket
-            PrinterService.printSubscriptionTicket({
-                nombreApellido: formData.nombre,
-                dni: formData.dni,
-                patente: formData.patente,
-                marca: formData.marca,
-                modelo: formData.modelo,
-                tipoVehiculo: formData.tipoVehiculo,
-                tipoCochera: formData.tipoCochera,
-                numeroCochera: formData.numeroCochera,
-                metodoPago: formData.metodoPago,
-                basePriceDisplay: basePriceDisplay,
-                proratedPrice: proratedPrice,
-                montoRecibido: montoAbonado,
-                ticket_code: response.data?.ticket_code || null
-            });
+            // Exonerated operation doesn't have a payment ticket to print
+            if (!response.data.exonerated && response.data.ticket_code) {
+                try {
+                    await PrinterService.printSubscriptionTicket({
+                        ...response.data,
+                        customerName: formData.nombre,
+                        customerDni: formData.dni,
+                        plate: formData.patente,
+                        vehicleBrand: formData.marca,
+                        vehicleModel: formData.modelo,
+                        montoCobrado: montoAbonado, // Print the actual amount paid
+                        fechaEmision: new Date().toISOString()
+                    });
+                } catch (printerErr) {
+                    console.warn('[Abonos] Error al imprimir, continuando de todos modos:', printerErr);
+                    toast.warning('Abono creado pero falló la impresión (Verificar impresora local)');
+                }
+            } else if (response.data.exonerated) {
+                // Optionally print a simple informational receipt without financial ticket_code
+                try {
+                    await PrinterService.printSubscriptionTicket({
+                        ...response.data,
+                        ticket_code: 'EXONERADO',
+                        customerName: formData.nombre,
+                        customerDni: formData.dni,
+                        plate: formData.patente,
+                        vehicleBrand: formData.marca,
+                        vehicleModel: formData.modelo,
+                        montoCobrado: 0,
+                        fechaEmision: new Date().toISOString(),
+                        notes: 'ALTA EXONERADA - SIN COBRO INICIAL\nMotivo: últimos dos días del mes'
+                    });
+                } catch (printerErr) {
+                    console.warn('[Abonos] Error al imprimir ticket exonerado, continuando:', printerErr);
+                }
+            }
 
             // only show success on 200 OK (implied by awaiting promise not throwing)
             toast.success(`ALTA DE ABONO EXITOSA. Vencimiento: ${expirationText}`);
@@ -374,6 +471,8 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
 
             setTimeout(() => {
                 setShowSuccessScreen(false);
+                if (onCancel) onCancel();
+                setExonerateLastDays(false); // Reset on success
                 setFormData({
                     tipoCochera: '',
                     numeroCochera: '',
@@ -599,27 +698,51 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
 
                     {/* Summary Section (Conditional) */}
                     {formData.tipoVehiculo && formData.metodoPago && formData.tipoCochera ? (
-                        <div className="mt-auto animate-in fade-in slide-in-from-bottom-2 duration-300">
+                        <div className="mt-auto flex flex-col">
                             <div className="space-y-1.5 bg-gray-900/40 p-3 rounded border border-gray-800/50">
+                                {lastDaysEligibility.isLastTwoDays && (
+                                    <div className="mb-2 bg-gray-900/50 p-2 rounded border border-gray-700/50">
+                                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                                            <input
+                                                type="checkbox"
+                                                className="w-4 h-4 bg-gray-950 border-gray-700 rounded text-emerald-500 focus:ring-emerald-500/50 focus:ring-offset-gray-900"
+                                                checked={exonerateLastDays}
+                                                onChange={(e) => setExonerateLastDays(e.target.checked)}
+                                            />
+                                            <span className="text-[10px] font-bold uppercase tracking-wide text-gray-300">
+                                                Exonerar últimos días
+                                            </span>
+                                        </label>
+                                        {exonerateLastDays && (
+                                            <span className="block mt-1 pl-6 text-[9px] font-medium text-emerald-400">
+                                                Alta sin cobro inicial
+                                            </span>
+                                        )}
+                                    </div>
+                                )}
+
                                 <div className="flex justify-between border-b border-gray-800 pb-1">
                                     <span className="text-[10px] text-gray-500 uppercase font-bold">Mensual</span>
                                     <span className="text-xs text-white font-mono">${basePriceDisplay.toLocaleString()}</span>
                                 </div>
-                                <div className="flex justify-between pt-1">
-                                    <span className="text-[10px] text-gray-500 uppercase font-bold">Restante</span>
-                                    <span className="text-xs text-emerald-400 font-bold">
-                                        {(() => {
-                                            const now = new Date();
-                                            const ultimoDiaMes = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-                                            return Math.max(0, (ultimoDiaMes - now.getDate()) + 1);
-                                        })()}d
-                                    </span>
-                                </div>
+                                {!isFullMonthCharge && (
+                                    <div className="flex justify-between pt-1">
+                                        <span className="text-[10px] text-gray-500 uppercase font-bold">Restante</span>
+                                        <span className="text-xs text-emerald-400 font-bold">
+                                            {remainingDays}d
+                                        </span>
+                                    </div>
+                                )}
                             </div>
 
                             <div className="bg-emerald-900/10 border border-emerald-500/20 p-3 rounded-lg mt-3 text-center">
                                 <span className="block text-[9px] text-emerald-500/70 uppercase font-bold tracking-widest mb-0.5">Total Inicial</span>
-                                <span className="block text-2xl font-black text-white tracking-tighter">${proratedPrice.toLocaleString()}</span>
+                                <span className="block text-2xl font-black text-white tracking-tighter">${(exonerateLastDays ? 0 : proratedPrice).toLocaleString()}</span>
+                                {exonerateLastDays && (
+                                    <span className="block text-[9px] text-emerald-400 mt-1 uppercase font-bold tracking-widest">
+                                        Alta exonerada — sin cobro inicial
+                                    </span>
+                                )}
                             </div>
 
                             {/* Monto a Abonar (Partial Payment Input) */}
@@ -629,27 +752,42 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                                     <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500 font-bold text-sm">$</span>
                                     <input
                                         type="number"
-                                        className={`${inputStyle} pl-7 text-xl font-mono font-bold text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${montoAbonado < proratedPrice ? 'border-amber-500/40 bg-amber-950/15 text-amber-300' : ''}`}
-                                        value={montoAbonado || ''}
+                                        className={`${inputStyle} pl-7 text-xl font-mono font-bold text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${(montoAbonado < proratedPrice && !exonerateLastDays) ? 'border-amber-500/40 bg-amber-950/15 text-amber-300' : ''}`}
+                                        value={exonerateLastDays ? '0' : (montoAbonado || '')}
                                         onChange={e => {
+                                            if (exonerateLastDays) return;
                                             let val = Number(e.target.value) || 0;
                                             if (val > proratedPrice) val = proratedPrice;
                                             setMontoAbonado(val);
                                         }}
+                                        disabled={exonerateLastDays}
                                         min={0}
-                                        max={proratedPrice}
+                                        max={exonerateLastDays ? 0 : proratedPrice}
                                     />
                                 </div>
                             </div>
 
                             {/* Debt Preview for Partial Payment */}
-                            {montoAbonado > 0 && montoAbonado < proratedPrice && (
+                            {montoAbonado > 0 && montoAbonado < proratedPrice && !exonerateLastDays && (
                                 <div className="mt-2 bg-amber-500/10 border border-amber-500/30 rounded-lg p-2.5 animate-in fade-in slide-in-from-top-2">
                                     <span className="block text-[9px] text-amber-400 uppercase font-bold tracking-widest mb-1">Deuda a Crear</span>
                                     <div className="flex justify-between text-xs">
                                         <span className="text-amber-300/70">Saldo pendiente:</span>
                                         <span className="font-mono font-bold text-amber-400">${(proratedPrice - montoAbonado).toLocaleString()}</span>
                                     </div>
+                                </div>
+                            )}
+
+                            {configLoading && (
+                                <div className="mt-3 bg-gray-800/50 p-2 rounded flex items-center justify-center gap-2">
+                                    <span className="text-[10px] text-gray-400 uppercase font-bold animate-pulse">Cargando política...</span>
+                                </div>
+                            )}
+
+                            {configError && (
+                                <div className="mt-3 bg-red-500/10 border border-red-500/50 p-3 rounded flex items-start gap-2">
+                                    <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                                    <span className="text-xs text-red-400 font-medium leading-relaxed">{configError}</span>
                                 </div>
                             )}
 
@@ -660,10 +798,15 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                                 </div>
                             )}
 
-                            <button form="abono-form" type="submit" disabled={loading || isDniDuplicate || !formData.tipoFactura || montoAbonado <= 0}
-                                className={`w-full py-3 text-xs font-black uppercase tracking-widest rounded shadow-lg flex items-center justify-center gap-2 mt-3 transition-all active:scale-95 ${(isDniDuplicate || !formData.tipoFactura || montoAbonado <= 0) ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : montoAbonado < proratedPrice ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-white hover:bg-gray-200 text-black'}`}>
-                                {loading ? '...' : <><Check className="w-3.5 h-3.5" /> {montoAbonado < proratedPrice ? 'Confirmar (Parcial)' : 'Confirmar'}</>}
-                            </button>
+                            {(() => {
+                                const isConfirmDisabled = loading || configLoading || !!configError || isDniDuplicate || !formData.tipoFactura || (!exonerateLastDays && montoAbonado <= 0);
+                                return (
+                                    <button form="abono-form" type="submit" disabled={isConfirmDisabled}
+                                        className={`w-full py-3 text-xs font-black uppercase tracking-widest rounded shadow-lg flex items-center justify-center gap-2 mt-3 transition-all active:scale-95 ${isConfirmDisabled ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : (montoAbonado < proratedPrice && !exonerateLastDays) ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-white hover:bg-gray-200 text-black'}`}>
+                                        {loading ? '...' : <><Check className="w-3.5 h-3.5" /> {exonerateLastDays ? 'Confirmar Alta Exonerada' : (montoAbonado < proratedPrice ? 'Confirmar (Parcial)' : 'Confirmar')}</>}
+                                    </button>
+                                );
+                            })()}
                         </div>
                     ) : (
                         <div className="mt-auto items-center justify-center text-center p-4 border border-dashed border-gray-800/50 rounded flex flex-col gap-2">

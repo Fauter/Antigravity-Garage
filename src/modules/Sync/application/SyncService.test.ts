@@ -104,4 +104,30 @@ describe('SyncService Integration', () => {
         const stored = await repo.findById(vehicleId);
         expect(stored?.plate).toBe('NEW-PLATE');
     });
+
+    describe('mapRemoteToLocalImport', () => {
+        it('debe mapear exit_time null correctamente sin dejar exit_time', () => {
+            const result = (service as any).mapRemoteToLocalImport({
+                id: '123',
+                exit_time: null,
+                vehicle_id: null
+            }, 'Stay');
+
+            expect(result.exitTime).toBeNull();
+            expect(result.exit_time).toBeUndefined();
+            expect(result.vehicleId).toBeNull();
+            expect(result.vehicle_id).toBeUndefined();
+        });
+
+        it('debe mapear exit_time string correctamente', () => {
+            const dateStr = "2026-08-13T18:00:00Z";
+            const result = (service as any).mapRemoteToLocalImport({
+                id: '123',
+                exit_time: dateStr
+            }, 'Stay');
+
+            expect(result.exitTime).toBe(dateStr);
+            expect(result.exit_time).toBeUndefined();
+        });
+    });
 });

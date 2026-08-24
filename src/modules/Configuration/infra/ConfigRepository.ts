@@ -29,10 +29,9 @@ export interface Price {
     method?: string;
 }
 
-export class ConfigRepository {
+export class NeDBConfigRepository {
 
     async getVehicleTypes(garageId: string): Promise<VehicleType[]> {
-        // 1. Try Local DB (NeDB)
         try {
             const types: any[] = await db.vehicleTypes.find({ garageId });
             if (types.length > 0) {
@@ -51,7 +50,6 @@ export class ConfigRepository {
 
         console.warn('⚠️ ConfigRepo: Local Data Empty. Fetching VehicleTypes from Cloud.');
 
-        // 2. Fallback to Cloud
         try {
             const { data, error } = await supabase
                 .from('vehicle_types')
@@ -75,7 +73,6 @@ export class ConfigRepository {
     }
 
     async getTariffs(garageId: string): Promise<Tariff[]> {
-        // 1. Local DB (NeDB)
         try {
             const items: any[] = await db.tariffs.find({ garageId }).sort({ priority: 1 });
             if (items.length > 0) {
@@ -91,7 +88,6 @@ export class ConfigRepository {
             console.error('Local Tariffs Error', err);
         }
 
-        // 2. Fallback to Cloud
         try {
             const { data, error } = await supabase
                 .from('tariffs')
@@ -106,7 +102,7 @@ export class ConfigRepository {
                 name: row.name,
                 garageId: row.garage_id,
                 type: row.type,
-                priority: row.sort_order // Map back to 'priority' for App
+                priority: row.sort_order 
             }));
         } catch (cloudErr: any) {
             console.error('Cloud Tariffs Error', cloudErr.message);
@@ -115,7 +111,6 @@ export class ConfigRepository {
     }
 
     async getPrices(garageId: string, method: string = 'EFECTIVO'): Promise<Price[]> {
-        // 1. Local DB (NeDB)
         try {
             const items: any[] = await db.prices.find({ garageId, method: method.toUpperCase() });
             if (items.length > 0) {
@@ -134,16 +129,11 @@ export class ConfigRepository {
             console.error('Local Prices Error', err);
         }
 
-        // 2. Fallback to Cloud
         try {
             let priceList = 'standard';
-            // Fallback: If method implies electronic but we want standard, we can tweak here. 
-            // Current rule: Anything non-cash is electronic list.
             if (method.toUpperCase() === 'ELECTRONIC' || method.toUpperCase() === 'MERCADO_PAGO' || method.toUpperCase() === 'TRANSFERENCIA' || method.toUpperCase() === 'DEBITO' || method.toUpperCase() === 'CREDITO') {
                 priceList = 'electronic';
             }
-
-            // SECURITY: If frontend says 'EFECTIVO', force standard list.
             if (method.toUpperCase() === 'EFECTIVO') priceList = 'standard';
 
             const { data, error } = await supabase
@@ -169,22 +159,32 @@ export class ConfigRepository {
             return [];
         }
     }
+
     async getParams(garageId?: string): Promise<any> {
         try {
-            // Read from local synced db
             if (garageId) {
                 const configs: any[] = await db.financialConfigs.find({ garageId });
                 if (configs && configs.length > 0) {
+                    configs.sort((a, b) => new Date(b.updatedAt || b.updated_at || 0).getTime() - new Date(a.updatedAt || a.updated_at || 0).getTime());
                     const config = configs[0];
+
+                    const rawEnabled = config.subscriptionFullPriceEnabled ?? config.subscription_full_price_enabled;
+                    const rawUntilDay = config.subscriptionFullPriceUntilDay ?? config.subscription_full_price_until_day ?? null;
+
+                    const subscriptionFullPriceEnabled = rawEnabled === true;
+                    const numericUntilDay = rawUntilDay === null || rawUntilDay === undefined ? null : Number(rawUntilDay);
+                    const subscriptionFullPriceUntilDay = Number.isInteger(numericUntilDay) && numericUntilDay! >= 1 && numericUntilDay! <= 31 ? numericUntilDay : null;
+
                     return {
                         initial_tolerance: config.initialTolerance ?? 15,
                         fractionate_after: config.fractionateAfter ?? 0,
-                        // Legacy support
                         toleranciaInicial: config.initialTolerance ?? 15,
                         fraccionarDesde: config.fractionateAfter ?? 0,
                         recargoDia11: 10,
                         recargoDia22: 20,
-                        permitirCobroAnticipado: false
+                        permitirCobroAnticipado: false,
+                        subscriptionFullPriceEnabled,
+                        subscriptionFullPriceUntilDay
                     };
                 }
             }
@@ -192,7 +192,6 @@ export class ConfigRepository {
             console.error('Local Config Error', err);
         }
 
-        // Fallback to defaults
         return {
             initial_tolerance: 15,
             fractionate_after: 0,
@@ -200,7 +199,23 @@ export class ConfigRepository {
             fraccionarDesde: 0,
             recargoDia11: 10,
             recargoDia22: 20,
-            permitirCobroAnticipado: false
+            permitirCobroAnticipado: false,
+            subscriptionFullPriceEnabled: false,
+            subscriptionFullPriceUntilDay: null
         };
     }
+}
+
+import { StorageEngine } from '../../../infrastructure/database/StorageEngine.js';
+import { SqliteConfigRepository } from './SqliteConfigRepository.js';
+
+export class ConfigRepository {
+    private impl: any;
+    constructor() {
+        this.impl = StorageEngine.getEngine() === 'SQLITE' ? new SqliteConfigRepository() : new NeDBConfigRepository();
+    }
+    async getVehicleTypes(garageId: string): Promise<VehicleType[]> { return this.impl.getVehicleTypes(garageId); }
+    async getTariffs(garageId: string): Promise<Tariff[]> { return this.impl.getTariffs(garageId); }
+    async getPrices(garageId: string, method: string = 'EFECTIVO'): Promise<Price[]> { return this.impl.getPrices(garageId, method); }
+    async getParams(garageId?: string): Promise<any> { return this.impl.getParams(garageId); }
 }

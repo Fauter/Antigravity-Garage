@@ -1,6 +1,8 @@
 import { db } from '../../../infrastructure/database/datastore.js';
 import { QueueService } from '../../Sync/application/QueueService.js';
 import { v4 as uuidv4 } from 'uuid';
+import { StorageEngine } from '../../../infrastructure/database/StorageEngine.js';
+import { SqliteSubscriptionRepository } from './SqliteSubscriptionRepository.js';
 
 export interface Subscription {
     id?: string;
@@ -12,27 +14,21 @@ export interface Subscription {
     type?: string;
     startDate: Date;
     endDate?: Date;
-    active?: boolean; // Schema compatibility
+    active?: boolean; 
     price?: number;
 }
 
-export class SubscriptionRepository {
+export class NeDBSubscriptionRepository {
     private queue = new QueueService();
 
-    constructor() { }
-
     async save(subscription: any): Promise<any> {
-        if (!subscription.id) {
-            subscription.id = uuidv4();
-        }
-
+        if (!subscription.id) subscription.id = uuidv4();
         try {
             await db.subscriptions.update({ id: subscription.id }, subscription, { upsert: true });
         } catch (err) {
             console.error('❌ Repo: Sub Save Failed', err);
             throw err;
         }
-
         await this.queue.enqueue('Subscription', 'UPDATE', subscription);
         return subscription;
     }
@@ -50,9 +46,8 @@ export class SubscriptionRepository {
     }
 
     async findActiveByPlate(plate: string): Promise<any | null> {
-        // Create a regex to match the exact plate ignoring spaces, dashes, and casing
         const normalizedInput = plate.replace(/[\s\-_]/g, '');
-        const plateRegex = new RegExp('^[\\\\s\\\\-_]*' + [...normalizedInput].join('[\\\\s\\\\-_]*') + '[\\\\s\\\\-_]*$', 'i');
+        const plateRegex = new RegExp('^[\\s\\-_]*' + [...normalizedInput].join('[\\s\\-_]*') + '[\\s\\-_]*$', 'i');
         return await db.subscriptions.findOne({ plate: { $regex: plateRegex }, active: true });
     }
 
@@ -63,11 +58,24 @@ export class SubscriptionRepository {
     async delete(id: string): Promise<void> {
         try {
             await db.subscriptions.remove({ id }, { multi: false });
-            // Queue delete operation
             await this.queue.enqueue('Subscription', 'DELETE', { id });
         } catch (err) {
             console.error(`❌ Repo: Sub Delete Failed for ID ${id}`, err);
             throw err;
         }
     }
+}
+
+export class SubscriptionRepository {
+    private impl: any;
+    constructor() {
+        this.impl = StorageEngine.getEngine() === 'SQLITE' ? new SqliteSubscriptionRepository() : new NeDBSubscriptionRepository();
+    }
+    async save(subscription: any): Promise<any> { return this.impl.save(subscription); }
+    async findAll(): Promise<any[]> { return this.impl.findAll(); }
+    async findByCustomerId(customerId: string): Promise<any[]> { return this.impl.findByCustomerId(customerId); }
+    async findById(id: string): Promise<any | null> { return this.impl.findById(id); }
+    async findActiveByPlate(plate: string): Promise<any | null> { return this.impl.findActiveByPlate(plate); }
+    async reset(): Promise<void> { return this.impl.reset(); }
+    async delete(id: string): Promise<void> { return this.impl.delete(id); }
 }

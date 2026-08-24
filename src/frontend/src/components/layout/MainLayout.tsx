@@ -410,9 +410,20 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
         setTimeout(() => setIsConfigModalOpen(false), 800);
     };
 
+    // Helper to format last sync time safely
+    const formatLastSyncTime = () => {
+        // @ts-ignore
+        if (!syncStatus?.lastSuccessfulSyncAt) return 'Nunca';
+        // @ts-ignore
+        const syncDate = new Date(syncStatus.lastSuccessfulSyncAt);
+        if (isNaN(syncDate.getTime())) return 'Nunca';
+        return `Hace ${Math.max(0, Math.round((new Date().getTime() - syncDate.getTime()) / 60000))} min`;
+    };
+
     return (
         <div className="h-full min-h-0 overflow-hidden bg-black text-gray-200 font-sans selection:bg-emerald-500/30 flex flex-col">
-            <SyncOverlay isVisible={isGlobalSyncing} />
+            {/* @ts-ignore */}
+            <SyncOverlay isVisible={isGlobalSyncing && !syncStatus?.state} />
 
             {/* --- HEADER --- */}
             <header className="h-14 border-b border-gray-800 bg-gray-950 flex items-center justify-between px-4 shrink-0 z-50 relative">
@@ -428,23 +439,47 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                         </span>
                     </div>
 
-                    {isGlobalSyncing ? (
+                    {/* @ts-ignore */}
+                    {(syncStatus?.state === 'BACKEND_UNREACHABLE' || syncStatus?.state === 'OFFLINE') ? (
+                        <div className="flex items-center gap-1.5 px-2 py-0.5 bg-gray-900/60 border border-gray-700/50 rounded text-gray-400 font-mono shadow-sm">
+                            <WifiOff className="w-3.5 h-3.5" />
+                            <span className="text-[10px] uppercase tracking-widest pt-0.5">Sin conexión</span>
+                            {/* @ts-ignore */}
+                            {syncStatus?.pending > 0 && <span className="ml-1 px-1.5 py-0.5 bg-gray-800 rounded text-[9px]">{syncStatus.pending} pend.</span>}
+                        </div>
+                    // @ts-ignore
+                    ) : syncStatus?.state === 'HAS_BLOCKED_MUTATIONS' ? (
+                        <div className="flex items-center gap-1.5 px-2 py-0.5 bg-amber-900/20 border border-amber-500/30 rounded text-amber-500 font-mono shadow-sm">
+                            <AlertTriangle className="w-3.5 h-3.5" />
+                            <span className="text-[10px] uppercase tracking-widest pt-0.5">
+                                {/* @ts-ignore */}
+                                {syncStatus.blocked} cambio{syncStatus.blocked > 1 ? 's requieren' : ' requiere'} atención
+                            </span>
+                        </div>
+                    // @ts-ignore
+                    ) : (syncStatus?.isSyncing || isBackgroundSyncing) ? (
                         <div className="flex items-center gap-1.5 px-2 py-0.5 bg-emerald-900/20 border border-emerald-500/30 rounded text-emerald-500 font-mono shadow-sm shadow-emerald-900/20 animate-pulse">
-                            <span className="animate-spin text-[10px]">🔄</span>
-                            <span className="text-[9px] font-bold uppercase tracking-widest pt-0.5">Sinc. Inicial...</span>
+                            <RefreshCw className="w-3 h-3 animate-spin" />
+                            <span className="text-[10px] uppercase tracking-widest pt-0.5">
+                                {/* @ts-ignore */}
+                                {syncStatus?.pending > 0 ? `Sincronizando ${syncStatus.pending} cambios...` : 'Sincronizando...'}
+                            </span>
                         </div>
                     ) : (
                         <div className="flex items-center gap-2 px-2 py-0.5 bg-gray-900/40 border border-emerald-500/20 rounded shadow-sm shadow-emerald-900/10">
                             <span className="text-[10px] hidden sm:inline text-emerald-500/70 font-mono tracking-widest">
-                                {syncTimeStr}
+                                {formatLastSyncTime()}
                             </span>
                             <button
                                 onClick={handleBackgroundSync}
-                                disabled={isBackgroundSyncing}
-                                className={`p-0.5 rounded transition-all ${isBackgroundSyncing ? 'text-emerald-400' : 'text-emerald-500/50 hover:text-emerald-400 hover:bg-emerald-500/10'}`}
+                                // @ts-ignore
+                                disabled={isBackgroundSyncing || syncStatus?.isSyncing}
+                                // @ts-ignore
+                                className={`p-0.5 rounded transition-all ${(isBackgroundSyncing || syncStatus?.isSyncing) ? 'text-emerald-400' : 'text-emerald-500/50 hover:text-emerald-400 hover:bg-emerald-500/10'}`}
                                 title="Forzar sincronización rápida"
                             >
-                                <RefreshCw className={`w-3.5 h-3.5 ${isBackgroundSyncing ? 'animate-spin' : ''}`} />
+                                {/* @ts-ignore */}
+                                <RefreshCw className={`w-3.5 h-3.5 ${(isBackgroundSyncing || syncStatus?.isSyncing) ? 'animate-spin' : ''}`} />
                             </button>
                         </div>
                     )}

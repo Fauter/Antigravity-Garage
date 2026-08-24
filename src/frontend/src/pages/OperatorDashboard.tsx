@@ -3,6 +3,9 @@ import EntryPanel from '../components/access/EntryPanel';
 import PanelSalida from '../components/access/PanelSalida';
 
 const OperatorDashboard: React.FC = () => {
+    if (import.meta.env.DEV) {
+        console.log('[FRONTEND] dashboard mounting');
+    }
     return (
         <div className="flex w-full h-full">
             {/* Left Column: Entry (40%) */}

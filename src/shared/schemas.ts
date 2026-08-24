@@ -160,6 +160,8 @@ export const StaySchema = z.object({
   isPrepaid: z.boolean().default(false),
   prepaidUntil: TimestampSchema.optional().nullable(),
   prepaidTariffId: z.string().optional().nullable(),
+  prepaidAmount: z.number().optional().nullable(),
+  prepaidMovementId: UuidSchema.optional().nullable(),
   createdAt: TimestampSchema.default(() => new Date()),
   updatedAt: TimestampSchema.optional(),
 });
@@ -347,6 +349,8 @@ export const FinancialConfigSchema = z.object({
   ownerId: UuidSchema.optional(),
   initialTolerance: z.number().default(15),
   fractionateAfter: z.number().default(0),
+  subscriptionFullPriceEnabled: z.boolean().default(false),
+  subscriptionFullPriceUntilDay: z.number().nullable().optional(),
   surchargeConfig: z.any().optional(),
   createdAt: TimestampSchema.default(() => new Date()),
   updatedAt: TimestampSchema.default(() => new Date()),

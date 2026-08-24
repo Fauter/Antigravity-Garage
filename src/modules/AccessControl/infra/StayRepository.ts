@@ -32,7 +32,7 @@ export interface Stay {
     prepaidTariffId?: string | null;
 }
 
-export class StayRepository {
+export class NeDBStayRepository {
     private queue: QueueService;
 
     constructor() {
@@ -110,7 +110,7 @@ export class StayRepository {
         return this.mapStay(doc);
     }
 
-    private mapStay(stay: any): Stay {
+    public mapStay(stay: any): Stay {
         return {
             id: stay.id,
             _id: stay._id,
@@ -277,4 +277,38 @@ export class StayRepository {
             return 0;
         }
     }
+}
+import { StorageEngine } from '../../../infrastructure/database/StorageEngine';
+import { SqliteStayRepository } from './SqliteStayRepository';
+
+export class StayRepository {
+    private impl: any;
+
+    constructor() {
+        if (StorageEngine.getEngine() === 'SQLITE') {
+            this.impl = new SqliteStayRepository();
+        } else {
+            this.impl = new NeDBStayRepository();
+        }
+    }
+
+    async save(stay: Stay): Promise<Stay> { return this.impl.save(stay); }
+    async findById(id: string): Promise<Stay | null> {
+        if (typeof this.impl.findById === 'function') {
+            return this.impl.findById(id);
+        }
+        try {
+            const { db } = require('../../../infrastructure/database/datastore');
+            const doc = await db.stays.findOne({ id } as any);
+            return doc ? (this.impl as NeDBStayRepository).mapStay(doc) : null;
+        } catch (e) {
+            return null;
+        }
+    }
+    async findActiveByPlateOrTicket(queryInput: string, garageId?: string): Promise<Stay | null> { return this.impl.findActiveByPlateOrTicket(queryInput, garageId); }
+    async findAllActive(garageId?: string): Promise<Stay[]> { return this.impl.findAllActive(garageId); }
+    async findByTicketCode(ticketCode: string, garageId?: string): Promise<Stay | null> { return this.impl.findByTicketCode(ticketCode, garageId); }
+    async findPendingProcessing(garageId?: string): Promise<Stay[]> { return this.impl.findPendingProcessing(garageId); }
+    async reset(): Promise<void> { return this.impl.reset(); }
+    async closeZombieStays(plate: string, excludeStayId: string, garageId?: string): Promise<number> { return this.impl.closeZombieStays(plate, excludeStayId, garageId); }
 }

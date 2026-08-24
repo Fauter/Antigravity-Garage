@@ -40,7 +40,7 @@ export class PricingEngine {
         exitTime: Date | string,
         paymentMethod: string = 'Efectivo',
         overrideParams?: any
-    ): Promise<number> {
+    ): Promise<{ price: number; isGracePeriod: boolean }> {
         // 1. Validation & Setup
         console.log("--- INICIO CÁLCULO ---");
         const rawType = stay.vehicleType || 'Auto';
@@ -48,8 +48,8 @@ export class PricingEngine {
 
         const start = new Date(stay.entryTime);
         const end = new Date(exitTime);
-        if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
-        if (end <= start) return 0;
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) return { price: 0, isGracePeriod: false };
+        if (end <= start) return { price: 0, isGracePeriod: false };
 
         const durationMs = end.getTime() - start.getTime();
         const minutesTotal = Math.ceil(durationMs / 60000);
@@ -94,7 +94,7 @@ export class PricingEngine {
         const tolerance = params?.initial_tolerance ?? params?.toleranciaInicial ?? 0;
         if (tolerance > 0 && minutesTotal <= tolerance) {
             console.log(`[PricingEngine] Within initial_tolerance (${tolerance}m). Charge is $0.`);
-            return 0;
+            return { price: 0, isGracePeriod: true };
         }
 
         const fractionateFloor = params?.fractionate_after ?? params?.fraccionarDesde ?? 0;
@@ -126,7 +126,7 @@ export class PricingEngine {
 
         if (!vehiclePrices) {
             console.error(`[PricingEngine] Error: El vehículo '${rawType}' no existe en la matriz recibida. Llaves disponibles: ${Object.keys(matrix)}`);
-            return 0;
+            return { price: 0, isGracePeriod: false };
         }
 
         console.log("Contenido de vehiclePrices para este vehículo:", JSON.stringify(vehiclePrices, null, 2));
@@ -204,10 +204,10 @@ export class PricingEngine {
         console.log("Chunks finales enviados a optimización:", JSON.stringify(chunks, null, 2));
         if (chunks.length === 0) console.error("ALERTA: No se generaron chunks. El motor no tiene precios válidos para procesar.");
 
-        if (chunks.length === 0) return 0;
+        if (chunks.length === 0) return { price: 0, isGracePeriod: false };
 
         // 6. Run Optimization (DP)
-        return this.optimizeCost(minutesTotal, chunks);
+        return { price: this.optimizeCost(minutesTotal, chunks), isGracePeriod: false };
     }
 
     /**

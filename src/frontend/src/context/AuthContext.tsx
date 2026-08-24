@@ -22,6 +22,7 @@ interface AuthContextType {
     isAuthenticated: boolean;
     isLoading: boolean;
     isGlobalSyncing: boolean;
+    syncStatus: any;
     operatorName: string;
 }
 
@@ -31,6 +32,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const [user, setUser] = useState<User | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [isGlobalSyncing, setIsGlobalSyncing] = useState(false);
+
+    useEffect(() => {
+        if (import.meta.env.DEV) {
+            console.log('[FRONTEND] Auth state changed:', !!user);
+        }
+    }, [user]);
 
     useEffect(() => {
         // Check session storage for persisted session
@@ -74,6 +81,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
 
     // Global Sync Indicator Polling
+    const [syncStatus, setSyncStatus] = useState<any>({ state: 'ONLINE', isSyncing: false, pending: 0, blocked: 0 });
+
     useEffect(() => {
         let interval: number;
 
@@ -81,16 +90,25 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             if (!user) return;
             try {
                 const res = await api.get('/sync/check');
-                if (res.data.syncing === false) {
-                    setIsGlobalSyncing(false);
+                // Phase 0: new status API support
+                if (res.data.state) {
+                    setSyncStatus(res.data);
+                    setIsGlobalSyncing(res.data.isSyncing);
+                } else {
+                    // Legacy fallback
+                    if (res.data.syncing === false) {
+                        setIsGlobalSyncing(false);
+                    }
                 }
             } catch (err) {
+                setSyncStatus((prev: any) => ({ ...prev, state: 'BACKEND_UNREACHABLE' }));
                 console.error('Failed to check sync', err);
             }
         };
 
-        if (user && isGlobalSyncing) {
-            interval = window.setInterval(checkSync, 2000); // Check every 2 seconds
+        if (user) {
+            // Poll more frequently during initial sync, then back off to every 5 seconds
+            interval = window.setInterval(checkSync, isGlobalSyncing ? 2000 : 5000);
         }
 
         return () => {
@@ -107,7 +125,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }, [user]);
 
     return (
-        <AuthContext.Provider value={{ user, login, logout, isAuthenticated: !!user, isLoading, isGlobalSyncing, operatorName }}>
+        <AuthContext.Provider value={{ user, login, logout, isAuthenticated: !!user, isLoading, isGlobalSyncing, syncStatus, operatorName }}>
             {children}
         </AuthContext.Provider>
     );

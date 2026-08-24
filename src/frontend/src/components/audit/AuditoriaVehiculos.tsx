@@ -5,9 +5,13 @@ import { ShieldCheck } from 'lucide-react';
 
 interface Stay {
     id: string;
+    vehicleId?: string | null;
     plate: string;
     entryTime: string;
+    exitTime?: string | null;
     vehicleType?: string;
+    active?: boolean;
+    isSubscriber?: boolean;
     isPrepaid?: boolean;
     prepaidUntil?: string | null;
 }
@@ -58,7 +62,7 @@ const AuditoriaVehiculos: React.FC = () => {
             });
             // Filter strictly by no exitTime just in case backend returns all
             // Note: Backend /estadias should only return active, but double check
-            return res.data.filter((s: any) => !s.exitTime && s.active !== false);
+            return res.data.filter((s: Stay) => !s.exitTime && s.active !== false);
         },
         refetchInterval: 5000, // Real-time feel
         enabled: !!garageId
@@ -152,17 +156,26 @@ const AuditoriaVehiculos: React.FC = () => {
                                         </td>
                                         <td className="p-4 font-mono font-medium text-emerald-400">
                                             <div>{calculateDuration(stay.entryTime)}</div>
-                                            {stay.isPrepaid && stay.prepaidUntil && (() => {
-                                                const remainingMs = new Date(stay.prepaidUntil).getTime() - new Date().getTime();
-                                                return (
-                                                    <div className={`text-[10px] font-bold mt-1 px-1 rounded inline-block ${remainingMs > 0 ? 'text-violet-400 bg-violet-900/20' : 'text-red-400 bg-red-900/20'}`}>
-                                                        {remainingMs > 0 
-                                                            ? `Anticipado: ${formatRemaining(remainingMs)}` 
-                                                            : `Vencido hace: ${formatExcedido(remainingMs)}`
-                                                        }
+                                            <div className="mt-1 flex flex-wrap gap-1">
+                                                {stay.isSubscriber && (
+                                                    <div className="text-[10px] font-bold px-1.5 py-0.5 rounded inline-block text-sky-400 bg-sky-900/20 border border-sky-500/20">
+                                                        Abonado
                                                     </div>
-                                                );
-                                            })()}
+                                                )}
+                                                {stay.isPrepaid && stay.prepaidUntil && (() => {
+                                                    const d = new Date(stay.prepaidUntil);
+                                                    if (isNaN(d.getTime())) return null;
+                                                    const remainingMs = d.getTime() - new Date().getTime();
+                                                    return (
+                                                        <div className={`text-[10px] font-bold px-1.5 py-0.5 rounded inline-block border ${remainingMs > 0 ? 'text-violet-400 bg-violet-900/20 border-violet-500/20' : 'text-red-400 bg-red-900/20 border-red-500/20'}`}>
+                                                            {remainingMs > 0 
+                                                                ? `Anticipado hasta: ${d.toLocaleDateString('es-AR', {day: '2-digit', month: '2-digit', year: 'numeric'})} ${d.toLocaleTimeString('es-AR', {hour: '2-digit', minute: '2-digit', hour12: false})}` 
+                                                                : `Anticipado vencido hace: ${formatExcedido(remainingMs)}`
+                                                            }
+                                                        </div>
+                                                    );
+                                                })()}
+                                            </div>
                                         </td>
                                         <td className="p-4">
                                             <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-slate-800 border border-slate-700 text-slate-300">

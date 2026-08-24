@@ -6,6 +6,9 @@ import EntryTabQueue from './EntryTabQueue';
 import { Car, CheckCircle, AlertTriangle, Camera, Clock, Lock } from 'lucide-react';
 
 const EntryPanel: React.FC = () => {
+    if (import.meta.env.DEV) {
+        console.log('[FRONTEND] EntryPanel mounting');
+    }
     const {
         plate,
         setPlate,
@@ -31,6 +34,7 @@ const EntryPanel: React.FC = () => {
         turnoTariffs,
         pricesStd,
         pricesElec,
+        resolvePrice,
         promos,
         selectedPromo,
         setSelectedPromo
@@ -136,26 +140,24 @@ const EntryPanel: React.FC = () => {
 
     const isBaseInvalid = !plate || plate.trim().length < 3 || !vehicleType || isLoading || isGlobalSyncing || isSensorBlocked;
     const isPrepaidInvalid = isPrepaid && (!prepaidTariffId || !prepaidPaymentMethod || !prepaidInvoiceType);
-    const isFormInvalid = isBaseInvalid || isPrepaidInvalid;
-    const vehicleName = vehicleTypes.find((v: any) => String(v.id) === String(vehicleType))?.name || 'Auto';
-
     let rawPrice: number | null = null;
     let hasStdPrice = true;
     let hasElecPrice = true;
-    if (prepaidTariffId) {
-        const selectedTariff = turnoTariffs.find((t: any) => String(t.id) === String(prepaidTariffId));
-        if (selectedTariff) {
-            hasStdPrice = (pricesStd[vehicleName]?.[selectedTariff.name] || 0) > 0;
-            hasElecPrice = (pricesElec[vehicleName]?.[selectedTariff.name] || 0) > 0;
-            
-            if (prepaidPaymentMethod) {
-                rawPrice = prepaidPaymentMethod === 'Efectivo' 
-                    ? (pricesStd[vehicleName]?.[selectedTariff.name] || 0)
-                    : (pricesElec[vehicleName]?.[selectedTariff.name] || 0);
-            }
+
+    if (prepaidTariffId && vehicleType) {
+        const stdP = resolvePrice(vehicleType, prepaidTariffId, 'Efectivo');
+        hasStdPrice = stdP !== null && stdP > 0;
+        
+        const elecP = resolvePrice(vehicleType, prepaidTariffId, 'Transferencia');
+        hasElecPrice = elecP !== null && elecP > 0;
+        
+        if (prepaidPaymentMethod) {
+            rawPrice = resolvePrice(vehicleType, prepaidTariffId, prepaidPaymentMethod);
         }
     }
-    const finalPrice = rawPrice !== null ? (selectedPromo ? rawPrice * (1 - selectedPromo.porcentaje / 100) : rawPrice) : null;
+
+    const finalPrice = rawPrice !== null && rawPrice > 0 ? (selectedPromo ? rawPrice * (1 - selectedPromo.porcentaje / 100) : rawPrice) : null;
+    const isFormInvalid = isBaseInvalid || isPrepaidInvalid || (isPrepaid && (finalPrice === null || finalPrice <= 0));
 
     return (
         <div className="flex flex-col h-full bg-gray-900 border-r border-gray-800 font-sans overflow-hidden">
@@ -340,8 +342,8 @@ const EntryPanel: React.FC = () => {
                                         >
                                             <option value="" disabled>Seleccione bloque...</option>
                                             {turnoTariffs.map((t: any) => {
-                                                const pStd = pricesStd[vehicleName]?.[t.name] || 0;
-                                                const pElec = pricesElec[vehicleName]?.[t.name] || 0;
+                                                const pStd = resolvePrice(vehicleType, String(t.id), 'Efectivo') || 0;
+                                                const pElec = resolvePrice(vehicleType, String(t.id), 'Transferencia') || 0;
 
                                                 let isDisabled = false;
                                                 if (prepaidPaymentMethod === 'Efectivo') isDisabled = pStd <= 0;

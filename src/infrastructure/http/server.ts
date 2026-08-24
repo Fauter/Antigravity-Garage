@@ -5,15 +5,33 @@ import cors from 'cors';
 import path from 'path';
 import { db } from '../database/datastore.js';
 import { QueueService } from '../../modules/Sync/application/QueueService.js';
+import { SQLiteManager } from '../database/sqlite/SQLiteManager.js';
+import { MigrationOrchestrator } from '../database/sqlite/MigrationOrchestrator.js';
 
 // Mongoose removed. Zero-Install Arch.
-import { SUPABASE_URL } from '../lib/supabase';
+import { SUPABASE_URL } from '../lib/supabase.js';
 import fs from 'fs';
 
-console.log('🚀 [BACKEND] Proceso de arranque iniciado (Modo: Zero-Install / Offline-First)...');
-console.log(`🔗 Conectado a Supabase en: ${SUPABASE_URL}`);
+export const startServer = async (port?: number) => {
+    // -----------------------------------------------------
+    // Phase 1.5 - Snapshot Consistency (Bloqueo de Tráfico)
+    // -----------------------------------------------------
+    try {
+        console.log('🛡️ Iniciando protección de snapshot pre-cutover...');
+        // Instancia SQLiteManager para aplicar PRAGMAs y versionamiento V1
+        SQLiteManager.getInstance();
+        
+        // Bloqueamos el inicio del servidor hasta que el Shadow sea VALID o falle la validación,
+        // asegurando que no entren requests HTTP que modifiquen NeDB durante el volcado.
+        await MigrationOrchestrator.initializeShadow();
+    } catch (e) {
+        console.error('❌ Error fatal en Shadow Orchestrator:', e);
+    }
+    // -----------------------------------------------------
 
-export const startServer = async () => {
+    console.log('🚀 [BACKEND] Proceso de arranque iniciado (Modo: Zero-Install / Offline-First)...');
+    console.log(`🔗 Conectado a Supabase en: ${SUPABASE_URL}`);
+
     try {
         const app = express();
         const isPackaged = (process as any).resourcesPath !== undefined && !process.env.NODE_ENV;
@@ -133,7 +151,7 @@ export const startServer = async () => {
                 const garageId = (req.headers['x-garage-id'] as string);
                 if (!garageId) return res.status(400).json({ error: 'x-garage-id header required' });
 
-                const allStays: any[] = await db.stays.find({ garageId });
+                const allStays: any[] = await (require('../database/sqlite/SQLiteManager').SQLiteManager.getInstance().getDatabase().prepare("SELECT json_data FROM stays WHERE json_extract(json_data, '$.garageId') = ?").all(garageId).map((r: any) => JSON.parse(r.json_data)));
                 const sorted = allStays
                     .sort((a: any, b: any) => new Date(b.entryTime).getTime() - new Date(a.entryTime).getTime())
                     .slice(0, 20);
@@ -244,7 +262,7 @@ export const startServer = async () => {
                     return res.status(400).json({ error: 'Payload inválido: falta id' });
                 }
 
-                // Sanitizar: eliminar campos null/undefined antes de NeDB
+                // Sanitizar: eliminar campos null/undefined
                 const cleanIncident: any = {};
                 for (const [key, value] of Object.entries(incident)) {
                     if (value !== null && value !== undefined) {
@@ -252,14 +270,12 @@ export const startServer = async () => {
                     }
                 }
 
-                // 1. Guardar en NeDB local
-                await db.incidents.insert(cleanIncident);
-                console.log('✅ [Server] Incidente guardado en NeDB local');
-
-                // 2. Encolar para Supabase — IMPORTANTE: Usar 'Incident' (PascalCase)
-                // para que coincida con el tableMap del SyncService
-                const queue = new QueueService();
-                await queue.enqueue('Incident', 'CREATE', cleanIncident);
+                // Usar Repositorio
+                const { IncidentRepository } = await import('../../modules/Garage/infra/IncidentRepository.js');
+                const repo = new IncidentRepository();
+                await repo.save(cleanIncident);
+                
+                console.log('✅ [Server] Incidente guardado atómicamente');
                 console.log('✅ [Server] Incidente encolado como mutación tipo "Incident"');
 
                 res.status(201).json({ success: true });
@@ -275,7 +291,7 @@ export const startServer = async () => {
                 const garageId = req.headers['x-garage-id'] as string;
                 if (!garageId) return res.status(400).json({ error: 'x-garage-id header required' });
 
-                const promos = await db.promos.find({ garageId, activo: true });
+                const promos = await (require('../database/sqlite/SQLiteManager').SQLiteManager.getInstance().getDatabase().prepare("SELECT json_data FROM promos WHERE json_extract(json_data, '$.garageId') = ? AND json_extract(json_data, '$.activo') = true").all(garageId).map((r: any) => JSON.parse(r.json_data)));
                 res.json(promos);
             } catch (error) {
                 console.error('❌ Error fetching promos:', error);
@@ -350,8 +366,13 @@ export const startServer = async () => {
         });
 
         // Check Sync Status Endpoint
-        app.get('/api/sync/check', (req, res) => {
-            res.json({ syncing: syncService?.isGlobalSyncing || false });
+        app.get('/api/sync/check', async (req, res) => {
+            if (syncService) {
+                const status = await syncService.getStatus();
+                res.json(status);
+            } else {
+                res.json({ state: 'OFFLINE', isSyncing: false, pending: 0, blocked: 0 });
+            }
         });
 
         // ── Hardware Integration Routes ──────────────────────────
@@ -363,11 +384,11 @@ export const startServer = async () => {
 
                 // Search ALL stays with this ticket_code (not just active ones!)
                 // After payment: active=false, exit_authorized=true
-                let candidates: any[] = await db.stays.find({ ticket_code: normalizedCode } as any);
+                let candidates: any[] = await (require('../database/sqlite/SQLiteManager').SQLiteManager.getInstance().getDatabase().prepare("SELECT json_data FROM stays WHERE json_extract(json_data, '$.ticket_code') = ?").all(normalizedCode).map((r: any) => JSON.parse(r.json_data)));
 
                 // Fallback: case-insensitive search
                 if (candidates.length === 0) {
-                    const allStays: any[] = await db.stays.find({});
+                    const allStays: any[] = await (require('../database/sqlite/SQLiteManager').SQLiteManager.getInstance().getDatabase().prepare("SELECT json_data FROM stays").all().map((r: any) => JSON.parse(r.json_data)));
                     candidates = allStays.filter((s: any) =>
                         s.ticket_code && s.ticket_code.toUpperCase() === normalizedCode
                     );
@@ -413,7 +434,7 @@ export const startServer = async () => {
                 const rfidCode = req.params.rfidCode.trim().toUpperCase();
 
                 // ── Step 1: Find vehicle by RFID tag ──
-                const vehicles: any[] = await db.vehicles?.find({ rfid_tag: rfidCode } as any) ?? [];
+                const vehicles: any[] = await (require('../database/sqlite/SQLiteManager').SQLiteManager.getInstance().getDatabase().prepare("SELECT json_data FROM vehicles WHERE json_extract(json_data, '$.rfid_tag') = ?").all(rfidCode).map((r: any) => JSON.parse(r.json_data)));
 
                 if (vehicles.length === 0) {
                     // No vehicle registered with this RFID tag
@@ -427,10 +448,7 @@ export const startServer = async () => {
                 // Subscribers may or may not have an active stay, but their tag always works
                 if (vehicle.is_subscriber === true) {
                     // Check for anti-passback: find any stay with barrier_exit_used
-                    const subscriberStays: any[] = await db.stays.find({
-                        plate,
-                        active: true,
-                    } as any);
+                    const subscriberStays: any[] = await (require('../database/sqlite/SQLiteManager').SQLiteManager.getInstance().getDatabase().prepare("SELECT json_data FROM stays WHERE json_extract(json_data, '$.plate') = ? AND json_extract(json_data, '$.active') = true").all(plate).map((r: any) => JSON.parse(r.json_data)));
 
                     const activeStay = subscriberStays.sort((a: any, b: any) =>
                         new Date(b.entryTime).getTime() - new Date(a.entryTime).getTime()
@@ -452,7 +470,7 @@ export const startServer = async () => {
                 // ── Step 3: Hourly vehicle — find most recent stay (may be closed after payment) ──
                 // After payment: the backend sets active=false, exit_authorized=true
                 // We search ALL stays for this plate, sorted by entry time DESC
-                const allStays: any[] = await db.stays.find({ plate } as any);
+                const allStays: any[] = await (require('../database/sqlite/SQLiteManager').SQLiteManager.getInstance().getDatabase().prepare("SELECT json_data FROM stays WHERE json_extract(json_data, '$.plate') = ?").all(plate).map((r: any) => JSON.parse(r.json_data)));
 
                 if (allStays.length === 0) {
                     return res.json({ authorized: false, reason: 'NOT_FOUND', rfidCode, plate });
@@ -503,11 +521,15 @@ export const startServer = async () => {
                 const stayId = req.params.stayId;
                 const { barrier_exit_used, barrier_exit_at } = req.body;
 
-                await db.stays.update(
-                    { id: stayId } as any,
-                    { $set: { barrier_exit_used, barrier_exit_at: barrier_exit_at ? new Date(barrier_exit_at) : new Date() } } as any,
-                    {} as any
-                );
+                const { StayRepository } = await import('../../modules/AccessControl/infra/StayRepository.js');
+                const stayRepo = new StayRepository();
+                const stay = await stayRepo.findById(stayId);
+
+                if (stay) {
+                    stay.barrier_exit_used = barrier_exit_used;
+                    stay.barrier_exit_at = barrier_exit_at ? new Date(barrier_exit_at) : new Date();
+                    await stayRepo.save(stay);
+                }
 
                 res.json({ success: true, stayId });
             } catch (error: any) {
@@ -523,7 +545,7 @@ export const startServer = async () => {
                 const query: any = { is_pending_processing: true };
                 if (garageId) query.garageId = garageId;
 
-                const pending = await db.stays.find(query);
+                const pending = await (require('../database/sqlite/SQLiteManager').SQLiteManager.getInstance().getDatabase().prepare("SELECT json_data FROM stays WHERE json_extract(json_data, '$.is_pending_processing') = true" + (garageId ? " AND json_extract(json_data, '$.garageId') = ?" : "")).all(garageId ? [garageId] : []).map((r: any) => JSON.parse(r.json_data)));
                 res.json(pending);
             } catch (error: any) {
                 res.status(500).json({ error: error.message });

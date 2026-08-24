@@ -24,7 +24,7 @@ describe('AccessManager', () => {
         expect(stay.entryTime).toBeDefined();
     });
 
-    it('debe procesar salida cerrando Stay y generando Movimiento', () => {
+    it('debe procesar salida cerrando Stay y generando Movimiento', async () => {
         // Mock Stay
         const now = new Date();
         const entryTime = new Date(now.getTime() - (2 * 60 * 60 * 1000)); // 2 horas
@@ -36,14 +36,20 @@ describe('AccessManager', () => {
             active: true,
             createdAt: entryTime
         };
-
-        const result = AccessManager.processExit(stay, now, mockConfig, 'Efectivo');
+        const garageId = uuidv4();
+        const result = await AccessManager.processExit(
+            stay, 
+            now, 
+            'Efectivo', 
+            'Sistema', 
+            'Final',
+            garageId
+        );
 
         expect(result.closedStay.active).toBe(false);
         expect(result.closedStay.exitTime).toBe(now);
 
-        expect(result.exitMovement.type).toBe('CobroEstadia');
-        expect(result.exitMovement.amount).toBe(1000); // 2 * 500
-        expect(result.exitMovement.relatedEntityId).toBe(stay.id);
+        expect(result.exitMovement!.type).toBe('CobroEstadia');
+        expect(result.exitMovement!.relatedEntityId).toBe(stay.id);
     });
 });

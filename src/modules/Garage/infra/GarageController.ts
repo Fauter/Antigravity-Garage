@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { SubscriptionManager } from '../domain/SubscriptionManager';
+import { ConfigRepository } from '../../Configuration/infra/ConfigRepository';
 import { SubscriptionRepository } from './SubscriptionRepository';
 import { CustomerRepository } from './CustomerRepository';
 import { DocumentService } from '../application/DocumentService.js';
@@ -11,6 +12,7 @@ import { db } from '../../../infrastructure/database/datastore.js';
 import { PricingEngine } from '../../Billing/domain/PricingEngine.js';
 import { QueueService } from '../../Sync/application/QueueService.js';
 import { CorrelativeGenerator } from '../../../shared/CorrelativeGenerator';
+import { getLastTwoDaysEligibility } from '../../../shared/utils/dateEligibility.js';
 
 // Debt types eligible for automatic cancellation during cochera release
 const AUTO_CANCELLABLE_DEBT_TYPES: string[] = ['SISTEMA', 'CANON'];
@@ -27,35 +29,43 @@ interface Cochera {
     status?: string;
 }
 
-const queueService = new QueueService();
+
+const getCocheraRepo = async () => {
+    const { CocheraRepository } = await import('./CocheraRepository.js');
+    return new CocheraRepository();
+};
 
 const cocherasDB = {
-    getAll: async (): Promise<any[]> => await db.cocheras.find({}),
-    getById: async (id: string): Promise<any> => await db.cocheras.findOne({ id } as any),
+    getAll: async (): Promise<any[]> => {
+        const repo = await getCocheraRepo();
+        return await repo.findAll();
+    },
+    getById: async (id: string): Promise<any> => {
+        const repo = await getCocheraRepo();
+        return await repo.findById(id);
+    },
     create: async (cochera: any): Promise<any> => {
-        await db.cocheras.insert(cochera);
-        await queueService.enqueue('Cochera', 'CREATE', cochera);
-        return cochera;
+        const repo = await getCocheraRepo();
+        return await repo.save(cochera);
     },
     updateOne: async (query: any, update: any) => {
-        const setUpdate = { ...update };
-        delete setUpdate._id; // prevent NeDB error
-        await db.cocheras.update(query, { $set: setUpdate }, { multi: false });
-
-        // Fetch to send complete payload to sync queue
-        const updated = await db.cocheras.findOne(query);
-        if (updated) {
-            await queueService.enqueue('Cochera', 'UPDATE', updated);
+        const repo = await getCocheraRepo();
+        const existing = await repo.findById(query.id);
+        if (existing) {
+            const newDoc = { ...existing, ...update };
+            await repo.save(newDoc);
+            return newDoc;
         }
-        return updated;
+        return null;
     },
     delete: async (id: string) => {
-        await db.cocheras.remove({ id }, { multi: false });
-        await queueService.enqueue('Cochera', 'DELETE', { id });
+        const repo = await getCocheraRepo();
+        await repo.delete(id);
         return true;
     },
     reset: async () => {
-        await db.cocheras.remove({}, { multi: true });
+        const repo = await getCocheraRepo();
+        await repo.reset();
     }
 };
 
@@ -99,9 +109,9 @@ export class GarageController {
 
         try {
             const [prices, vehicleTypes, tariffs] = await Promise.all([
-                db.prices.find({ garageId, priceList: 'standard' }),
-                db.vehicleTypes.find({ garageId }),
-                db.tariffs.find({ garageId })
+                (new ConfigRepository()).getPrices(garageId, 'standard' ),
+                (new ConfigRepository()).getVehicleTypes(garageId),
+                (new ConfigRepository()).getTariffs(garageId)
             ]);
 
             const vTypeMap = new Map(vehicleTypes.map((v: any) => [v.id.trim(), v.name]));
@@ -525,7 +535,7 @@ export class GarageController {
         let createdSubscriptionId: string | null = null;
 
         try {
-            const { customerData, vehicleData, subscriptionType, paymentMethod, amount, operator, billingType, photos } = req.body;
+            const { customerData, vehicleData, subscriptionType, paymentMethod, amount, operator, billingType, photos, exonerateLastDays } = req.body;
             const garageId = req.headers['x-garage-id'] as string || req.body.garageId;
             if (!garageId) {
                 return res.status(400).json({ error: 'x-garage-id header or body.garageId is required' });
@@ -540,6 +550,16 @@ export class GarageController {
             }
             if (!subscriptionType) {
                 return res.status(400).json({ error: "Tipo de abono requerido." });
+            }
+
+            // Validar exoneración
+            const serverOperationalDate = new Date();
+            const exemptionRequested = exonerateLastDays === true;
+            const eligibility = getLastTwoDaysEligibility(serverOperationalDate);
+            const validatedExemption = exemptionRequested && eligibility.isLastTwoDays;
+
+            if (exemptionRequested && !eligibility.isLastTwoDays) {
+                return res.status(422).json({ error: "La exoneración inicial solamente está disponible durante los últimos dos días del mes." });
             }
 
             // 1. Process Customer (Find or Create)
@@ -680,26 +700,46 @@ export class GarageController {
             const isElectronic = paymentMethod !== 'Efectivo';
             const priceListFilter = isElectronic ? 'electronic' : 'standard';
 
-            const [allVehicleTypes, allTariffs, allPrices] = await Promise.all([
-                db.vehicleTypes.find({ garageId }),
-                db.tariffs.find({ garageId }),
-                db.prices.find({ garageId, priceList: priceListFilter })
+            const [allVehicleTypes, allTariffs, allPrices, financialConfigs] = await Promise.all([
+                (new ConfigRepository()).getVehicleTypes(garageId),
+                (new ConfigRepository()).getTariffs(garageId),
+                (new ConfigRepository()).getPrices(garageId, priceListFilter ),
+                [(await (new ConfigRepository()).getParams(garageId))]
             ]);
+
+            const configs = [...financialConfigs].sort((a: any, b: any) => new Date(b.updatedAt || b.updated_at || 0).getTime() - new Date(a.updatedAt || a.updated_at || 0).getTime());
+            const config = (configs[0] as any) || {};
 
             const vType = allVehicleTypes.find((vt: any) => vt.name === vehicle.type);
             const tType = allTariffs.find((t: any) => t.name === subscriptionType);
 
             let calculatedAmount = 0;
+            let baseMonthlyPrice = 0;
             if (vType && tType) {
                 const pRecord = allPrices.find((p: any) => (p.vehicleTypeId || p.vehicle_type_id) === (vType as any).id && (p.tariffId || p.tariff_id) === (tType as any).id);
                 if (pRecord) {
                     const currentPrice = Number((pRecord as any).amount) || 0;
+                    baseMonthlyPrice = currentPrice;
                     const now = new Date();
                     const currentDay = now.getDate();
                     const ultimoDiaMes = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
                     const diasRestantes = (ultimoDiaMes - currentDay) + 1;
-                    const exactCalc = (currentPrice / ultimoDiaMes) * diasRestantes;
-                    calculatedAmount = Math.round(exactCalc);
+                    
+                    const rawEnabled = config.subscriptionFullPriceEnabled ?? config.subscription_full_price_enabled;
+                    const rawUntilDay = config.subscriptionFullPriceUntilDay ?? config.subscription_full_price_until_day ?? null;
+                    
+                    const fullPriceEnabled = rawEnabled === true;
+                    const numericUntilDay = rawUntilDay === null || rawUntilDay === undefined ? null : Number(rawUntilDay);
+                    const validUntilDay = typeof numericUntilDay === 'number' && Number.isInteger(numericUntilDay) && numericUntilDay >= 1 && numericUntilDay <= 31;
+                    
+                    const isFullMonthCharge = fullPriceEnabled === true && validUntilDay && currentDay <= (numericUntilDay as number);
+                    
+                    if (isFullMonthCharge) {
+                        calculatedAmount = currentPrice;
+                    } else {
+                        const exactCalc = (currentPrice / ultimoDiaMes) * diasRestantes;
+                        calculatedAmount = Math.round(exactCalc);
+                    }
                 }
             }
 
@@ -709,6 +749,15 @@ export class GarageController {
 
             // Enforce server-calculated price unconditionally
             newSubscription.price = calculatedAmount;
+            
+            // Exemption Audit Fields
+            if (validatedExemption) {
+                (newSubscription as any).initialChargeExempted = true;
+                (newSubscription as any).initialChargeExemptionReason = 'LAST_TWO_DAYS_OF_MONTH';
+                (newSubscription as any).initialChargeExemptedAt = new Date();
+                (newSubscription as any).initialChargeExemptedBy = operator || 'Sistema';
+                (newSubscription as any).calculatedInitialAmount = calculatedAmount;
+            }
             // -----------------------------------------------------
 
             const savedSub = await this.subscriptionRepo.save(newSubscription);
@@ -730,88 +779,97 @@ export class GarageController {
 
             // 5. Financial Movement (CRITICAL - TODO O NADA)
             let receiptNumber: string | null = null;
-            try {
-                // Determine actual amount charged (supports partial payment at alta)
-                const montoReal = (req.body.montoAbonado !== undefined && req.body.montoAbonado !== null && Number(req.body.montoAbonado) > 0)
-                    ? Number(req.body.montoAbonado)
-                    : savedSub.price;
+            if (!validatedExemption) {
+                try {
+                    // Determine actual amount charged (supports partial payment at alta)
+                    const montoReal = (req.body.montoAbonado !== undefined && req.body.montoAbonado !== null && Number(req.body.montoAbonado) > 0)
+                        ? Number(req.body.montoAbonado)
+                        : savedSub.price;
 
-                // Validación para evitar montos nulos/ceros en altas de abono
-                if (montoReal === 0 || isNaN(montoReal)) {
-                    throw new Error("Monto a cobrar inválido");
+                    // Validación para evitar montos nulos/ceros en altas de abono
+                    if (montoReal === 0 || isNaN(montoReal)) {
+                        throw new Error("Monto a cobrar inválido");
+                    }
+
+                    // Generate correlative receipt number
+                    receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
+
+                    const isPartialAlta = montoReal < savedSub.price;
+                    await this.movementRepo.save({
+                        id: uuidv4(),
+                        type: 'CobroAbono',
+                        amount: montoReal,
+                        paymentMethod: paymentMethod || 'Efectivo',
+                        timestamp: new Date(),
+                        notes: isPartialAlta
+                            ? `Alta con Pago Parcial ${subscriptionType} - ${vehicle.plate}. Saldo pendiente: $${savedSub.price - montoReal}`
+                            : `Alta Abono ${subscriptionType} - ${vehicle.plate}`,
+                        relatedEntityId: savedSub.id,
+                        plate: vehicle.plate,
+                        garageId: garageId,
+                        operator: operator || 'Sistema',
+                        invoice_type: billingType,
+                        ticket_code: receiptNumber,
+                        createdAt: new Date()
+                    } as any);
+
+                } catch (movementError: any) {
+                    console.error('Fallo al crear Movimiento de Caja. Iniciando Rollback...', movementError);
+                    // ROLLBACK MANUAL (Compensatorio)
+                    if (createdSubscriptionId) {
+                        await this.subscriptionRepo.delete(createdSubscriptionId);
+                        // Cleanup orphaned document files from Storage (best-effort)
+                        DocumentService.cleanupOrphanedDocs(garageId, createdSubscriptionId).catch(() => { });
+                    }
+                    if (createdVehicleId) {
+                        // best effort vehicle rollback omitted for now
+                    }
+                    if (createdCustomerId) {
+                        // best effort customer rollback omitted for now
+                    }
+
+                    throw new Error(`Error de Transacción (Rollback ejecutado): ${movementError.message}`);
                 }
-
-                // Generate correlative receipt number
-                receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
-
-                const isPartialAlta = montoReal < savedSub.price;
-                await this.movementRepo.save({
-                    id: uuidv4(),
-                    type: 'CobroAbono',
-                    amount: montoReal,
-                    paymentMethod: paymentMethod || 'Efectivo',
-                    timestamp: new Date(),
-                    notes: isPartialAlta
-                        ? `Alta con Pago Parcial ${subscriptionType} - ${vehicle.plate}. Saldo pendiente: $${savedSub.price - montoReal}`
-                        : `Alta Abono ${subscriptionType} - ${vehicle.plate}`,
-                    relatedEntityId: savedSub.id,
-                    plate: vehicle.plate,
-                    garageId: garageId,
-                    operator: operator || 'Sistema',
-                    invoice_type: billingType,
-                    ticket_code: receiptNumber,
-                    createdAt: new Date()
-                } as any);
-
-            } catch (movementError: any) {
-                console.error('Fallo al crear Movimiento de Caja. Iniciando Rollback...', movementError);
-                // ROLLBACK MANUAL (Compensatorio)
-                if (createdSubscriptionId) {
-                    await this.subscriptionRepo.delete(createdSubscriptionId);
-                    // Cleanup orphaned document files from Storage (best-effort)
-                    DocumentService.cleanupOrphanedDocs(garageId, createdSubscriptionId).catch(() => { });
-                }
-                if (createdVehicleId) {
-                    try { await (this.vehicleRepo as any).db.delete(createdVehicleId); } catch (e) { }
-                }
-                if (createdCustomerId) {
-                    try { await (this.customerRepo as any).db.delete(createdCustomerId); } catch (e) { }
-                }
-
-                throw new Error(`Error de Transacción (Rollback ejecutado): ${movementError.message}`);
             }
 
             // 5.5. Alta con Deuda: If montoAbonado < totalInicial, create debt for difference
-            const montoAbonado = req.body.montoAbonado;
-            const totalInicial = req.body.totalInicial || savedSub.price;
-            if (montoAbonado !== undefined && montoAbonado !== null && Number(montoAbonado) < Number(totalInicial)) {
-                const diferencia = Number(totalInicial) - Number(montoAbonado);
-                if (diferencia > 0) {
-                    // Override movement amount to actual paid amount
-                    // (The movement was already saved with savedSub.price above, so we need to update it)
-                    // Actually, let's override the price before movement creation next time
-                    // For now: create debt for the difference
-                    const debtId = uuidv4();
-                    await this.debtRepo.save({
-                        id: debtId,
-                        subscriptionId: savedSub.id,
-                        customerId: customer!.id,
-                        garageId: garageId,
-                        amount: Number(totalInicial),
-                        remaining_amount: diferencia,
-                        amount_paid: Number(montoAbonado),
-                        surchargeApplied: 0,
-                        status: 'PENDING',
-                        type: 'CANON',
-                        dueDate: new Date(),
-                        createdAt: new Date(),
-                        updatedAt: new Date()
-                    } as any);
-                    console.log(`📋 [Abonos] Deuda creada por diferencia: $${diferencia} (montoAbonado: $${montoAbonado}, totalInicial: $${totalInicial})`);
+            if (!validatedExemption) {
+                const montoAbonado = req.body.montoAbonado;
+                const totalInicial = req.body.totalInicial || savedSub.price;
+                if (montoAbonado !== undefined && montoAbonado !== null && Number(montoAbonado) < Number(totalInicial)) {
+                    const diferencia = Number(totalInicial) - Number(montoAbonado);
+                    if (diferencia > 0) {
+                        const debtId = uuidv4();
+                        await this.debtRepo.save({
+                            id: debtId,
+                            subscriptionId: savedSub.id,
+                            customerId: customer!.id,
+                            garageId: garageId,
+                            amount: Number(totalInicial),
+                            remaining_amount: diferencia,
+                            amount_paid: Number(montoAbonado),
+                            surchargeApplied: 0,
+                            status: 'PENDING',
+                            type: 'CANON',
+                            dueDate: new Date(),
+                            createdAt: new Date(),
+                            updatedAt: new Date()
+                        } as any);
+                        console.log(`📋 [Abonos] Deuda creada por diferencia: $${diferencia} (montoAbonado: $${montoAbonado}, totalInicial: $${totalInicial})`);
+                    }
                 }
             }
 
-            res.json({ ...savedSub, ticket_code: receiptNumber });
+            const effectiveInitialAmount = validatedExemption ? 0 : calculatedAmount;
+            res.json({ 
+                ...savedSub, 
+                ticket_code: receiptNumber,
+                exonerated: validatedExemption,
+                movementCreated: !validatedExemption,
+                effectiveInitialAmount,
+                calculatedInitialAmount: calculatedAmount,
+                basePrice: baseMonthlyPrice
+            });
         } catch (error: any) {
             console.error('Subscription Create Error:', error);
             res.status(500).json({ error: error.message });
@@ -898,9 +956,9 @@ export class GarageController {
             const allCocheras = await cocherasDB.getAll();
 
             const [prices, vehicleTypes, tariffs] = await Promise.all([
-                db.prices.find({ garageId, priceList: 'standard' }),
-                db.vehicleTypes.find({ garageId }),
-                db.tariffs.find({ garageId })
+                (new ConfigRepository()).getPrices(garageId, 'standard' ),
+                (new ConfigRepository()).getVehicleTypes(garageId),
+                (new ConfigRepository()).getTariffs(garageId)
             ]);
 
             const vTypeMap = new Map(vehicleTypes.map((v: any) => [v.id.trim(), v.name]));
@@ -1075,12 +1133,12 @@ export class GarageController {
             // Apply Dynamic Surcharge based on real Garage settings from Supabase
             let garageSettings: any = {};
             if (garageId) {
-                const garage: any = await db.garages.findOne({ id: garageId });
+                const garage: any = await (require("../../../infrastructure/database/sqlite/SQLiteManager").SQLiteManager.getInstance().getDatabase().prepare("SELECT * FROM garages WHERE id = ?").get(garageId) || {});
                 // Settings usually mapped to 'settings' or 'config', handle both or root
                 garageSettings = garage?.settings || garage?.config || garage || {};
 
                 // Include new threshold-based financial configs
-                const financialConfigs: any = await db.financialConfigs.find({ garageId });
+                const financialConfigs: any = await [(await (new ConfigRepository()).getParams(garageId))];
                 if (financialConfigs && financialConfigs.length > 0) {
                     garageSettings.surchargeConfig = financialConfigs[0].surchargeConfig || financialConfigs[0];
                 }
@@ -1189,9 +1247,9 @@ export class GarageController {
             // ── Load Garage Surcharge Config ──
             let garageSettings: any = {};
             if (garageId) {
-                const garage: any = await db.garages.findOne({ id: garageId });
+                const garage: any = await (require("../../../infrastructure/database/sqlite/SQLiteManager").SQLiteManager.getInstance().getDatabase().prepare("SELECT * FROM garages WHERE id = ?").get(garageId) || {});
                 garageSettings = garage?.settings || garage?.config || garage || {};
-                const financialConfigs: any = await db.financialConfigs.find({ garageId });
+                const financialConfigs: any = await [(await (new ConfigRepository()).getParams(garageId))];
                 if (financialConfigs && financialConfigs.length > 0) {
                     garageSettings.surchargeConfig = financialConfigs[0].surchargeConfig || financialConfigs[0];
                 }
@@ -1541,11 +1599,11 @@ export class GarageController {
                 timestamp: new Date()
             };
 
-            await db.shiftCloses.insert(shiftClose);
+            const { ShiftCloseRepository } = await import('./ShiftCloseRepository.js');
+            const shiftRepo = new ShiftCloseRepository();
+            await shiftRepo.save(shiftClose);
 
-            // Queue for sync
-            const q = new QueueService();
-            await q.enqueue('ShiftClose', 'CREATE', shiftClose);
+            // Queue is handled by repository
 
             res.json({ status: 'closed', message: 'Turno cerrado y rendido', data: shiftClose });
         } catch (error: any) {
@@ -1570,11 +1628,11 @@ export class GarageController {
                 movement_type: movement_type === 'expense' ? 'expense' : 'withdrawal'
             };
 
-            await db.partialCloses.insert(partialClose);
+            const { PartialCloseRepository } = await import('./PartialCloseRepository.js');
+            const partialRepo = new PartialCloseRepository();
+            await partialRepo.save(partialClose);
 
-            // Queue for sync
-            const q = new QueueService();
-            await q.enqueue('PartialClose', 'CREATE', partialClose);
+            // Queue is handled by repository
 
             res.json({ status: 'partial_close', message: 'Retiro parcial registrado', data: partialClose });
         } catch (error: any) {
@@ -1585,7 +1643,7 @@ export class GarageController {
 
     getPartialCloses = async (req: Request, res: Response) => {
         try {
-            const all = await db.partialCloses.find({});
+            const all = await (new (require("./PartialCloseRepository").PartialCloseRepository)()).findAll();
             res.json(all);
         } catch (e: any) {
             res.status(500).json({ error: e.message });
@@ -1594,7 +1652,7 @@ export class GarageController {
 
     getShiftCloses = async (req: Request, res: Response) => {
         try {
-            const all = await db.shiftCloses.find({});
+            const all = await (new (require("./ShiftCloseRepository").ShiftCloseRepository)()).findAll();
             res.json(all);
         } catch (e: any) {
             res.status(500).json({ error: e.message });
@@ -1615,7 +1673,7 @@ export class GarageController {
 
     getFinancialConfig = async (req: Request, res: Response) => {
         try {
-            const configs = await db.financialConfigs.find({});
+            const configs = await [(await (new ConfigRepository()).getParams())];
             if (configs && configs.length > 0) {
                 return res.json(configs[0]);
             }
