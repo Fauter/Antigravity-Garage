@@ -1,15 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { GarageController } from './GarageController';
+import { StorageEngine } from '../../../infrastructure/database/StorageEngine';
 
 // Mocks
-vi.mock('../../../infrastructure/database/datastore.js', async (importOriginal) => {
+vi.mock('../../../infrastructure/database/datastore', async (importOriginal) => {
     return {
+        DATA_DIR: './.data',
         db: {
             vehicleTypes: { find: async () => [{ id: 'vt1', name: 'Auto' }] },
-            tariffs: { find: async () => [{ id: 't1', name: 'Fija' }] },
+            tariffs: { find: vi.fn().mockReturnValue({ sort: vi.fn().mockResolvedValue([{ id: 't1', name: 'Fija' }]) }) },
             prices: { find: async () => [{ vehicleTypeId: 'vt1', tariffId: 't1', amount: 16000 }] },
             financialConfigs: { find: vi.fn().mockResolvedValue([]) },
-            cocheras: { find: async () => [], findOne: async () => null, insert: async () => {}, getAll: async () => [], create: async () => {}, updateOne: async () => {} },
+            cocheras: { find: async () => [], findOne: async () => null, insert: async () => {}, update: async () => {}, getAll: async () => [], create: async () => {}, updateOne: async () => {} },
             clientes: { findOne: async () => null, insert: async () => {}, remove: async () => {} },
             vehiculos: { findOne: async () => null, insert: async () => {}, remove: async () => {} },
             suscripciones: { find: async () => [], insert: async (sub: any) => ({ ...sub, _id: 'sub123' }), remove: async () => {} },
@@ -77,6 +79,7 @@ describe('GarageController - POST /abonos/alta-completa', () => {
     
     beforeEach(() => {
         vi.clearAllMocks();
+        vi.spyOn(StorageEngine, 'getEngine').mockReturnValue('NEDB');
         controller = new GarageController();
 
         mockReq = {

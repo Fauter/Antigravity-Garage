@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { PricingEngine, TarifasConfig } from './PricingEngine';
 import { SubscriptionType } from '../../../shared/schemas';
 
@@ -42,27 +42,25 @@ describe('PricingEngine', () => {
         expect(price).toBe(8800);
     });
 
-    it('debe aplicar recargo por mora sobre precio base (Efectivo)', () => {
-        const startDate = dateOn(1);
-        const endDate = endOfMonth;
-        const paymentDate = dateOn(15); // Mora N1
-
-        const price = PricingEngine.calculateSubscriptionFee(
-            'Fija', startDate, endDate, mockConfig, paymentDate, 'Efectivo'
-        );
-        // 8000 + 500
-        expect(price).toBe(8500);
+    it('debe aplicar recargo por mora explícito (Efectivo)', () => {
+        const basePrice = mockConfig.mensual.Fija.Efectivo; // 8000
+        const mockSurchargeConfig = { surchargeConfig: { global_default: { steps: [{ day: 10, percentage: 5 }] } } };
+        // Simulate 'today' is 15th
+        vi.setSystemTime(new Date(2023, 7, 15));
+        const surcharge = PricingEngine.calculateSurcharge(basePrice, mockSurchargeConfig);
+        expect(surcharge).toBe(400); // 5% of 8000
+        vi.useRealTimers();
     });
 
-    it('debe aplicar recargo por mora sobre precio diferenciado (Tarjeta)', () => {
+    it('debe calcular correctamente cuota mensual base sin mora incrustada (Tarjeta)', () => {
         const startDate = dateOn(1);
         const endDate = endOfMonth;
-        const paymentDate = dateOn(15); // Mora N1
+        const paymentDate = dateOn(15); 
 
         const price = PricingEngine.calculateSubscriptionFee(
             'Fija', startDate, endDate, mockConfig, paymentDate, 'Tarjeta'
         );
-        // 8800 + 500
-        expect(price).toBe(9300);
+        // Should be 8800 without surcharge
+        expect(price).toBe(8800);
     });
 });

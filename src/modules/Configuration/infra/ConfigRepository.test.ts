@@ -1,9 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ConfigRepository } from './ConfigRepository';
+import { StorageEngine } from '../../../infrastructure/database/StorageEngine';
 
 // Mock DB
-vi.mock('../../../infrastructure/database/datastore.js', () => {
+vi.mock('../../../infrastructure/database/datastore', () => {
     return {
+        DATA_DIR: './.data',
         db: {
             financialConfigs: {
                 find: vi.fn()
@@ -15,6 +17,10 @@ vi.mock('../../../infrastructure/database/datastore.js', () => {
 import { db } from '../../../infrastructure/database/datastore.js';
 
 describe('ConfigRepository', () => {
+    beforeEach(() => {
+        vi.spyOn(StorageEngine, 'getEngine').mockReturnValue('NEDB');
+    });
+
     it('debe devolver la configuración más reciente y parsear snake_case y camelCase', async () => {
         const repo = new ConfigRepository();
         

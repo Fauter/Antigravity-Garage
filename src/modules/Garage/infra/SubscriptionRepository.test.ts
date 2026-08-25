@@ -16,41 +16,24 @@ describe('SubscriptionRepository Integration', () => {
     });
 
     it('debe guardar y recuperar suscripción activa por vehiculo', async () => {
-        const sub: Subscription = {
-            id: uuidv4(),
-            customerId: uuidv4(),
-            vehicleId: 'car-active-1',
-            type: 'Fija',
-            startDate: new Date(),
-            price: 100,
-            active: true,
-            createdAt: new Date(),
-            updatedAt: new Date()
-        };
-
+        const sub = { id: 'sub-3', plate: 'car-active', customerId: 'cust-1', active: true, price: 100 };
         await repository.save(sub);
 
-        const found = await repository.findActiveByVehicleId('car-active-1');
+        const found = await repository.findActiveByPlate('car-active');
         expect(found).toBeDefined();
         expect(found?.price).toBe(100);
     });
 
-    it('debe filtrar suscripciones inactivas', async () => {
-        const sub: Subscription = {
-            id: uuidv4(),
-            customerId: uuidv4(),
-            vehicleId: 'car-inactive-1',
-            type: 'Fija',
-            startDate: new Date(),
-            price: 100,
-            active: false, // Inactiva
-            createdAt: new Date(),
-            updatedAt: new Date()
-        };
+    it('debe retornar null si no hay suscripción activa', async () => {
+        const found = await repository.findActiveByPlate('car-nonexistent');
+        expect(found).toBeNull();
+    });
 
+    it('debe filtrar suscripciones inactivas', async () => {
+        const sub = { id: 'sub-4', plate: 'car-inactive', customerId: 'cust-1', active: false, price: 100 };
         await repository.save(sub);
 
-        const found = await repository.findActiveByVehicleId('car-inactive-1');
+        const found = await repository.findActiveByPlate('car-inactive');
         expect(found).toBeNull();
     });
 });

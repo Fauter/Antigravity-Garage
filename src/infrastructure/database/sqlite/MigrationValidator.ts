@@ -57,7 +57,7 @@ export class MigrationValidator {
         const nedbMovements = await NeDBStore.movements.find({});
         const nedbTotalMov = nedbMovements.reduce((acc: number, m: any) => acc + (Number(m.amount) || 0), 0);
         
-        const sqTotalMovRow = this.sqlite.prepare('SELECT SUM(amount) as total FROM movements').get() as {total: number};
+        const sqTotalMovRow = this.sqlite.prepare("SELECT SUM(CAST(json_extract(json_data, '$.amount') AS REAL)) as total FROM movements").get() as {total: number};
         const sqTotalMov = sqTotalMovRow.total || 0;
 
         if (Math.abs(nedbTotalMov - sqTotalMov) > 0.01) {
@@ -69,7 +69,7 @@ export class MigrationValidator {
         const nedbStays = await NeDBStore.stays.find({});
         const nedbTotalStay = nedbStays.reduce((acc: number, m: any) => acc + (Number(m.amountPaid || m.amount_paid) || 0), 0);
         
-        const sqTotalStayRow = this.sqlite.prepare('SELECT SUM(amount_paid) as total FROM stays').get() as {total: number};
+        const sqTotalStayRow = this.sqlite.prepare("SELECT SUM(CAST(COALESCE(json_extract(json_data, '$.amountPaid'), json_extract(json_data, '$.amount_paid')) AS REAL)) as total FROM stays").get() as {total: number};
         const sqTotalStay = sqTotalStayRow.total || 0;
 
         if (Math.abs(nedbTotalStay - sqTotalStay) > 0.01) {
@@ -96,8 +96,11 @@ export class MigrationValidator {
 
         // ID Parity
         const nedbIds = new Set(docs.map((d: any) => d._id));
-        const sqliteRows = this.sqlite.prepare(`SELECT * FROM ${tableName}`).all() as any[];
-        const sqliteIds = new Set(sqliteRows.map(r => r._id));
+        const sqliteRows = this.sqlite.prepare(`SELECT id, json_data FROM ${tableName}`).all() as any[];
+        const sqliteIds = new Set(sqliteRows.map(r => {
+            if (r._id) return r._id;
+            try { return JSON.parse(r.json_data)._id || r.id; } catch(e) { return r.id; }
+        }));
 
         for (const id of nedbIds) {
             if (!sqliteIds.has(id)) {
@@ -113,12 +116,22 @@ export class MigrationValidator {
         }
 
         // Canonical Validation (Hashes)
+        const getRowId = (r: any) => {
+            if (r._id) return r._id;
+            try { return JSON.parse(r.json_data)._id || r.id; } catch(e) { return r.id; }
+        };
+        const sqliteRowsMap = new Map(sqliteRows.map(r => [getRowId(r), r]));
+
         for (const nedbDoc of docs) {
-            const sqliteDoc = sqliteRows.find(r => r._id === nedbDoc._id);
-            const nedbHash = this.hashDocument(this.canonicalizeNeDB(nedbDoc));
-            const sqliteHash = this.hashDocument(this.canonicalizeSQLite(sqliteDoc));
+            const sqliteDoc = sqliteRowsMap.get(nedbDoc._id);
+            const canonicalNeDB = this.canonicalizeNeDB(nedbDoc);
+            const canonicalSQLite = this.canonicalizeSQLite(sqliteDoc);
+            const nedbHash = this.hashDocument(canonicalNeDB);
+            const sqliteHash = this.hashDocument(canonicalSQLite);
 
             if (nedbHash !== sqliteHash) {
+                console.error('NeDB Canonical:', canonicalNeDB);
+                console.error('SQLite Canonical:', canonicalSQLite);
                 this.discrepancies.push(`Hash mismatch en ${tableName} para _id=${nedbDoc._id}. NeDB=${nedbHash}, SQLite=${sqliteHash}`);
                 return false;
             }
@@ -157,12 +170,10 @@ export class MigrationValidator {
         
         Object.keys(row).forEach(k => {
             if (k === 'json_data') return;
-            if (row[k] === null) return; // SQLite nulls -> undefined in NeDB
+            if (row[k] === null) return; 
+            if (k === 'id' && !reconstructed.id && reconstructed._id) return; 
             
-            // camelCase
             const camelKey = k.replace(/_([a-z])/g, g => g[1].toUpperCase());
-            // SQLite almacena fechas ISO o enteros para booleanos
-            // En nuestra reconstrucción, devolvemos el valor crudo porque json_data tiene los originales no normalizados
             if (reconstructed[camelKey] === undefined) {
                 reconstructed[camelKey] = row[k];
             }
@@ -170,7 +181,7 @@ export class MigrationValidator {
 
         const clean: any = {};
         Object.keys(reconstructed).sort().forEach(k => {
-            if (reconstructed[k] !== undefined && reconstructed[k] !== null) {
+            if (reconstructed[k] !== undefined) {
                 clean[k] = reconstructed[k];
             }
         });

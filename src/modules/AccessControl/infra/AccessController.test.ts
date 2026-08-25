@@ -4,12 +4,16 @@ import { AccessController } from './AccessController';
 import { db } from '../../../infrastructure/database/datastore';
 import Datastore from '@seald-io/nedb';
 
+import { StorageEngine } from '../../../infrastructure/database/StorageEngine';
+
 describe('AccessController - Prepaid Validation', () => {
     let controller: AccessController;
     let req: any;
     let res: any;
 
     beforeEach(() => {
+        vi.spyOn(StorageEngine, 'getEngine').mockReturnValue('NEDB');
+        
         // Use in-memory DBs to prevent EPERM lock errors
         db.tariffs = new Datastore({ inMemoryOnly: true });
         db.prices = new Datastore({ inMemoryOnly: true });
@@ -68,7 +72,7 @@ describe('AccessController - Prepaid Validation', () => {
 
         await controller.registerEntry(req, res);
         expect(res.status).toHaveBeenCalledWith(400);
-        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('no posee un precio válido') }));
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('La tarifa anticipada no existe o no es de tipo turno.') }));
     });
 
     it('should allow prepaid entry if valid price exists', async () => {
@@ -76,7 +80,7 @@ describe('AccessController - Prepaid Validation', () => {
         req.body.prepaidPaymentMethod = 'Efectivo';
         req.body.prepaidInvoiceType = 'B';
 
-        await new Promise((resolve, reject) => db.tariffs.insert({ id: 't1', garageId: 'g1', name: 'Promo', hours: 1 }, (err) => err ? reject(err) : resolve(null)));
+        await new Promise((resolve, reject) => db.tariffs.insert({ id: 't1', garageId: 'g1', name: 'Promo', hours: 1, type: 'turno' }, (err) => err ? reject(err) : resolve(null)));
         await new Promise((resolve, reject) => db.prices.insert({ garageId: 'g1', tariffId: 't1', vehicleTypeId: 'v1', priceList: 'standard', amount: 1500 }, (err) => err ? reject(err) : resolve(null)));
 
         await controller.registerEntry(req, res);

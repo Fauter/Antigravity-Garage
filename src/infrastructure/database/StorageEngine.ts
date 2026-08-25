@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { DATA_DIR } from './datastore'; // or define it here if needed
+import { DATA_DIR } from './datastore.js';
 
 export type EngineState = 'NEDB' | 'CUTOVER_PREPARED' | 'SQLITE';
 

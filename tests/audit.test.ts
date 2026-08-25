@@ -3,6 +3,7 @@ import { AccessController } from '../src/modules/AccessControl/infra/AccessContr
 import { db } from '../src/infrastructure/database/datastore';
 
 vi.mock('../src/infrastructure/database/datastore', () => ({
+    DATA_DIR: './.data',
     db: {
         vehicles: {
             find: vi.fn()

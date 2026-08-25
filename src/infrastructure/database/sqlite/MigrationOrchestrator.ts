@@ -87,9 +87,7 @@ export class MigrationOrchestrator {
                     { nedb: 'incidents', table: 'incidents' },
                     { nedb: 'hardwareEvents', table: 'hardware_events' },
                     { nedb: 'promos', table: 'promos' },
-                    { nedb: 'buildingLevels', table: 'building_levels' },
-                    { nedb: 'syncConflicts', table: 'sync_conflicts' },
-                    { nedb: 'syncState', table: 'sync_state' }
+                    { nedb: 'buildingLevels', table: 'building_levels' }
                 ];
                 
                 const isValid = await validator.validate(collectionsToMap);

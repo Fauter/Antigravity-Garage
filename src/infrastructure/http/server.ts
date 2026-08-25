@@ -113,7 +113,7 @@ export const startServer = async (port?: number) => {
         const authController = safeInstantiate<any>(AuthControllerClass, 'AuthController');
 
         // Mount Configuration Routes
-        if (configRoutes) app.use('/api', configRoutes as any);
+        if (configRoutes && typeof configRoutes === 'function') app.use('/api', configRoutes); else if (configRoutes && typeof configRoutes.default === 'function') app.use('/api', configRoutes.default); else console.error('Failed to load configRoutes:', configRoutes);
 
         // --- Route Bindings with Safe Guards ---
 

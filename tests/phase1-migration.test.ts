@@ -5,6 +5,7 @@ import { MigrationValidator } from '../src/infrastructure/database/sqlite/Migrat
 import { SQLiteManager } from '../src/infrastructure/database/sqlite/SQLiteManager';
 import fs from 'fs';
 import path from 'path';
+import { MigrationOrchestrator } from '../src/infrastructure/database/sqlite/MigrationOrchestrator';
 import { DATA_DIR } from '../src/infrastructure/database/datastore';
 
 describe('Phase 1 SQLite Shadow Migration', () => {
@@ -49,6 +50,7 @@ describe('Phase 1 SQLite Shadow Migration', () => {
             { nedb: 'stays', table: 'stays' },
             { nedb: 'movements', table: 'movements' }
         ]);
+        if (!isValid) console.error('TEST B Discrepancies:', validator.getDiscrepancies());
         expect(isValid).toBe(true);
         expect(validator.getDiscrepancies().length).toBe(0);
     });
@@ -56,7 +58,7 @@ describe('Phase 1 SQLite Shadow Migration', () => {
     it('TEST C: Financial Checksum Detection (Modifying Shadow DB)', async () => {
         const sqlite = SQLiteManager.getInstance().getDatabase();
         // Modify amount directly in sqlite to break parity
-        sqlite.exec("UPDATE movements SET amount = 9999 WHERE id = 'mov_1'");
+        sqlite.exec("UPDATE movements SET json_data = json_patch(json_data, '{\"amount\": 9999.99}')");
         
         const isStillValid = await validator.validate([
             { nedb: 'movements', table: 'movements' }

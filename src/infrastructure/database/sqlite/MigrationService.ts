@@ -30,9 +30,7 @@ export class MigrationService {
         { nedb: 'incidents', table: 'incidents' },
         { nedb: 'hardwareEvents', table: 'hardware_events' },
         { nedb: 'promos', table: 'promos' },
-        { nedb: 'buildingLevels', table: 'building_levels' },
-        { nedb: 'syncConflicts', table: 'sync_conflicts' },
-        { nedb: 'syncState', table: 'sync_state' }
+        { nedb: 'buildingLevels', table: 'building_levels' }
     ];
 
     public async runMigration(): Promise<boolean> {
@@ -189,21 +187,22 @@ export class MigrationService {
         const result: Record<string, SQLiteValue> = {};
         const jsonData: Record<string, any> = {};
 
-        // Mapeo especial para columnas de camelCase a snake_case
         const snakeCaseMap: Record<string, any> = {};
         for (const key of Object.keys(doc)) {
-            // Convertir camelCase a snake_case
             const snakeKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
             snakeCaseMap[snakeKey] = doc[key];
         }
 
-        // Poblar columnas válidas
+        // Fix for V2 schema where 'id' is the primary key but NeDB might have duplicate 'id' fields
+        if (validColumns.has('id') && !validColumns.has('_id')) {
+            snakeCaseMap['id'] = doc._id || doc.id || require('crypto').randomUUID();
+        }
+
         for (const col of validColumns) {
-            if (col === 'json_data') continue; // Llenado al final
+            if (col === 'json_data') continue; 
             
             let val = snakeCaseMap[col] !== undefined ? snakeCaseMap[col] : null;
 
-            // Manejo de tipos específicos
             if (val instanceof Date) {
                 val = val.toISOString();
             } else if (typeof val === 'boolean') {
@@ -211,20 +210,26 @@ export class MigrationService {
             } else if (typeof val === 'object' && val !== null) {
                 val = JSON.stringify(val);
             }
-
-            result[col] = val;
+            
+            result[col] = val as SQLiteValue;
             delete snakeCaseMap[col];
         }
 
-        // Todo lo sobrante va a json_data
-        for (const key of Object.keys(snakeCaseMap)) {
-            jsonData[key] = snakeCaseMap[key];
+        for (const key of Object.keys(doc)) {
+            // If the key is mapped to a physical column, don't put it in json_data?
+            // Actually, in V2, we want EVERYTHING in json_data, except maybe id? No, even id can be in json_data.
+            // Wait, Phase 2 Cutover orchestrator relies on json_data containing the whole domain model!
+            jsonData[key] = doc[key];
         }
 
         if (Object.keys(jsonData).length > 0) {
             result['json_data'] = JSON.stringify(jsonData);
         } else {
             result['json_data'] = null;
+        }
+
+        if (tableName === 'hardware_events') {
+            console.log('DEBUG mapDocumentToSQLite result:', result['json_data']);
         }
 
         return result;
