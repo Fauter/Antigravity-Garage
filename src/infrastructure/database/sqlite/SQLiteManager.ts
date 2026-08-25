@@ -59,10 +59,19 @@ export class SQLiteManager {
         return this.db;
     }
 
+    public createBackup(destinationPath: string): void {
+        console.log(`🗄️ SQLite: Creating safe WAL-compatible backup at ${destinationPath}`);
+        if (fs.existsSync(destinationPath)) {
+            fs.unlinkSync(destinationPath);
+        }
+        // VACUUM INTO safely creates a consistent copy including the current WAL state
+        this.db.exec(`VACUUM INTO '${destinationPath}';`);
+    }
+
     private applyMigrations() {
         const currentVersionResult = this.db.prepare('PRAGMA user_version;').get() as { user_version: number };
         const currentVersion = currentVersionResult.user_version;
-        const targetVersion = 2; // Phase 2 V2 Schema
+        const targetVersion = 3; // Phase 3 V3 Schema (Attachments)
 
         console.log(`🗄️ SQLite: Versión actual del Schema = ${currentVersion}, Esperado = ${targetVersion}`);
 
@@ -76,6 +85,18 @@ export class SQLiteManager {
                 const tablesInfo = this.db.prepare("SELECT count(*) as count FROM sqlite_master WHERE type='table' AND name='garages'").get() as any;
                 
                 if (tablesInfo.count === 0) {
+                    if (StorageEngine.getEngine() === 'SQLITE') {
+                        if (process.env.VITEST && !process.env.TEST_DISASTER) {
+                            console.warn('⚠️ [TEST] Bypassing Disaster Recovery Safety Stop in vitest.');
+                        } else {
+                            // GATE 2: DISASTER DETECTED
+                            // We are in SQLITE mode, but the tables are completely missing.
+                            // This means garageia.sqlite was deleted or corrupted and recreated empty by node:sqlite.
+                            console.error('🚨 [DISASTER RECOVERY] SQLITE mode active but garageia.sqlite is empty or missing! SAFETY STOP.');
+                            throw new Error('SAFETY STOP: Local database missing but engine is SQLITE.');
+                        }
+                    }
+
                     // 1. FRESH INSTALL (or completely fresh cutover db)
                     this.db.exec(FRESH_SCHEMA);
                     this.db.exec(`PRAGMA user_version = ${targetVersion};`);
@@ -91,14 +112,37 @@ export class SQLiteManager {
                 this.runMigration1to2();
             }
 
+            if (currentVersion < 3) {
+                this.runMigration2to3();
+            }
+
             this.db.exec(`PRAGMA user_version = ${targetVersion};`);
             this.db.exec('COMMIT;');
-            console.log('🗄️ SQLite: Migración de schema exitosa a V2 sin pérdida de datos.');
+            console.log('🗄️ SQLite: Migración de schema exitosa a V3 sin pérdida de datos.');
         } catch (error) {
             this.db.exec('ROLLBACK;');
             console.error('❌ SQLite: Error ejecutando migraciones de schema:', error);
             throw error;
         }
+    }
+
+    private runMigration2to3() {
+        console.log('🗄️ Ejecutando Migración V2 -> V3 (Attachments Queue)...');
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS attachments_outbox (
+                id TEXT PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                field_name TEXT NOT NULL,
+                local_path TEXT NOT NULL,
+                remote_bucket TEXT NOT NULL,
+                remote_path TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempts INTEGER DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT
+            );
+        `);
     }
 
     private runMigration1to2() {

@@ -1,10 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
+import fs from 'fs';
+import path from 'path';
 import { AccessController } from './AccessController';
 import { db } from '../../../infrastructure/database/datastore';
 import Datastore from '@seald-io/nedb';
-
 import { StorageEngine } from '../../../infrastructure/database/StorageEngine';
+
+const MARKER_PATH = path.join(process.cwd(), '.data', 'storage-engine.json');
 
 describe('AccessController - Prepaid Validation', () => {
     let controller: AccessController;
@@ -12,12 +15,17 @@ describe('AccessController - Prepaid Validation', () => {
     let res: any;
 
     beforeEach(() => {
+        // Force NEDB to avoid SQLite Singleton persistence issues between tests
+        if (fs.existsSync(MARKER_PATH)) {
+            fs.unlinkSync(MARKER_PATH);
+        }
         vi.spyOn(StorageEngine, 'getEngine').mockReturnValue('NEDB');
         
         // Use in-memory DBs to prevent EPERM lock errors
         db.tariffs = new Datastore({ inMemoryOnly: true });
         db.prices = new Datastore({ inMemoryOnly: true });
         db.garages = new Datastore({ inMemoryOnly: true });
+        db.stays = new Datastore({ inMemoryOnly: true });
 
         // Mock repositories
         const mockStayRepo = { save: vi.fn().mockResolvedValue({ id: 'stay-1' }) };

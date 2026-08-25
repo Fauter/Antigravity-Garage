@@ -5,6 +5,7 @@ import { MovementRepository } from '../../Billing/infra/MovementRepository';
 import { VehicleRepository } from '../../Garage/infra/VehicleRepository';
 import { CustomerRepository } from '../../Garage/infra/CustomerRepository';
 import { SubscriptionRepository } from '../../Garage/infra/SubscriptionRepository';
+import { AttachmentService } from '../../Sync/application/AttachmentService';
 
 import { JsonDB } from '../../../infrastructure/database/json-db';
 import { db } from '../../../infrastructure/database/datastore';
@@ -234,15 +235,28 @@ export class AccessController {
             if (garageId) (entry as any).garageId = garageId;
 
             // 🔓 HARDWARE: Explicitly reset/ensure hardware fields for new entry
-            Object.assign(entry as any, {
-                exit_authorized: false,
-                barrier_exit_used: false,
-                is_pending_processing: false,
-                anpr_suggested_plate: null,
-                entry_photo_path: req.body.photoPath || null,
-                exit_authorized_at: null,
-                barrier_exit_at: null
-            });
+              // --- ATTACHMENTS (Phase F) ---
+              let processedPhotoPath = req.body.photoPath || null;
+              if (processedPhotoPath && processedPhotoPath.startsWith('data:image')) {
+                  processedPhotoPath = await AttachmentService.processBase64Attachment(
+                      'stays',
+                      entry.id,
+                      'entry_photo_path',
+                      processedPhotoPath,
+                      'garage-photos',
+                      `${garageId}/${entry.id}_entry.jpg`
+                  );
+              }
+
+              Object.assign(entry as any, {
+                  exit_authorized: false,
+                  barrier_exit_used: false,
+                  is_pending_processing: false,
+                  anpr_suggested_plate: null,
+                  entry_photo_path: processedPhotoPath,
+                  exit_authorized_at: null,
+                  barrier_exit_at: null
+              });
 
             if (prepaidMovement) {
                 prepaidMovement.relatedEntityId = entry.id;

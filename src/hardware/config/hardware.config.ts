@@ -45,6 +45,7 @@ export function loadHardwareConfig(): HardwareConfig {
             // Deep merge with defaults to handle missing keys after upgrades
             return {
                 mockMode: parsed.mockMode ?? DEFAULT_HARDWARE_CONFIG.mockMode,
+                adminPinHash: parsed.adminPinHash ?? DEFAULT_HARDWARE_CONFIG.adminPinHash,
                 barrier: {
                     ...DEFAULT_HARDWARE_CONFIG.barrier,
                     ...parsed.barrier,

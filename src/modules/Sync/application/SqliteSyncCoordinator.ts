@@ -20,7 +20,12 @@ export class SqliteSyncCoordinator {
     async getStatus() {
         const db = SQLiteManager.getInstance().getDatabase();
         const pending = db.prepare(`SELECT count(*) as count FROM outbox_events WHERE status = 'PENDING'`).get() as any;
+        const retry = db.prepare(`SELECT count(*) as count FROM outbox_events WHERE status = 'RETRY'`).get() as any;
         const blocked = db.prepare(`SELECT count(*) as count FROM outbox_events WHERE status = 'BLOCKED'`).get() as any;
+
+        // Attachments
+        const attachPending = db.prepare(`SELECT count(*) as count FROM attachments_outbox WHERE status = 'PENDING' OR status = 'RETRY'`).get() as any;
+        const attachFailed = db.prepare(`SELECT count(*) as count FROM attachments_outbox WHERE status = 'FAILED'`).get() as any;
         
         let state = 'ONLINE';
         if (!this.backendReachable) state = 'BACKEND_UNREACHABLE';
@@ -31,7 +36,10 @@ export class SqliteSyncCoordinator {
             state,
             isSyncing: this.isSyncing || this.isGlobalSyncing,
             pending: pending.count,
+            retry: retry.count,
             blocked: blocked.count,
+            attachmentsPending: attachPending.count,
+            attachmentsFailed: attachFailed.count,
             lastSuccessfulSyncAt: this.lastSuccessfulSyncAt,
             lastError: this.lastError
         };
@@ -41,7 +49,78 @@ export class SqliteSyncCoordinator {
         if (this.syncInterval) return;
         this.syncInterval = setInterval(async () => {
             await this.processOutbox();
+            await this.processAttachments();
         }, 10000);
+    }
+
+    async processAttachments() {
+        if (!this.backendReachable) return; // Wait until network is up
+
+        const db = SQLiteManager.getInstance().getDatabase();
+        try {
+            const events = db.prepare(`SELECT * FROM attachments_outbox WHERE status IN ('PENDING', 'RETRY') ORDER BY created_at ASC LIMIT 10`).all() as any[];
+            if (events.length === 0) return;
+
+            const fs = require('fs');
+
+            for (const event of events) {
+                try {
+                    if (!fs.existsSync(event.local_path)) {
+                        db.prepare(`UPDATE attachments_outbox SET status = 'FAILED', last_error = 'File missing' WHERE id = ?`).run(event.id);
+                        continue;
+                    }
+
+                    const buffer = fs.readFileSync(event.local_path);
+                    
+                    // Supabase Storage Upload
+                    const { data, error } = await supabase.storage
+                        .from(event.remote_bucket)
+                        .upload(event.remote_path, buffer, {
+                            upsert: true,
+                            contentType: 'image/jpeg'
+                        });
+
+                    if (error) throw error;
+
+                    // Update local entity to use remote URL
+                    const { data: publicUrlData } = supabase.storage.from(event.remote_bucket).getPublicUrl(event.remote_path);
+                    const publicUrl = publicUrlData.publicUrl;
+
+                    // Get the domain entity and update its json_data
+                    const entity = db.prepare(`SELECT * FROM ${event.entity_type} WHERE id = ?`).get(event.entity_id) as any;
+                    if (entity) {
+                        const jsonData = JSON.parse(entity.json_data || '{}');
+                        jsonData[event.field_name] = publicUrl;
+                        
+                        // We also update the corresponding outbox_event payload if it exists and is PENDING
+                        // so the cloud DB gets the public URL, not the file:// path
+                        db.prepare(`UPDATE ${event.entity_type} SET json_data = ? WHERE id = ?`).run(JSON.stringify(jsonData), event.entity_id);
+                        
+                        const pendingOutbox = db.prepare(`SELECT * FROM outbox_events WHERE entity_type = ? AND entity_id = ? AND status = 'PENDING'`).get(event.entity_type, event.entity_id) as any;
+                        if (pendingOutbox) {
+                            const payload = JSON.parse(pendingOutbox.payload || '{}');
+                            if (payload.record) {
+                                payload.record[event.field_name] = publicUrl;
+                                db.prepare(`UPDATE outbox_events SET payload = ? WHERE sequence = ?`).run(JSON.stringify(payload), pendingOutbox.sequence);
+                            }
+                        }
+                    }
+
+                    // ACK
+                    db.prepare(`UPDATE attachments_outbox SET status = 'ACKED', updated_at = ? WHERE id = ?`).run(new Date().toISOString(), event.id);
+
+                    // Delete local file to save space? We can keep it or delete it.
+                    // If we delete it, frontend has to re-download.
+                    // For now, let's keep it, or maybe delete it after 7 days like outbox GC.
+                } catch (e: any) {
+                    console.error(`❌ SyncCoordinator: Failed to upload attachment ${event.id}`, e);
+                    db.prepare(`UPDATE attachments_outbox SET status = 'RETRY', attempts = attempts + 1, updated_at = ? WHERE id = ?`).run(new Date().toISOString(), event.id);
+                    break;
+                }
+            }
+        } catch (error) {
+            console.error('❌ SyncCoordinator: Attachments loop crash', error);
+        }
     }
 
     async processOutbox() {

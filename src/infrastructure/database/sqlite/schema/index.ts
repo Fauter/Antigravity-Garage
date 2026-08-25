@@ -77,6 +77,21 @@ CREATE TABLE IF NOT EXISTS legacy_quarantine (
     canonical_domain_id TEXT,
     source_hash TEXT
 );
+
+-- Attachments Queue (Phase 3.1 F)
+CREATE TABLE IF NOT EXISTS attachments_outbox (
+    id TEXT PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    field_name TEXT NOT NULL,
+    local_path TEXT NOT NULL,
+    remote_bucket TEXT NOT NULL,
+    remote_path TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempts INTEGER DEFAULT 0,
+    created_at TEXT,
+    updated_at TEXT
+);
 `;
 
 export const DOMAIN_TABLES = [

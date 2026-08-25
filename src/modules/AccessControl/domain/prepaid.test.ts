@@ -6,6 +6,14 @@ import { v4 as uuidv4 } from 'uuid';
 describe('Flujo de Pago Anticipado', () => {
     beforeEach(() => {
         vi.useFakeTimers();
+        // Mock DB to prevent EPERM errors
+        db.financialConfigs = {
+            find: vi.fn().mockResolvedValue([{ 
+                id: '1', 
+                fractionToleranceMins: 15,
+                prepaidToleranceMins: 30
+            }])
+        } as any;
     });
 
     test('Regresión GOR242: Crear estadía anticipada con validación correcta (Atomicidad y Precio)', async () => {

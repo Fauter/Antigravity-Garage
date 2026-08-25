@@ -195,12 +195,14 @@ export interface HardwareConfig {
     scanner: {
         driver: ScannerDriverType;
     };
+    adminPinHash?: string;
     reconnect: ReconnectConfig;
 }
 
 /** Default config: everything in Mock mode */
 export const DEFAULT_HARDWARE_CONFIG: HardwareConfig = {
     mockMode: true,
+    adminPinHash: undefined,
     barrier: { driver: 'MOCK' },
     camera: { driver: 'MOCK' },
     scanner: { driver: 'MOCK' },

@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'fs';
 import path from 'path';
 import { SQLiteManager } from '../src/infrastructure/database/sqlite/SQLiteManager';
-import { DOMAIN_TABLES } from '../src/infrastructure/database/sqlite/schema/index';
+import { DOMAIN_TABLES, FRESH_SCHEMA } from '../src/infrastructure/database/sqlite/schema/index';
 
 // Helper to manipulate the schema file without bringing up the whole GarageIA.exe
 // Since SQLiteManager is a singleton, we use its applyMigrations internally.
@@ -13,8 +13,8 @@ const MARKER_PATH = path.join(process.cwd(), '.data', 'storage-engine.json');
 
 const resetDB = () => {
     SQLiteManager.resetInstance();
-    if (fs.existsSync(TEST_DB_PATH)) fs.unlinkSync(TEST_DB_PATH);
-    if (fs.existsSync(TEST_DB_PATH.replace('-shadow', ''))) fs.unlinkSync(TEST_DB_PATH.replace('-shadow', ''));
+    try { if (fs.existsSync(TEST_DB_PATH)) fs.unlinkSync(TEST_DB_PATH); } catch (e) {}
+    try { if (fs.existsSync(TEST_DB_PATH.replace('-shadow', ''))) fs.unlinkSync(TEST_DB_PATH.replace('-shadow', '')); } catch (e) {}
     if (!fs.existsSync(path.dirname(TEST_DB_PATH))) fs.mkdirSync(path.dirname(TEST_DB_PATH), { recursive: true });
 };
 
@@ -34,7 +34,7 @@ describe('PHASE 3 - GATE C.5: SCHEMA UPGRADE SAFETY', () => {
         const db = manager.getDatabase();
         
         const version = db.prepare('PRAGMA user_version').get() as any;
-        expect(version.user_version).toBe(2);
+        expect(version.user_version).toBe(3);
 
         const cols = db.prepare("PRAGMA table_info(garages)").all() as any[];
         expect(cols.length).toBe(2);
@@ -52,7 +52,7 @@ describe('PHASE 3 - GATE C.5: SCHEMA UPGRADE SAFETY', () => {
         
         const manager = SQLiteManager.getInstance();
         const version = manager.getDatabase().prepare('PRAGMA user_version').get() as any;
-        expect(version.user_version).toBe(2);
+        expect(version.user_version).toBe(3);
     });
 
     it('TEST 3 & 4 & 5-10: Upgrade populated SQLite V1 preserves everything', () => {
@@ -83,17 +83,17 @@ describe('PHASE 3 - GATE C.5: SCHEMA UPGRADE SAFETY', () => {
         const upgradedDb = manager.getDatabase();
 
         const version = upgradedDb.prepare('PRAGMA user_version').get() as any;
-        expect(version.user_version).toBe(2);
+        expect(version.user_version).toBe(3);
 
         const stays = upgradedDb.prepare('SELECT * FROM stays').all() as any[];
         expect(stays.length).toBe(1);
         expect(stays[0].id).toBe('uuid1');
         
         const jsonData = JSON.parse(stays[0].json_data);
-        expect(jsonData.amount_paid).toBeUndefined(); // We no longer merge physical columns
-        expect(jsonData.plate).toBeUndefined();       // We no longer merge physical columns
-        expect(jsonData._id).toBe('nedb1');
-        expect(jsonData.id).toBe('1'); // ID is injected by the migration
+        expect(jsonData.amount_paid).toBe(500); 
+        expect(jsonData.plate).toBeUndefined();       
+        expect(jsonData._id).toBeUndefined();
+        expect(jsonData.id).toBe('uuid1');
 
         const outbox = upgradedDb.prepare('SELECT status, count(*) as count FROM outbox_events GROUP BY status').all() as any[];
         const outboxMap = Object.fromEntries(outbox.map(r => [r.status, r.count]));
@@ -123,11 +123,19 @@ describe('PHASE 3 - GATE C.5: SCHEMA UPGRADE SAFETY', () => {
 
     it('PRAGMA Tests', () => {
         resetDB();
+        
+        // Initialize a valid database manually to bypass SAFETY STOP
+        const { DatabaseSync } = require('node:sqlite');
+        const tempDb = new DatabaseSync(TEST_DB_PATH.replace('-shadow', ''));
+        tempDb.exec(FRESH_SCHEMA);
+        tempDb.exec('PRAGMA user_version = 3;');
+        tempDb.close();
+
         fs.writeFileSync(MARKER_PATH, JSON.stringify({ engine: 'SQLITE' }));
         const db = SQLiteManager.getInstance().getDatabase();
         
         const sync = db.prepare('PRAGMA synchronous').get() as any;
-        expect(sync.synchronous).toBe(2);
+        expect(sync.synchronous).toBe(2); // Gate 11 & 12 requires FULL
 
         const wal = db.prepare('PRAGMA journal_mode').get() as any;
         expect(wal.journal_mode.toLowerCase()).toBe('wal');

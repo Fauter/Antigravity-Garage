@@ -375,6 +375,24 @@ export const startServer = async (port?: number) => {
             }
         });
 
+        // Requeue blocked events (Gate 30)
+        app.post('/api/sync/requeue-blocked', async (req, res) => {
+            try {
+                const StorageEngine = require('../database/StorageEngine').StorageEngine;
+                if (StorageEngine.getEngine() === 'SQLITE') {
+                    const SQLiteManager = require('../database/sqlite/SQLiteManager').SQLiteManager;
+                    const dbSq = SQLiteManager.getInstance().getDatabase();
+                    // Just change status to RETRY and reset attempts
+                    dbSq.prepare(`UPDATE outbox_events SET status = 'RETRY', attempts = 0 WHERE status = 'BLOCKED'`).run();
+                    res.json({ success: true, message: 'Blocked events requeued' });
+                } else {
+                    res.status(400).json({ success: false, message: 'Not in SQLite mode' });
+                }
+            } catch (err: any) {
+                res.status(500).json({ success: false, message: err.message });
+            }
+        });
+
         // ── Hardware Integration Routes ──────────────────────────
 
         // Check exit authorization (used by barrier driver / simulator)
