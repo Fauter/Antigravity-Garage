@@ -103,4 +103,61 @@ export class SubscriptionManager {
             updatedAt: new Date()
         };
     }
+    /**
+     * Helper temporal para calcular de forma segura el último milisegundo del MES SIGUIENTE
+     * al mes del endDate actual, manejando años bisiestos y longitudes de meses dispares.
+     */
+    static getNextCoverageEnd(currentEndDate: Date): Date {
+        const d = new Date(currentEndDate.getTime());
+        const year = d.getFullYear();
+        const month = d.getMonth();
+        // El día 0 del mes "month + 2" es el último día del mes "month + 1"
+        return new Date(year, month + 2, 0, 23, 59, 59, 999);
+    }
+
+    /**
+     * RAMA EXPLÍCITA PARA RENOVACIÓN ANTICIPADA
+     * Extiende la cobertura exactamente 1 mes hacia el futuro partiendo del endDate actual.
+     */
+    static advanceSubscription(
+        subscription: Subscription,
+        config: TarifasConfig,
+        paymentDate: Date = new Date(),
+        paymentMethod: string = 'Efectivo',
+        resolvedPrice?: number
+    ): Subscription {
+        if (!subscription.active) {
+            throw new Error('No se puede anticipar una suscripción inactiva.');
+        }
+        if (!subscription.endDate) {
+            throw new Error('No se puede anticipar una suscripción sin endDate válido.');
+        }
+
+        const newEndDate = this.getNextCoverageEnd(new Date(subscription.endDate));
+        
+        const nextPeriodStart = new Date(subscription.endDate);
+        nextPeriodStart.setDate(nextPeriodStart.getDate() + 1); // El día 1 del próximo mes
+
+        const price = (resolvedPrice && resolvedPrice > 0)
+            ? resolvedPrice
+            : PricingEngine.calculateSubscriptionFee(
+                subscription.type,
+                nextPeriodStart, // inicio del proximo periodo
+                newEndDate,
+                config,
+                paymentDate,
+                paymentMethod
+            );
+
+        return {
+            ...subscription,
+            // startDate podría avanzar también o quedarse, mantenemos la convención
+            // de que si es un nuevo periodo completo, startDate avanza al inicio del nuevo periodo.
+            // Esto evita que startDate quede meses atrás y confunda a UI.
+            startDate: new Date(new Date(subscription.endDate).getTime() + 1), 
+            endDate: newEndDate,
+            price,
+            updatedAt: new Date()
+        };
+    }
 }

@@ -1,3 +1,5 @@
+import { BillingPeriodHelper } from './BillingPeriodHelper';
+
 // Interfaces for Dependency Injection
 interface TariffRepo { getAll(): Promise<any[]> }
 interface ParamRepo { getParams(): Promise<any> }
@@ -263,6 +265,7 @@ export class PricingEngine {
     }
 
     // --- Legacy / Subscription Logic (Preserved but adaptable) ---
+
     static calculateSubscriptionFee(
         type: string,
         startDate: Date,
@@ -295,7 +298,102 @@ export class PricingEngine {
         return Math.floor(prorated);
     }
 
-    // --- Surcharge / Debt Logic (Mora Flexible) ---
+    // --- Surcharge / Debt Logic (Mora Flexible y Canónica) ---
+
+    public static calculateDebtSurcharge({
+        baseAmount,
+        billingPeriod,
+        now,
+        config
+    }: {
+        baseAmount: number;
+        billingPeriod: string;
+        now: Date;
+        config: any;
+    }): {
+        percentage: number;
+        amount: number;
+        reason: 'HISTORICAL_MAX' | 'CURRENT_PERIOD_STEP' | 'FUTURE_PERIOD' | 'NO_CONFIG';
+        appliedStep?: { day: number; percentage: number };
+    } {
+        try {
+            // 1. Determine current canonical period
+            const currentPeriod = BillingPeriodHelper.getBillingPeriod(now, 'America/Argentina/Buenos_Aires');
+
+            if (billingPeriod > currentPeriod) {
+                return { percentage: 0, amount: 0, reason: 'FUTURE_PERIOD' };
+            }
+
+            // 2. Resolve steps for the given billing period
+            const monthStr = billingPeriod.split('-')[1];
+            const monthIdx = String(parseInt(monthStr, 10) - 1); // 0-11
+            
+            let rawSteps = config?.surchargeConfig?.monthly_overrides?.[monthIdx]?.steps;
+            if (!rawSteps || !Array.isArray(rawSteps) || rawSteps.length === 0) {
+                rawSteps = config?.surchargeConfig?.global_default?.steps;
+            }
+            if (!rawSteps || !Array.isArray(rawSteps) || rawSteps.length === 0) {
+                // Try legacy fallback
+                const rate11 = config?.apartirdia11 != null ? Number(config.apartirdia11) : 0;
+                const rate22 = config?.apartirdia22 != null ? Number(config.apartirdia22) : 0;
+                
+                if (rate11 > 0 || rate22 > 0) {
+                    rawSteps = [
+                        { day: 11, percentage: rate11 },
+                        { day: 22, percentage: rate22 }
+                    ];
+                } else {
+                    return { percentage: 0, amount: 0, reason: 'NO_CONFIG' };
+                }
+            }
+
+            // Defensive Normalization
+            const steps = rawSteps
+                .map((s: any) => ({
+                    day: Number(s.day) || 0,
+                    percentage: Number(s.percentage) || 0
+                }))
+                .filter((s: {day: number, percentage: number}) => s.day > 0 && s.percentage > 0)
+                .sort((a: {day: number, percentage: number}, b: {day: number, percentage: number}) => b.day - a.day); // Sort descending by day
+
+            if (steps.length === 0) {
+                return { percentage: 0, amount: 0, reason: 'NO_CONFIG' };
+            }
+
+            // 3. Historical Debt -> MAX applicable percentage (not necessarily the last one, just the highest value)
+            if (billingPeriod < currentPeriod) {
+                const maxPercentage = Math.max(...steps.map((s: {day: number, percentage: number}) => s.percentage));
+                return {
+                    percentage: maxPercentage,
+                    amount: Math.floor(baseAmount * (maxPercentage / 100)),
+                    reason: 'HISTORICAL_MAX',
+                    appliedStep: steps.find((s: {day: number, percentage: number}) => s.percentage === maxPercentage)
+                };
+            }
+
+            // 4. Current Period -> Evaluate against today's day of the month in ART
+            const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit' });
+            const dayParts = formatter.formatToParts(now);
+            const currentDay = parseInt(dayParts.find(p => p.type === 'day')?.value || '1', 10);
+
+            for (const step of steps) {
+                if (currentDay >= step.day) {
+                    return {
+                        percentage: step.percentage,
+                        amount: Math.floor(baseAmount * (step.percentage / 100)),
+                        reason: 'CURRENT_PERIOD_STEP',
+                        appliedStep: step
+                    };
+                }
+            }
+
+            return { percentage: 0, amount: 0, reason: 'CURRENT_PERIOD_STEP' };
+
+        } catch (error) {
+            console.error("[PricingEngine] Error calculating debt surcharge:", error);
+            return { percentage: 0, amount: 0, reason: 'NO_CONFIG' };
+        }
+    }
     static calculateSurcharge(baseAmount: number, config: any = {}): number {
         try {
             const today = new Date().getDate();

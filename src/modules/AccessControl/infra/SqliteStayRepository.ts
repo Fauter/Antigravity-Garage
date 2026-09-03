@@ -37,7 +37,11 @@ export class SqliteStayRepository extends BaseSqliteRepository<Stay> {
     }
 
     // Overriding save to handle the domain specific default properties before passing to base.
-    async save(stay: Stay): Promise<Stay> {
+    async save(stay: Stay, arg2?: any, arg3?: any): Promise<Stay> {
+        let externalTx: any = undefined;
+        if (arg2 && typeof arg2 === 'string') externalTx = arg3;
+        else if (arg2 && typeof arg2 === 'object') externalTx = arg2;
+
         // En SQLite el `id` público UUID siempre se preserva. `_id` de NeDB se elimina.
         const id = stay.id || stay._id;
         
@@ -61,7 +65,7 @@ export class SqliteStayRepository extends BaseSqliteRepository<Stay> {
         };
 
         // Call the super class which does the ATOMIC WRITE
-        await super.save(doc as Stay, 'UPDATE');
+        await super.save(doc as Stay, 'UPDATE', externalTx);
         
         return this.mapStay(doc);
     }

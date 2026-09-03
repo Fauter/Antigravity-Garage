@@ -7,7 +7,7 @@ export const useSubscription = () => {
     // const mutationQueue = new MutationQueue();
 
     // Fetch Subscriptions (Online)
-    const { data: subscribers, isLoading, error } = useQuery({
+    const { data: subscribers, isLoading, error, refetch } = useQuery({
         queryKey: ['subscriptions'],
         queryFn: async () => {
             const res = await api.get('/abonos');
@@ -46,6 +46,7 @@ export const useSubscription = () => {
         subscribers,
         isLoading,
         error,
-        createSubscription
+        createSubscription,
+        refetch
     };
 };

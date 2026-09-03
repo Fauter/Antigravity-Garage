@@ -73,7 +73,7 @@ export class VehicleRepository {
     constructor() {
         this.impl = StorageEngine.getEngine() === 'SQLITE' ? new SqliteVehicleRepository() : new NeDBVehicleRepository();
     }
-    async save(vehicle: Vehicle): Promise<Vehicle> { return this.impl.save(vehicle); }
+    async save(vehicle: Vehicle, arg2?: any, arg3?: any): Promise<Vehicle> { return this.impl.save(vehicle, arg2, arg3); }
     async findById(id: string): Promise<Vehicle | null> { return this.impl.findById(id); }
     async findByPlate(plate: string, garageId?: string): Promise<Vehicle | null> { return this.impl.findByPlate(plate, garageId); }
     async findByCustomerId(customerId: string, garageId?: string): Promise<Vehicle[]> { return this.impl.findByCustomerId(customerId, garageId); }

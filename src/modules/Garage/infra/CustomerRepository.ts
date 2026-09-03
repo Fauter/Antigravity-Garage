@@ -43,7 +43,7 @@ export class CustomerRepository {
     constructor() {
         this.impl = StorageEngine.getEngine() === 'SQLITE' ? new SqliteCustomerRepository() : new NeDBCustomerRepository();
     }
-    async save(customer: Customer): Promise<Customer> { return this.impl.save(customer); }
+    async save(customer: Customer, tx?: any): Promise<Customer> { return this.impl.save(customer, tx); }
     async findById(id: string): Promise<Customer | null> { return this.impl.findById(id); }
     async findByDni(dni: string): Promise<Customer | null> { return this.impl.findByDni(dni); }
     async findAll(): Promise<Customer[]> { return this.impl.findAll(); }

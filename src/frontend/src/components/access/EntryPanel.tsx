@@ -6,9 +6,6 @@ import EntryTabQueue from './EntryTabQueue';
 import { Car, CheckCircle, AlertTriangle, Camera, Clock, Lock } from 'lucide-react';
 
 const EntryPanel: React.FC = () => {
-    if (import.meta.env.DEV) {
-        console.log('[FRONTEND] EntryPanel mounting');
-    }
     const {
         plate,
         setPlate,

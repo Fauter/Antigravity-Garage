@@ -7,9 +7,11 @@ import path from 'path';
 
 describe('PHASE 3.2 - MULTI-CLIENT CONFLICTS & OBSERVABILITY', () => {
     let sqlite: any;
-    const dbPath = path.join(process.cwd(), '.data', 'garageia.sqlite');
+    const testDir = path.join(process.cwd(), '.data', 'test');
+    const dbPath = path.join(testDir, 'test_multi_client.sqlite');
 
     beforeAll(() => {
+        if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
         if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
         
         vi.spyOn(StorageEngine, 'getEngine').mockReturnValue('SQLITE');
@@ -22,11 +24,15 @@ describe('PHASE 3.2 - MULTI-CLIENT CONFLICTS & OBSERVABILITY', () => {
         tempDb.close();
 
         SQLiteManager.resetInstance();
-        sqlite = SQLiteManager.getInstance().getDatabase();
+        sqlite = SQLiteManager.initForTest(dbPath).getDatabase();
     });
 
     afterAll(() => {
         vi.restoreAllMocks();
+        SQLiteManager.resetInstance();
+        if (fs.existsSync(dbPath)) {
+            try { fs.unlinkSync(dbPath); } catch {}
+        }
     });
 
     it('G25: Conflicts lead to BLOCKED status', () => {

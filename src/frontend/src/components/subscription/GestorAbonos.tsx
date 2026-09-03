@@ -7,10 +7,12 @@ import { useSubscription } from '../../hooks/useSubscription';
 const GestorAbonos: React.FC = () => {
     const [view, setView] = useState<'list' | 'new' | 'detail'>('list');
     const [selectedSub, setSelectedSub] = useState<any>(null);
-    const { subscribers, createSubscription } = useSubscription();
+    const { subscribers, isLoading, error, refetch } = useSubscription();
 
-    const handleCreate = async (data: any) => {
-        await createSubscription(data);
+    const handleCreate = async () => {
+        // Alta is already fully managed by FormularioAbono (atomic POST, outbox, etc.)
+        // We only need to refresh the list and switch view
+        await refetch();
         setView('list');
     };
 
@@ -26,6 +28,7 @@ const GestorAbonos: React.FC = () => {
                     onNewClick={() => setView('new')}
                     onSelectSubscriber={handleSelect}
                     subscribers={subscribers || []}
+                    isLoading={isLoading}
                 />
             )}
 

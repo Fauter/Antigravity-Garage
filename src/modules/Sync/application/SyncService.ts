@@ -99,9 +99,10 @@ export class NeDBSyncService {
             'Cochera': 'cocheras',
             'Debt': 'debts',
             'Movement': 'movements',
-            'Shift': 'shifts',
-            'Employee': 'employees',
-            'Incident': 'incidents'
+            'ShiftClose': 'shift_closes',
+            'Employee': 'employee_accounts',
+            'Incident': 'incidents',
+            'BuildingLevel': 'building_levels'
         };
 
         const table = tableMap[entityType];
@@ -139,9 +140,9 @@ export class NeDBSyncService {
             'customers': 'Customer',
             'subscriptions': 'Subscription',
             'movements': 'Movement',
-            'shifts': 'Shift',
+            'shift_closes': 'ShiftClose',
             'stays': 'Stay',
-            'employees': 'Employee',
+            'employee_accounts': 'Employee',
             'cocheras': 'Cochera',
             'debts': 'Debt',
             'incidents': 'Incident',
@@ -149,6 +150,7 @@ export class NeDBSyncService {
             'tariffs': 'Tariff',
             'prices': 'Price',
             'financial_configs': 'FinancialConfig',
+            'building_levels': 'BuildingLevel',
         };
 
         try {

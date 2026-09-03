@@ -90,7 +90,8 @@ CREATE TABLE IF NOT EXISTS attachments_outbox (
     status TEXT NOT NULL,
     attempts INTEGER DEFAULT 0,
     created_at TEXT,
-    updated_at TEXT
+    updated_at TEXT,
+    last_error TEXT
 );
 `;
 

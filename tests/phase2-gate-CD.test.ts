@@ -8,16 +8,22 @@ import path from 'path';
 import { DATA_DIR } from '../src/infrastructure/database/datastore';
 
 describe('GATE C & D - Outbox Worker', () => {
+    let testDbPath: string;
 
     beforeAll(() => {
+        const testDir = path.join(DATA_DIR, 'test');
+        if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
+        testDbPath = path.join(testDir, `test_gate_cd_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.sqlite`);
         StorageEngine.setEngine('SQLITE');
-        SQLiteManager.resetInstance();
+        SQLiteManager.initForTest(testDbPath);
     });
 
     afterAll(() => {
         StorageEngine.setEngine('NEDB');
         SQLiteManager.resetInstance();
-        try { fs.unlinkSync(path.join(DATA_DIR, 'garageia.sqlite')); } catch (e) {}
+        if (testDbPath && fs.existsSync(testDbPath)) {
+            try { fs.unlinkSync(testDbPath); } catch (e) {}
+        }
     });
 
     it('TEST C1: outbox_events reflect correctly the proxy output', async () => {

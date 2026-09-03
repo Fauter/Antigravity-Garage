@@ -71,7 +71,7 @@ export class SubscriptionRepository {
     constructor() {
         this.impl = StorageEngine.getEngine() === 'SQLITE' ? new SqliteSubscriptionRepository() : new NeDBSubscriptionRepository();
     }
-    async save(subscription: any): Promise<any> { return this.impl.save(subscription); }
+    async save(subscription: any, tx?: any): Promise<any> { return this.impl.save(subscription, tx); }
     async findAll(): Promise<any[]> { return this.impl.findAll(); }
     async findByCustomerId(customerId: string): Promise<any[]> { return this.impl.findByCustomerId(customerId); }
     async findById(id: string): Promise<any | null> { return this.impl.findById(id); }

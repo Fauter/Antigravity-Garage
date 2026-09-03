@@ -8,8 +8,9 @@ import fs from 'fs';
 import path from 'path';
 
 describe('PHASE 3.1 - G: DISASTER RECOVERY', () => {
-    const dbPath = path.join(process.cwd(), '.data', 'garageia.sqlite');
-    const corruptedPath = path.join(process.cwd(), '.data', 'garageia_corrupted.sqlite');
+    const testDir = path.join(process.cwd(), '.data', 'test');
+    const dbPath = path.join(testDir, 'test_disaster_recovery.sqlite');
+    const corruptedPath = path.join(testDir, 'test_disaster_corrupted.sqlite');
 
     beforeAll(() => {
         process.env.TEST_DISASTER = '1';
@@ -54,7 +55,7 @@ describe('PHASE 3.1 - G: DISASTER RECOVERY', () => {
         
         expect(() => {
             SQLiteManager.resetInstance();
-            SQLiteManager.getInstance().getDatabase();
+            SQLiteManager.initForTest(dbPath).getDatabase();
         }).toThrow(/SAFETY STOP: Local database missing but engine is SQLITE/);
     });
 });

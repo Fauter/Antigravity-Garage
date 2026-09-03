@@ -1,5 +1,6 @@
 import { SQLiteManager } from './SQLiteManager';
 import { TransactionHelper } from './TransactionHelper';
+import { CanonicalEntityHelper } from './CanonicalEntityHelper';
 import { v4 as uuidv4 } from 'uuid';
 
 export abstract class BaseSqliteRepository<T extends { id?: string; _id?: string }> {
@@ -38,18 +39,35 @@ export abstract class BaseSqliteRepository<T extends { id?: string; _id?: string
     }
 
     public async findById(id: string): Promise<T | null> {
-        const row = this.db.prepare(`SELECT json_data FROM ${this.tableName} WHERE id = ?`).get(id) as any;
-        if (!row) return null;
-        return { id, ...JSON.parse(row.json_data) };
+        let row = this.db.prepare(`SELECT id, json_data FROM ${this.tableName} WHERE id = ?`).get(id) as any;
+        if (!row) {
+            // COMPATIBILITY: Fallback to logical ID for NeDB-migrated rows that haven't been reconciled yet.
+            // DO NOT make this permanent architecture; it should be removed after DB is fully reconciled.
+            row = this.db.prepare(`SELECT id, json_data FROM ${this.tableName} WHERE json_extract(json_data, '$.id') = ?`).get(id) as any;
+            if (!row) return null;
+        }
+        const parsed = JSON.parse(row.json_data);
+        return { id: parsed.id || row.id, ...parsed };
     }
 
     public async findAll(): Promise<T[]> {
         const rows = this.db.prepare(`SELECT id, json_data FROM ${this.tableName}`).all() as any[];
-        return rows.map(r => ({ id: r.id, ...JSON.parse(r.json_data) }));
+        const parsedRows = rows.map(r => ({ id: r.id, ...JSON.parse(r.json_data) }));
+        return CanonicalEntityHelper.resolveCanonical<T>(parsedRows, this.entityType);
     }
 
     // Default atomic upsert
-    public async save(entity: T, operation: 'CREATE' | 'UPDATE' = 'UPDATE'): Promise<T> {
+    public async save(entity: T, arg2?: any, arg3?: any): Promise<T> {
+        let operation: 'CREATE' | 'UPDATE' = 'UPDATE';
+        let externalTx: any = undefined;
+
+        if (arg2 && typeof arg2 === 'string') {
+            operation = arg2 as 'CREATE' | 'UPDATE';
+            externalTx = arg3;
+        } else if (arg2 && typeof arg2 === 'object') {
+            externalTx = arg2;
+        }
+
         if (!entity.id && !entity._id) {
             entity.id = uuidv4();
             operation = 'CREATE';
@@ -61,24 +79,45 @@ export abstract class BaseSqliteRepository<T extends { id?: string; _id?: string
         const payloadStr = JSON.stringify(entity);
         const event = this.generateOutboxEvent(id, operation, entity);
 
-        TransactionHelper.run((tx) => {
-            tx.prepare(`
-                INSERT INTO ${this.tableName} (id, json_data) VALUES (?, ?)
-                ON CONFLICT(id) DO UPDATE SET json_data = excluded.json_data
-            `).run(id, payloadStr);
+        const execute = (tx: any) => {
+            // Check for legacy duplicate before upserting the canonical UUID row
+            const legacyCheck = tx.prepare(`SELECT id FROM ${this.tableName} WHERE json_extract(json_data, '$.id') = ? AND id != ?`).get(id, id) as any;
+            if (legacyCheck) {
+                tx.prepare(`
+                    UPDATE ${this.tableName} SET json_data = ? WHERE id = ?
+                `).run(payloadStr, legacyCheck.id);
+            } else {
+                tx.prepare(`
+                    INSERT INTO ${this.tableName} (id, json_data) VALUES (?, ?)
+                    ON CONFLICT(id) DO UPDATE SET json_data = excluded.json_data
+                `).run(id, payloadStr);
+            }
+            console.log(`[DEBUG] Saved to ${this.tableName}, ID: ${id}, TX? ${!!externalTx}`);
             this.insertOutboxEvent(tx, event);
-        });
+        };
+
+        if (externalTx) {
+            execute(externalTx);
+        } else {
+            TransactionHelper.run(execute);
+        }
 
         return entity;
     }
 
     // Default atomic delete
-    public async delete(id: string): Promise<void> {
+    public async delete(id: string, externalTx?: any): Promise<void> {
         const event = this.generateOutboxEvent(id, 'DELETE');
         
-        TransactionHelper.run((tx) => {
+        const execute = (tx: any) => {
             tx.prepare(`DELETE FROM ${this.tableName} WHERE id = ?`).run(id);
             this.insertOutboxEvent(tx, event);
-        });
+        };
+
+        if (externalTx) {
+            execute(externalTx);
+        } else {
+            TransactionHelper.run(execute);
+        }
     }
 }

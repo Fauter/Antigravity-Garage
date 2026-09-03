@@ -4,23 +4,26 @@ import fs from 'fs';
 import { SQLiteManager } from '../src/infrastructure/database/sqlite/SQLiteManager';
 import { TransactionHelper } from '../src/infrastructure/database/sqlite/TransactionHelper';
 
-const TEST_DB_PATH = path.join(process.cwd(), '.data', 'garageia.sqlite');
-const MARKER_PATH = path.join(process.cwd(), '.data', 'storage-engine.json');
+const testDbDir = path.join(process.cwd(), '.data', 'test');
+let testDbPath: string;
 
 const resetDB = () => {
     SQLiteManager.resetInstance();
-    if (fs.existsSync(TEST_DB_PATH)) fs.unlinkSync(TEST_DB_PATH);
-    if (fs.existsSync(TEST_DB_PATH + '-wal')) fs.unlinkSync(TEST_DB_PATH + '-wal');
-    if (fs.existsSync(TEST_DB_PATH + '-shm')) fs.unlinkSync(TEST_DB_PATH + '-shm');
+    if (!fs.existsSync(testDbDir)) fs.mkdirSync(testDbDir, { recursive: true });
+    testDbPath = path.join(testDbDir, `test_power_loss_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.sqlite`);
+    SQLiteManager.initForTest(testDbPath);
 };
 
 describe('PHASE 3 - GATE D: POWER LOSS & ATOMICITY', () => {
     beforeAll(() => {
-        fs.writeFileSync(MARKER_PATH, JSON.stringify({ engine: 'SQLITE' }));
+        resetDB();
     });
 
     afterAll(() => {
-        resetDB();
+        SQLiteManager.resetInstance();
+        if (testDbPath && fs.existsSync(testDbPath)) {
+            try { fs.unlinkSync(testDbPath); } catch {}
+        }
     });
 
     it('TEST 1: Domain + Outbox atomicity on application error (Rollback)', () => {

@@ -135,11 +135,21 @@ export class AccessManager {
         let price = 0;
         let notes = '';
 
-        const closedStay: Stay = {
+        const closedStay: any = {
             ...stay,
             active: false,
-            exitTime: exitDate
+            exitTime: exitDate,
+            garageId: finalGarageId
         };
+
+        // --- OFFLINE-FIRST / LEGACY DATA FALLBACK ---
+        // Stays created before the ownerId patch have null in SQLite.
+        // We use the authoritative ownerId from the garage config to safely close them.
+        if (!closedStay.ownerId && ownerId) {
+            closedStay.ownerId = ownerId;
+        } else if (closedStay.ownerId === null) {
+            delete closedStay.ownerId;
+        }
 
         if ((stay as any).is_subscriber || stay.isSubscriber) {
             price = 0;

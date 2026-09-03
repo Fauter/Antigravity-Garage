@@ -8,20 +8,22 @@ import { DOMAIN_TABLES, FRESH_SCHEMA } from '../src/infrastructure/database/sqli
 // Helper to manipulate the schema file without bringing up the whole GarageIA.exe
 // Since SQLiteManager is a singleton, we use its applyMigrations internally.
 
-const TEST_DB_PATH = path.join(process.cwd(), '.data', 'garageia-shadow.sqlite');
-const MARKER_PATH = path.join(process.cwd(), '.data', 'storage-engine.json');
+const testDir = path.join(process.cwd(), '.data', 'test');
+const TEST_DB_PATH = path.join(testDir, 'test_schema_upgrade.sqlite');
 
 const resetDB = () => {
     SQLiteManager.resetInstance();
+    if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
     try { if (fs.existsSync(TEST_DB_PATH)) fs.unlinkSync(TEST_DB_PATH); } catch (e) {}
-    try { if (fs.existsSync(TEST_DB_PATH.replace('-shadow', ''))) fs.unlinkSync(TEST_DB_PATH.replace('-shadow', '')); } catch (e) {}
-    if (!fs.existsSync(path.dirname(TEST_DB_PATH))) fs.mkdirSync(path.dirname(TEST_DB_PATH), { recursive: true });
+    try { if (fs.existsSync(TEST_DB_PATH + '-wal')) fs.unlinkSync(TEST_DB_PATH + '-wal'); } catch (e) {}
+    try { if (fs.existsSync(TEST_DB_PATH + '-shm')) fs.unlinkSync(TEST_DB_PATH + '-shm'); } catch (e) {}
+    SQLiteManager.initForTest(TEST_DB_PATH);
 };
 
 describe('PHASE 3 - GATE C.5: SCHEMA UPGRADE SAFETY', () => {
 
     beforeAll(() => {
-        fs.writeFileSync(MARKER_PATH, JSON.stringify({ engine: 'NEDB' }));
+        resetDB();
     });
 
     afterAll(() => {
@@ -34,7 +36,7 @@ describe('PHASE 3 - GATE C.5: SCHEMA UPGRADE SAFETY', () => {
         const db = manager.getDatabase();
         
         const version = db.prepare('PRAGMA user_version').get() as any;
-        expect(version.user_version).toBe(3);
+        expect(version.user_version).toBe(4);
 
         const cols = db.prepare("PRAGMA table_info(garages)").all() as any[];
         expect(cols.length).toBe(2);
@@ -50,13 +52,14 @@ describe('PHASE 3 - GATE C.5: SCHEMA UPGRADE SAFETY', () => {
         SQLiteManager.getInstance();
         SQLiteManager.resetInstance();
         
-        const manager = SQLiteManager.getInstance();
+        const manager = SQLiteManager.initForTest(TEST_DB_PATH);
         const version = manager.getDatabase().prepare('PRAGMA user_version').get() as any;
-        expect(version.user_version).toBe(3);
+        expect(version.user_version).toBe(4);
     });
 
     it('TEST 3 & 4 & 5-10: Upgrade populated SQLite V1 preserves everything', () => {
-        resetDB();
+        SQLiteManager.resetInstance();
+        if (fs.existsSync(TEST_DB_PATH)) fs.unlinkSync(TEST_DB_PATH);
         
         const db = new DatabaseSync(TEST_DB_PATH);
         db.exec(`
@@ -79,11 +82,11 @@ describe('PHASE 3 - GATE C.5: SCHEMA UPGRADE SAFETY', () => {
         }
         db.close();
 
-        const manager = SQLiteManager.getInstance();
+        const manager = SQLiteManager.initForTest(TEST_DB_PATH);
         const upgradedDb = manager.getDatabase();
 
         const version = upgradedDb.prepare('PRAGMA user_version').get() as any;
-        expect(version.user_version).toBe(3);
+        expect(version.user_version).toBe(4);
 
         const stays = upgradedDb.prepare('SELECT * FROM stays').all() as any[];
         expect(stays.length).toBe(1);
@@ -108,13 +111,12 @@ describe('PHASE 3 - GATE C.5: SCHEMA UPGRADE SAFETY', () => {
     });
 
     it('TEST 13 & 14: SQLITE marker fail safes', () => {
-        resetDB();
-        fs.writeFileSync(MARKER_PATH, JSON.stringify({ engine: 'SQLITE' }));
-        fs.writeFileSync(TEST_DB_PATH.replace('-shadow', ''), 'NOT A SQLITE DATABASE CORRUPTED DATA');
+        SQLiteManager.resetInstance();
+        fs.writeFileSync(TEST_DB_PATH, 'NOT A SQLITE DATABASE CORRUPTED DATA');
         
         let threw = false;
         try {
-            SQLiteManager.getInstance();
+            SQLiteManager.initForTest(TEST_DB_PATH);
         } catch (e) {
             threw = true;
         }
@@ -123,15 +125,6 @@ describe('PHASE 3 - GATE C.5: SCHEMA UPGRADE SAFETY', () => {
 
     it('PRAGMA Tests', () => {
         resetDB();
-        
-        // Initialize a valid database manually to bypass SAFETY STOP
-        const { DatabaseSync } = require('node:sqlite');
-        const tempDb = new DatabaseSync(TEST_DB_PATH.replace('-shadow', ''));
-        tempDb.exec(FRESH_SCHEMA);
-        tempDb.exec('PRAGMA user_version = 3;');
-        tempDb.close();
-
-        fs.writeFileSync(MARKER_PATH, JSON.stringify({ engine: 'SQLITE' }));
         const db = SQLiteManager.getInstance().getDatabase();
         
         const sync = db.prepare('PRAGMA synchronous').get() as any;

@@ -8,20 +8,23 @@ import path from 'path';
 import { DATA_DIR } from '../src/infrastructure/database/datastore';
 
 describe('PHASE 2.5 - Failure Injections', () => {
+    let testDbPath: string;
 
     beforeAll(() => {
+        const testDir = path.join(DATA_DIR, 'test');
+        if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
+        testDbPath = path.join(testDir, `test_failure_injections_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.sqlite`);
         StorageEngine.setEngine('SQLITE');
-        SQLiteManager.resetInstance();
-        
-        // Ensure a clean database for these tests
-        const dbPath = path.join(DATA_DIR, 'garageia.sqlite');
-        try { fs.unlinkSync(dbPath); } catch (e) {}
+        SQLiteManager.initForTest(testDbPath);
     });
 
     afterAll(() => {
         StorageEngine.setEngine('NEDB');
         SQLiteManager.resetInstance();
         vi.restoreAllMocks();
+        if (testDbPath && fs.existsSync(testDbPath)) {
+            try { fs.unlinkSync(testDbPath); } catch (e) {}
+        }
     });
 
     it('TEST 10: CREATE Failure Injection (Outbox Insert fails)', async () => {

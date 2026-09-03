@@ -20,3 +20,31 @@ node_modules/
 # Variables de entorno
 .env
 .env.local
+
+# SQLite databases and artifacts
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+.data/test/
+.data/backups/
+.data/recovery*/
+.data/attachments/
+.data/mock/
+
+# Temporary and scratch files
+scratch_*
+inspect.*
+report_*.md
+diff.txt
+implementation_plan.md
+audit_*.md
+old_sync.ts
+
+
+*.CORRUPT.*
+*-shadow.sqlite
+*-reconstruct.sqlite
+*-test.sqlite
+*-test.json
+

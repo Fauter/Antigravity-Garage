@@ -52,9 +52,9 @@ describe('Phase 1.75 Roundtrip Semantics', () => {
     beforeAll(async () => {
         // Force recreation of the shadow DB by deleting the file
         const fs = require('fs');
-        try { fs.unlinkSync(path.join(DATA_DIR, 'garageia-shadow.sqlite')); } catch (e) {}
-        try { fs.unlinkSync(path.join(DATA_DIR, 'garageia-shadow.sqlite-wal')); } catch (e) {}
-        try { fs.unlinkSync(path.join(DATA_DIR, 'garageia-shadow.sqlite-shm')); } catch (e) {}
+        try { fs.unlinkSync(path.join(DATA_DIR, 'test', 'test_garageia-shadow.sqlite')); } catch (e) {}
+        try { fs.unlinkSync(path.join(DATA_DIR, 'test', 'test_garageia-shadow.sqlite-wal')); } catch (e) {}
+        try { fs.unlinkSync(path.join(DATA_DIR, 'test', 'test_garageia-shadow.sqlite-shm')); } catch (e) {}
         
         await MigrationOrchestrator.initializeShadow();
         sqlite = SQLiteManager.getInstance().getDatabase();

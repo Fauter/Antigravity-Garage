@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Ticket, Wallet, LogOut, User as UserIcon, Eye, Database, Loader2, AlertTriangle, RefreshCw, Settings, Printer, Check, Wifi, WifiOff, Lock } from 'lucide-react';
+import { LayoutDashboard, Ticket, Wallet, LogOut, User as UserIcon, Eye, Database, Loader2, AlertTriangle, AlertCircle, RefreshCw, Settings, Printer, Check, Wifi, WifiOff, Lock } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { api } from '../../services/api';
 import { toast } from 'sonner';
+import { SyncStatusModal } from './SyncStatusModal';
 
 export const SyncRefreshContext = React.createContext<{ refreshKey: number }>({ refreshKey: 0 });
 
@@ -11,36 +12,6 @@ interface MainLayoutProps {
     children: React.ReactNode;
 }
 
-const SyncOverlay: React.FC<{ isVisible: boolean }> = ({ isVisible }) => {
-    if (!isVisible) return null;
-
-    return (
-        <div className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-sm flex flex-col items-center justify-center overflow-hidden">
-            <div className="relative flex flex-col items-center p-12 border border-emerald-500/30 rounded-2xl bg-gray-950/90 shadow-[0_0_80px_-15px_rgba(4,120,87,0.4)]">
-
-                {/* Rotating Elements */}
-                <div className="absolute w-40 h-40 border-t-2 border-l-2 border-emerald-500/40 rounded-full animate-spin" style={{ animationDuration: '3s' }}></div>
-                <div className="absolute w-32 h-32 border-b-2 border-r-2 border-emerald-400/40 rounded-full animate-spin" style={{ animationDuration: '2s', animationDirection: 'reverse' }}></div>
-
-                <div className="relative bg-black rounded-full p-5 mb-8 border border-emerald-500/20 shadow-inner">
-                    <Database className="w-12 h-12 text-emerald-400 animate-pulse" />
-                </div>
-
-                <h2 className="text-2xl font-mono font-bold text-emerald-400 tracking-[0.2em] mb-2 animate-pulse text-center">
-                    SINCRONIZANDO
-                </h2>
-                <h3 className="text-xs font-mono text-emerald-500/60 tracking-widest text-center">
-                    Pulleando datos...
-                </h3>
-
-                <div className="mt-10 flex items-center justify-center gap-3 bg-black/50 px-4 py-2 rounded-full border border-emerald-900/50">
-                    <Loader2 className="w-4 h-4 text-emerald-500 animate-spin" />
-                    <span className="text-emerald-500/80 font-mono text-[10px] uppercase tracking-wider font-bold">Por favor espere</span>
-                </div>
-            </div>
-        </div>
-    );
-};
 
 const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     // Added 'config' back to activeTab
@@ -48,6 +19,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     const [garageConfig, setGarageConfig] = useState<{ name: string; address: string; garage_id: string } | null>(null);
     const [refreshKey, setRefreshKey] = useState(0);
     const [isIncidentModalOpen, setIsIncidentModalOpen] = useState(false);
+    const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
     const [incidentDescription, setIncidentDescription] = useState('');
     const [isSavingIncident, setIsSavingIncident] = useState(false);
     const [lastSyncTime, setLastSyncTime] = useState<Date>(new Date());
@@ -70,7 +42,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     const [configSaved, setConfigSaved] = useState(false);
 
     const location = useLocation();
-    const { user, logout, isGlobalSyncing } = useAuth();
+    const { user, logout, isGlobalSyncing, syncStatus } = useAuth();
     const navigate = useNavigate();
 
     // Auto-refresh logic when sync completes
@@ -195,18 +167,27 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
         setIsBackgroundSyncing(true);
         try {
             await api.post('/sync/background', { garageId: gId });
-            setLastSyncTime(new Date());
+            
+            // Wait a moment for outbox to process, then check status
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            const statusRes = await api.get('/sync/check');
+            const status = statusRes.data;
 
-            // Incrementamos la key silenciosamente. Esto NO desmontará el DOM principal, 
-            // sino que proveerá el nuevo valor a los hijos mediante SyncRefreshContext y CustomEvent.
+            setLastSyncTime(new Date());
             setRefreshKey(prev => prev + 1);
             window.dispatchEvent(new CustomEvent('ag:sync-completed', { detail: { timestamp: Date.now() } }));
 
-            toast.success('Datos actualizados en segundo plano', {
-                duration: 2500,
-                style: { background: '#022c22', border: '1px solid rgba(16, 185, 129, 0.4)', color: '#34d399' },
-                icon: <RefreshCw className="w-4 h-4 text-emerald-500 animate-spin" style={{ animationDuration: '3s' }} />
-            });
+            if (status.blocked > 0) {
+                toast.error(`Sincronización parcial: ${status.blocked} bloqueos`, { duration: 3000 });
+            } else if (status.pending > 0) {
+                toast.info(`Sincronización en proceso: ${status.pending} pendientes`, { duration: 2500 });
+            } else {
+                toast.success('Sincronización completa', {
+                    duration: 2500,
+                    style: { background: '#022c22', border: '1px solid rgba(16, 185, 129, 0.4)', color: '#34d399' },
+                    icon: <Check className="w-4 h-4 text-emerald-500" />
+                });
+            }
         } catch (error) {
             console.error('❌ Error en background sync:', error);
             toast.error('Error al sincronizar datos');
@@ -422,14 +403,20 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
 
     return (
         <div className="h-full min-h-0 overflow-hidden bg-black text-gray-200 font-sans selection:bg-emerald-500/30 flex flex-col">
-            {/* @ts-ignore */}
-            <SyncOverlay isVisible={isGlobalSyncing && !syncStatus?.state} />
+            <SyncStatusModal 
+                isOpen={isSyncModalOpen} 
+                onClose={() => setIsSyncModalOpen(false)} 
+                syncStatus={syncStatus} 
+                // @ts-ignore
+                onForceSync={handleBackgroundSync}
+                isSyncing={isBackgroundSyncing || syncStatus?.isSyncing}
+            />
 
             {/* --- HEADER --- */}
-            <header className="h-14 border-b border-gray-800 bg-gray-950 flex items-center justify-between px-4 shrink-0 z-50 relative">
+            <header className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center h-14 border-b border-gray-800 bg-gray-950 px-4 shrink-0 z-50 relative">
 
                 {/* Brand - Dynamic per Terminal Config and Sync Status */}
-                <div className="flex items-center gap-3 flex-1">
+                <div className="flex items-center gap-3">
                     <div className="flex flex-col justify-center h-full max-w-[250px]">
                         <h1 className="text-white font-bold text-base leading-tight tracking-tight truncate pb-0.5">
                             {garageConfig?.name || 'ANTIGRAVITY'}
@@ -439,54 +426,55 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                         </span>
                     </div>
 
-                    {/* @ts-ignore */}
-                    {(syncStatus?.state === 'BACKEND_UNREACHABLE' || syncStatus?.state === 'OFFLINE') ? (
-                        <div className="flex items-center gap-1.5 px-2 py-0.5 bg-gray-900/60 border border-gray-700/50 rounded text-gray-400 font-mono shadow-sm">
-                            <WifiOff className="w-3.5 h-3.5" />
-                            <span className="text-[10px] uppercase tracking-widest pt-0.5">Sin conexión</span>
-                            {/* @ts-ignore */}
-                            {syncStatus?.pending > 0 && <span className="ml-1 px-1.5 py-0.5 bg-gray-800 rounded text-[9px]">{syncStatus.pending} pend.</span>}
-                        </div>
-                    // @ts-ignore
-                    ) : syncStatus?.state === 'HAS_BLOCKED_MUTATIONS' ? (
-                        <div className="flex items-center gap-1.5 px-2 py-0.5 bg-amber-900/20 border border-amber-500/30 rounded text-amber-500 font-mono shadow-sm">
-                            <AlertTriangle className="w-3.5 h-3.5" />
-                            <span className="text-[10px] uppercase tracking-widest pt-0.5">
-                                {/* @ts-ignore */}
-                                {syncStatus.blocked} cambio{syncStatus.blocked > 1 ? 's requieren' : ' requiere'} atención
-                            </span>
-                        </div>
-                    // @ts-ignore
-                    ) : (syncStatus?.isSyncing || isBackgroundSyncing) ? (
-                        <div className="flex items-center gap-1.5 px-2 py-0.5 bg-emerald-900/20 border border-emerald-500/30 rounded text-emerald-500 font-mono shadow-sm shadow-emerald-900/20 animate-pulse">
-                            <RefreshCw className="w-3 h-3 animate-spin" />
-                            <span className="text-[10px] uppercase tracking-widest pt-0.5">
-                                {/* @ts-ignore */}
-                                {syncStatus?.pending > 0 ? `Sincronizando ${syncStatus.pending} cambios...` : 'Sincronizando...'}
-                            </span>
-                        </div>
-                    ) : (
-                        <div className="flex items-center gap-2 px-2 py-0.5 bg-gray-900/40 border border-emerald-500/20 rounded shadow-sm shadow-emerald-900/10">
-                            <span className="text-[10px] hidden sm:inline text-emerald-500/70 font-mono tracking-widest">
-                                {formatLastSyncTime()}
-                            </span>
-                            <button
-                                onClick={handleBackgroundSync}
-                                // @ts-ignore
-                                disabled={isBackgroundSyncing || syncStatus?.isSyncing}
-                                // @ts-ignore
-                                className={`p-0.5 rounded transition-all ${(isBackgroundSyncing || syncStatus?.isSyncing) ? 'text-emerald-400' : 'text-emerald-500/50 hover:text-emerald-400 hover:bg-emerald-500/10'}`}
-                                title="Forzar sincronización rápida"
-                            >
-                                {/* @ts-ignore */}
-                                <RefreshCw className={`w-3.5 h-3.5 ${(isBackgroundSyncing || syncStatus?.isSyncing) ? 'animate-spin' : ''}`} />
-                            </button>
-                        </div>
-                    )}
+                    <button 
+                        onClick={() => setIsSyncModalOpen(true)}
+                        className="transition-transform hover:scale-105 active:scale-95"
+                    >
+                        {/* @ts-ignore */}
+                        {(syncStatus?.state === 'BACKEND_UNREACHABLE' || syncStatus?.state === 'OFFLINE') ? (
+                            <div className="flex items-center gap-1.5 px-2 py-0.5 bg-gray-900/60 border border-gray-700/50 rounded text-gray-400 font-mono shadow-sm cursor-pointer" title="Terminal offline">
+                                <WifiOff className="w-3.5 h-3.5" />
+                                <span className="text-[10px] uppercase tracking-widest pt-0.5 font-bold">SIN CONEXIÓN</span>
+                            </div>
+                        // @ts-ignore
+                        ) : syncStatus?.state === 'HAS_BLOCKED_MUTATIONS' || (syncStatus?.blocked > 0) ? (
+                            <div className="flex items-center gap-1.5 px-2 py-0.5 bg-amber-900/20 border border-amber-500/30 rounded text-amber-500 font-mono shadow-sm cursor-pointer" title={`${syncStatus?.blocked ?? 0} cambios de sincronización requieren atención`}>
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                                <span className="text-[10px] uppercase tracking-widest pt-0.5 font-bold">
+                                    {/* @ts-ignore */}
+                                    {syncStatus?.blocked ?? 0} BLOQ.
+                                </span>
+                            </div>
+                        // @ts-ignore
+                        ) : syncStatus?.state === 'SYNC_ERROR' ? (
+                            <div className="flex items-center gap-1.5 px-2 py-0.5 bg-amber-900/20 border border-amber-500/30 rounded text-amber-400 font-mono shadow-sm cursor-pointer" title="Error durante la sincronización">
+                                <AlertCircle className="w-3.5 h-3.5" />
+                                <span className="text-[10px] uppercase tracking-widest pt-0.5 font-bold">⚠ SYNC</span>
+                            </div>
+                        // @ts-ignore
+                        ) : (syncStatus?.isSyncing || isBackgroundSyncing) ? (
+                            <div className="flex items-center gap-1.5 px-2 py-0.5 bg-emerald-900/20 border border-emerald-500/30 rounded text-emerald-500 font-mono shadow-sm shadow-emerald-900/20 cursor-pointer">
+                                <RefreshCw className="w-3 h-3 animate-spin" />
+                                <span className="text-[10px] uppercase tracking-widest pt-0.5 font-bold animate-pulse">
+                                    SINCRONIZANDO
+                                </span>
+                            </div>
+                        // @ts-ignore
+                        ) : syncStatus?.pending > 0 ? (
+                            <div className="flex items-center gap-1.5 px-2 py-0.5 bg-gray-900/40 border border-gray-600/30 rounded text-gray-400 font-mono shadow-sm cursor-pointer">
+                                <span className="text-[10px] uppercase tracking-widest pt-0.5 font-bold">{syncStatus?.pending ?? 0} PEND.</span>
+                            </div>
+                        ) : (
+                            <div className="flex items-center gap-1.5 px-2 py-0.5 bg-emerald-900/20 border border-emerald-500/30 rounded text-emerald-500 font-mono shadow-sm shadow-emerald-900/20 cursor-pointer" title="Sincronizado">
+                                <Check className="w-3.5 h-3.5" />
+                                <span className="text-[10px] uppercase tracking-widest pt-0.5 font-bold">SINCRONIZADO</span>
+                            </div>
+                        )}
+                    </button>
                 </div>
 
                 {/* Navigation Tabs Container - Centered */}
-                <div className="absolute left-1/2 -translate-x-1/2">
+                <div className="flex justify-center items-center">
                     <nav className="flex items-center gap-1 bg-gray-900/50 p-1 rounded-lg border border-gray-800/50">
                         <NavButton
                             active={activeTab === 'operador'}
@@ -528,7 +516,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                 </div>
 
                 {/* User & Actions */}
-                <div className="flex items-center gap-4 flex-1 justify-end">
+                <div className="flex items-center gap-4 justify-end">
                     <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-900 rounded-full border border-gray-800">
                         <div className={`w-2 h-2 rounded-full animate-pulse ${user ? 'bg-emerald-500' : 'bg-gray-500'}`}></div>
                         <UserIcon className="w-3 h-3 text-gray-400" />

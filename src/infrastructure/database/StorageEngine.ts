@@ -5,14 +5,29 @@ import { DATA_DIR } from './datastore.js';
 export type EngineState = 'NEDB' | 'CUTOVER_PREPARED' | 'SQLITE';
 
 export class StorageEngine {
-    private static MARKER_PATH = path.join(DATA_DIR, 'storage-engine.json');
+    private static inMemoryEngine: EngineState | null = null;
+
+    private static getMarkerPath(): string {
+        const isTestEnv = Boolean(process.env.NODE_ENV === 'test' || process.env.VITEST);
+        if (isTestEnv) {
+            const testDir = path.join(DATA_DIR, 'test');
+            if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
+            return path.join(testDir, 'test_storage-engine.json');
+        }
+        return path.join(DATA_DIR, 'storage-engine.json');
+    }
 
     public static getEngine(): EngineState {
-        if (!fs.existsSync(this.MARKER_PATH)) {
+        const isTestEnv = Boolean(process.env.NODE_ENV === 'test' || process.env.VITEST);
+        if (isTestEnv && this.inMemoryEngine) {
+            return this.inMemoryEngine;
+        }
+        const markerPath = this.getMarkerPath();
+        if (!fs.existsSync(markerPath)) {
             return 'NEDB';
         }
         try {
-            const data = fs.readFileSync(this.MARKER_PATH, 'utf-8');
+            const data = fs.readFileSync(markerPath, 'utf-8');
             const parsed = JSON.parse(data);
             if (['NEDB', 'CUTOVER_PREPARED', 'SQLITE'].includes(parsed.engine)) {
                 return parsed.engine as EngineState;
@@ -24,19 +39,32 @@ export class StorageEngine {
     }
 
     public static setEngine(engine: EngineState): void {
-        const tmpPath = `${this.MARKER_PATH}.tmp`;
+        const isTestEnv = Boolean(process.env.NODE_ENV === 'test' || process.env.VITEST);
+        if (isTestEnv) {
+            this.inMemoryEngine = engine;
+        }
+        const markerPath = this.getMarkerPath();
+        const tmpPath = `${markerPath}.${Date.now()}_${Math.random().toString(36).substring(2, 7)}.tmp`;
         const payload = JSON.stringify({ engine, timestamp: new Date().toISOString() });
         
-        // Escribir temp
-        fs.writeFileSync(tmpPath, payload, 'utf-8');
-        
-        // Sincronizar archivo al disco
-        const fd = fs.openSync(tmpPath, 'r+');
-        fs.fsyncSync(fd);
-        fs.closeSync(fd);
-        
-        // Rename atómico
-        fs.renameSync(tmpPath, this.MARKER_PATH);
+        try {
+            // Escribir temp
+            fs.writeFileSync(tmpPath, payload, 'utf-8');
+            
+            // Sincronizar archivo al disco
+            try {
+                const fd = fs.openSync(tmpPath, 'r+');
+                fs.fsyncSync(fd);
+                fs.closeSync(fd);
+            } catch {}
+            
+            // Rename atómico
+            fs.renameSync(tmpPath, markerPath);
+        } catch (err) {
+            // Fallback direct write if rename was locked by concurrent worker
+            fs.writeFileSync(markerPath, payload, 'utf-8');
+            try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch {}
+        }
         console.log(`[StorageEngine] Marker actualizado a: ${engine}`);
     }
 }

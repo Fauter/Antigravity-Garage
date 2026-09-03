@@ -8,15 +8,21 @@ import { StayRepository } from '../src/modules/AccessControl/infra/StayRepositor
 import { MovementRepository } from '../src/modules/Billing/infra/MovementRepository';
 
 describe('GATE B - Repositories Proxy & Atomic Outbox', () => {
+    let testDbPath: string;
 
     beforeAll(() => {
-        SQLiteManager.resetInstance();
+        const testDir = path.join(DATA_DIR, 'test');
+        if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
+        testDbPath = path.join(testDir, `test_gate_b_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.sqlite`);
+        SQLiteManager.initForTest(testDbPath);
     });
 
     afterAll(() => {
         StorageEngine.setEngine('NEDB');
         SQLiteManager.resetInstance();
-        try { fs.unlinkSync(path.join(DATA_DIR, 'garageia.sqlite')); } catch (e) {}
+        if (testDbPath && fs.existsSync(testDbPath)) {
+            try { fs.unlinkSync(testDbPath); } catch (e) {}
+        }
     });
 
     it('TEST B3: Repository rutea a NeDB si Engine == NEDB', async () => {

@@ -93,6 +93,7 @@ export const SubscriptionSchema = z.object({
   garageId: UuidSchema.optional(), // Supabase: garage_id
   ownerId: UuidSchema.optional(),  // Supabase: owner_id
   customerId: UuidSchema,
+  cocheraId: UuidSchema.optional().nullable(),
   vehicleId: UuidSchema.optional().nullable(),
   type: SubscriptionTypeEnum,
   startDate: TimestampSchema,

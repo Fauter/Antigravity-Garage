@@ -25,9 +25,9 @@ export class SqliteCocheraRepository extends BaseSqliteRepository<Cochera> {
         db.exec(`DELETE FROM cocheras`);
     }
 
-    async save(cochera: Cochera): Promise<Cochera> {
+    async save(cochera: Cochera, externalTx?: any): Promise<Cochera> {
         cochera.updatedAt = new Date();
         const existing = cochera.id ? await this.findById(cochera.id) : null;
-        return await super.save(cochera, existing ? 'UPDATE' : 'CREATE');
+        return await super.save(cochera, existing ? 'UPDATE' : 'CREATE', externalTx);
     }
 }

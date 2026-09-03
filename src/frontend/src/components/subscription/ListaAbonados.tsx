@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import { Search, Plus, ArrowUp, ArrowDown } from 'lucide-react';
+import { Search, Plus, ArrowUp, ArrowDown, AlertCircle, RefreshCw } from 'lucide-react';
 import { api } from '../../services/api';
 
 // --- TypeScript Interfaces ---
@@ -52,79 +52,88 @@ interface SubscriberListProps {
     onNewClick: () => void;
     onSelectSubscriber?: (sub: any) => void;
     subscribers: any[];
+    isLoading?: boolean;
 }
 
-const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSubscriber, subscribers }) => {
+const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSubscriber, subscribers, isLoading = false }) => {
     // Local state
     const [cocheras, setCocheras] = useState<any[]>([]);
     const [subscriptions, setSubscriptions] = useState<any[]>([]);
     const [realVehicles, setRealVehicles] = useState<any[]>([]);
     const [debts, setDebts] = useState<Debt[]>([]);
-    const [debtsLoaded, setDebtsLoaded] = useState(false);
+    const [hydrationStatus, setHydrationStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+    const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [balanceSort, setBalanceSort] = useState<'default' | 'desc' | 'asc'>('default');
 
-    // --- Initial Effects: Debt sweep + Cocheras fetch ---
-    useEffect(() => {
-        api.post('/abonos/evaluar-deudas', {}).catch(e => console.error(e));
-
-        Promise.all([
-            api.get('/cocheras').catch(() => ({ data: [] })),
-            api.get('/abonos').catch(() => ({ data: [] })),
-            api.get('/vehiculos').catch(() => ({ data: [] }))
-        ]).then(([cocherasRes, subsRes, vehRes]) => {
-            setCocheras(cocherasRes.data || []);
-            setSubscriptions(subsRes.data || []);
-            setRealVehicles(vehRes.data || []);
-        });
-    }, []);
-
-    // --- Extract unique customer IDs from subscribers ---
-    const uniqueCustomerIds = useMemo(() => {
-        const ids = new Set<string>();
-        (subscribers || []).forEach((sub: any) => {
-            const id = sub.clientId || sub.customerData?.id || sub.id;
-            if (id) ids.add(id);
-        });
-        return Array.from(ids);
-    }, [subscribers]);
-
-    // --- Batch fetch debts for all unique customers (N+1 safe with allSettled) ---
-    const fetchAllDebts = useCallback(async (customerIds: string[]) => {
-        if (customerIds.length === 0) {
-            setDebts([]);
-            setDebtsLoaded(true);
-            return;
-        }
-
+    // --- Atomic Data Hydration (No Intermediate Flashing States) ---
+    const loadData = useCallback(async () => {
+        setHydrationStatus('loading');
+        setErrorMessage(null);
         try {
-            const results = await Promise.allSettled(
-                customerIds.map(id => api.get(`/deudas/${id}`).catch(() => ({ data: [] })))
-            );
+            // 1. Debt sweep trigger
+            await api.post('/abonos/evaluar-deudas', {}).catch(e => console.error(e));
 
-            const allDebts: Debt[] = [];
-            results.forEach((result, index) => {
-                if (result.status === 'fulfilled') {
-                    const id = customerIds[index];
-                    const data = (result.value?.data || []).map((d: any) => ({ ...d, customerId: id }));
-                    allDebts.push(...data);
-                }
+            // 2. Fetch structural collections in parallel
+            const [cocherasRes, subsRes, vehRes] = await Promise.all([
+                api.get('/cocheras'),
+                api.get('/abonos'),
+                api.get('/vehiculos')
+            ]);
+
+            const cocherasData = cocherasRes.data || [];
+            const subsData = subsRes.data || [];
+            const vehData = vehRes.data || [];
+
+            // 3. Extract unique customer IDs
+            const customerIds = new Set<string>();
+            (subscribers || []).forEach((sub: any) => {
+                const id = sub.clientId || sub.customerData?.id || sub.id;
+                if (id) customerIds.add(id);
+            });
+            subsData.forEach((s: any) => {
+                const id = s.customerId || s.customer_id || s.clientId;
+                if (id) customerIds.add(id);
+            });
+            cocherasData.forEach((c: any) => {
+                const id = c.clienteId || c.cliente_id;
+                if (id) customerIds.add(id);
             });
 
+            const customerIdList = Array.from(customerIds);
+            const allDebts: Debt[] = [];
+
+            // 4. Batch fetch debts for all customers
+            if (customerIdList.length > 0) {
+                const debtResults = await Promise.allSettled(
+                    customerIdList.map(id => api.get(`/deudas/${id}`).catch(() => ({ data: [] })))
+                );
+
+                debtResults.forEach((result, index) => {
+                    if (result.status === 'fulfilled') {
+                        const id = customerIdList[index];
+                        const data = (result.value?.data || []).map((d: any) => ({ ...d, customerId: id }));
+                        allDebts.push(...data);
+                    }
+                });
+            }
+
+            // 5. ATOMIC COMMIT: update all state variables together
+            setCocheras(cocherasData);
+            setSubscriptions(subsData);
+            setRealVehicles(vehData);
             setDebts(allDebts);
-        } catch (err) {
-            console.error("Error fetching debts batch:", err);
-            setDebts([]);
-        } finally {
-            setDebtsLoaded(true);
+            setHydrationStatus('ready');
+        } catch (err: any) {
+            console.error("Hydration error in ListaAbonados:", err);
+            setHydrationStatus('error');
+            setErrorMessage(err?.response?.data?.error || err.message || "Error al cargar datos de abonados");
         }
-    }, []);
+    }, [subscribers]);
 
     useEffect(() => {
-        if (uniqueCustomerIds.length > 0 && !debtsLoaded) {
-            fetchAllDebts(uniqueCustomerIds);
-        }
-    }, [uniqueCustomerIds, debtsLoaded, fetchAllDebts]);
+        loadData();
+    }, [loadData]);
 
     // --- Unique Client Aggregation Logic ---
     const uniqueSubscribers = useMemo((): AggregatedSubscriber[] => {
@@ -355,80 +364,143 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-800/60">
-                        {sortedAndFilteredSubscribers.map((sub) => {
-                            const { name, dni, avatar, balance, plates, email, phone } = sub.aggregatedValues;
-                            const hasNoVehicles = plates.length === 0;
-                            const isActive = hasNoVehicles ? false : sub.aggregatedValues.isActive;
-
-                            return (
-                                <tr key={sub.id || sub._id}
-                                    onClick={() => onSelectSubscriber && onSelectSubscriber(sub)}
-                                    className="group hover:bg-gray-800/30 transition-colors duration-200 cursor-pointer">
-                                    <td className="py-5 px-4 font-medium text-white">
+                        {/* ─── 1. SKELETON LOADING STATE (Eliminates Flash) ─── */}
+                        {(hydrationStatus === 'loading' || isLoading) ? (
+                            Array.from({ length: 6 }).map((_, idx) => (
+                                <tr key={`skeleton-${idx}`} className="animate-pulse">
+                                    {/* Cliente */}
+                                    <td className="py-5 px-4">
                                         <div className="flex items-center gap-3">
-                                            <div className="w-8 h-8 rounded-full bg-indigo-900/50 flex items-center justify-center text-indigo-300 font-bold text-xs ring-1 ring-indigo-500/30">
-                                                {avatar}
-                                            </div>
-                                            <div className="flex flex-col">
-                                                <span>{name}</span>
-                                                {dni && (
-                                                    <span className="text-gray-500 text-xs">DNI {dni}</span>
-                                                )}
+                                            <div className="w-8 h-8 rounded-full bg-gray-800 shrink-0" />
+                                            <div className="flex flex-col gap-1.5 flex-1">
+                                                <div className="h-4 bg-gray-800 rounded w-28" />
+                                                <div className="h-3 bg-gray-800/60 rounded w-16" />
                                             </div>
                                         </div>
                                     </td>
+                                    {/* Contacto */}
                                     <td className="py-5 px-4">
-                                        <div className="flex flex-col">
-                                            {phone ? (
-                                                <span className="text-gray-200 text-sm">{phone}</span>
-                                            ) : (
-                                                <span className="text-gray-600 text-sm italic">Sin teléfono</span>
-                                            )}
-                                            {email && (
-                                                <span className="text-gray-500 text-xs">{email}</span>
-                                            )}
+                                        <div className="flex flex-col gap-1.5">
+                                            <div className="h-3.5 bg-gray-800 rounded w-24" />
+                                            <div className="h-2.5 bg-gray-800/60 rounded w-32" />
                                         </div>
                                     </td>
+                                    {/* Patentes */}
                                     <td className="py-5 px-4">
-                                        <div className="flex gap-2 flex-wrap">
-                                            {plates.length > 0 ? (
-                                                plates.map((plate, i) => (
-                                                    <span key={i} className="font-mono bg-gray-950 px-2 py-1 rounded text-emerald-400 border border-emerald-900/30 text-xs tracking-wider font-bold shadow-sm">
-                                                        {plate}
-                                                    </span>
-                                                ))
-                                            ) : (
-                                                <span className="text-gray-600 text-xs italic">Sin vehículos</span>
-                                            )}
+                                        <div className="flex gap-2">
+                                            <div className="h-6 bg-gray-800 rounded w-16" />
                                         </div>
                                     </td>
+                                    {/* Estado */}
                                     <td className="py-5 px-4">
-                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${isActive
-                                            ? 'bg-emerald-900/20 text-emerald-400 border-emerald-900/50'
-                                            : 'bg-red-900/20 text-red-400 border-red-900/50'
-                                            }`}>
-                                            <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${isActive ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
-                                            {isActive ? 'Activo' : 'Inactivo'}
-                                        </span>
+                                        <div className="h-5 bg-gray-800 rounded-full w-16" />
                                     </td>
+                                    {/* Balance */}
                                     <td className="py-5 px-4 text-right">
-                                        {balance > 0 ? (
-                                            <span className="text-red-400 font-semibold font-mono">
-                                                ${balance.toLocaleString('es-AR')}
-                                            </span>
-                                        ) : hasNoVehicles ? (
-                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-800/40 text-gray-500 border border-gray-700/40">
-                                                -
-                                            </span>
-                                        ) : (
-                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                                                AL DÍA
-                                            </span>
-                                        )}
+                                        <div className="h-5 bg-gray-800 rounded w-16 ml-auto" />
                                     </td>
                                 </tr>
-                            );
-                        })}
+                            ))
+                        ) : hydrationStatus === 'error' ? (
+                            /* ─── 2. ERROR STATE ─── */
+                            <tr>
+                                <td colSpan={5} className="py-12 px-4 text-center">
+                                    <div className="flex flex-col items-center justify-center gap-3 text-red-400 max-w-sm mx-auto">
+                                        <AlertCircle className="w-8 h-8 text-red-500/80" />
+                                        <p className="text-sm font-medium">{errorMessage || "Error al sincronizar datos de abonados."}</p>
+                                        <button
+                                            onClick={loadData}
+                                            className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-lg text-xs font-bold uppercase transition-all shadow-sm"
+                                        >
+                                            <RefreshCw className="w-3.5 h-3.5" /> Reintentar
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        ) : sortedAndFilteredSubscribers.length === 0 ? (
+                            /* ─── 3. EMPTY STATE ─── */
+                            <tr>
+                                <td colSpan={5} className="py-12 px-4 text-center text-gray-500 text-sm">
+                                    {searchTerm ? 'No se encontraron abonados que coincidan con la búsqueda.' : 'No hay abonados registrados.'}
+                                </td>
+                            </tr>
+                        ) : (
+                            /* ─── 4. READY STATE (Render Fully Hydrated Data) ─── */
+                            sortedAndFilteredSubscribers.map((sub) => {
+                                const { name, dni, avatar, balance, plates, email, phone } = sub.aggregatedValues;
+                                const hasNoVehicles = plates.length === 0;
+                                const isActive = hasNoVehicles ? false : sub.aggregatedValues.isActive;
+
+                                return (
+                                    <tr key={sub.id || sub._id}
+                                        onClick={() => onSelectSubscriber && onSelectSubscriber(sub)}
+                                        className="group hover:bg-gray-800/30 transition-colors duration-200 cursor-pointer">
+                                        <td className="py-5 px-4 font-medium text-white">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-8 h-8 rounded-full bg-indigo-900/50 flex items-center justify-center text-indigo-300 font-bold text-xs ring-1 ring-indigo-500/30">
+                                                    {avatar}
+                                                </div>
+                                                <div className="flex flex-col">
+                                                    <span>{name}</span>
+                                                    {dni && (
+                                                        <span className="text-gray-500 text-xs">DNI {dni}</span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td className="py-5 px-4">
+                                            <div className="flex flex-col">
+                                                {phone ? (
+                                                    <span className="text-gray-200 text-sm">{phone}</span>
+                                                ) : (
+                                                    <span className="text-gray-600 text-sm italic">Sin teléfono</span>
+                                                )}
+                                                {email && (
+                                                    <span className="text-gray-500 text-xs">{email}</span>
+                                                )}
+                                            </div>
+                                        </td>
+                                        <td className="py-5 px-4">
+                                            <div className="flex gap-2 flex-wrap">
+                                                {plates.length > 0 ? (
+                                                    plates.map((plate, i) => (
+                                                        <span key={i} className="font-mono bg-gray-950 px-2 py-1 rounded text-emerald-400 border border-emerald-900/30 text-xs tracking-wider font-bold shadow-sm">
+                                                            {plate}
+                                                        </span>
+                                                    ))
+                                                ) : (
+                                                    <span className="text-gray-600 text-xs italic">Sin vehículos</span>
+                                                )}
+                                            </div>
+                                        </td>
+                                        <td className="py-5 px-4">
+                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${isActive
+                                                ? 'bg-emerald-900/20 text-emerald-400 border-emerald-900/50'
+                                                : 'bg-red-900/20 text-red-400 border-red-900/50'
+                                                }`}>
+                                                <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${isActive ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
+                                                {isActive ? 'Activo' : 'Inactivo'}
+                                            </span>
+                                        </td>
+                                        <td className="py-5 px-4 text-right">
+                                            {balance > 0 ? (
+                                                <span className="text-red-400 font-semibold font-mono">
+                                                    ${balance.toLocaleString('es-AR')}
+                                                </span>
+                                            ) : hasNoVehicles ? (
+                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-800/40 text-gray-500 border border-gray-700/40">
+                                                    -
+                                                </span>
+                                            ) : (
+                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                                    AL DÍA
+                                                </span>
+                                            )}
+                                        </td>
+                                    </tr>
+                                );
+                            })
+                        )}
                     </tbody>
                 </table>
             </div>

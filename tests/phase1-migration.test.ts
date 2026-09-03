@@ -31,7 +31,7 @@ describe('Phase 1 SQLite Shadow Migration', () => {
 
     afterAll(async () => {
         // Cleanup Shadow DB
-        const dbPath = path.join(DATA_DIR, 'garageia-shadow.sqlite');
+        const dbPath = path.join(DATA_DIR, 'test', 'test_garageia-shadow.sqlite');
         try { fs.unlinkSync(dbPath); } catch (e) {}
     });
 

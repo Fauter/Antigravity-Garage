@@ -42,7 +42,7 @@ export class MovementRepository {
     constructor() {
         this.impl = StorageEngine.getEngine() === 'SQLITE' ? new SqliteMovementRepository() : new NeDBMovementRepository();
     }
-    async save(movement: Movement): Promise<Movement> { return this.impl.save(movement); }
+    async save(movement: Movement, arg2?: any, arg3?: any): Promise<Movement> { return this.impl.save(movement, arg2, arg3); }
     async findById(id: string): Promise<Movement | null> { return this.impl.findById(id); }
     async findByShiftId(shiftId: string): Promise<Movement[]> { return this.impl.findByShiftId(shiftId); }
     async findAll(): Promise<Movement[]> { return this.impl.findAll(); }

@@ -9,11 +9,13 @@ import path from 'path';
 
 describe('PHASE 3.2 - BACKUP AND RESTORE DRILL', () => {
     let sqlite: any;
-    const backupPath = path.join(process.cwd(), '.data', 'garageia_backup_drill.sqlite');
-    const originalPath = path.join(process.cwd(), '.data', 'garageia.sqlite');
-    const corruptedPath = path.join(process.cwd(), '.data', 'garageia_corrupted.sqlite');
+    const testDir = path.join(process.cwd(), '.data', 'test');
+    const backupPath = path.join(testDir, 'test_garageia_backup_drill.sqlite');
+    const originalPath = path.join(testDir, 'test_garageia_backup_original.sqlite');
+    const corruptedPath = path.join(testDir, 'test_garageia_backup_corrupted.sqlite');
 
     beforeAll(() => {
+        if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
         // Ensure fresh start
         if (fs.existsSync(originalPath)) fs.unlinkSync(originalPath);
         if (fs.existsSync(backupPath)) fs.unlinkSync(backupPath);
@@ -29,11 +31,13 @@ describe('PHASE 3.2 - BACKUP AND RESTORE DRILL', () => {
         tempDb.close();
 
         SQLiteManager.resetInstance();
-        sqlite = SQLiteManager.getInstance().getDatabase();
+        sqlite = SQLiteManager.initForTest(originalPath).getDatabase();
     });
 
     afterAll(() => {
         vi.restoreAllMocks();
+        SQLiteManager.resetInstance();
+        if (fs.existsSync(originalPath)) fs.unlinkSync(originalPath);
         if (fs.existsSync(backupPath)) fs.unlinkSync(backupPath);
         if (fs.existsSync(corruptedPath)) fs.unlinkSync(corruptedPath);
     });
@@ -66,7 +70,7 @@ describe('PHASE 3.2 - BACKUP AND RESTORE DRILL', () => {
 
         // 5. VALIDATE RESTORE
         SQLiteManager.resetInstance();
-        const restoredDb = SQLiteManager.getInstance().getDatabase();
+        const restoredDb = SQLiteManager.initForTest(originalPath).getDatabase();
 
         const v = restoredDb.prepare('SELECT count(*) as c FROM vehicles').get() as any;
         expect(v.c).toBe(1);
@@ -78,7 +82,7 @@ describe('PHASE 3.2 - BACKUP AND RESTORE DRILL', () => {
         expect(a.c).toBe(1);
 
         const version = restoredDb.prepare('PRAGMA user_version').get() as any;
-        expect(version.user_version).toBe(3);
+        expect(version.user_version).toBe(4);
 
         const integrity = restoredDb.prepare('PRAGMA integrity_check').get() as any;
         expect(integrity.integrity_check).toBe('ok');

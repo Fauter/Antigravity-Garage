@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import path from 'path';
+import fs from 'fs';
 import { StorageEngine } from '../src/infrastructure/database/StorageEngine';
 import { SQLiteManager } from '../src/infrastructure/database/sqlite/SQLiteManager';
 import { SqliteSyncCoordinator } from '../src/modules/Sync/application/SqliteSyncCoordinator';
@@ -10,13 +12,18 @@ describe('PHASE 3.1 - C: ACK LOST & REMOTE IDEMPOTENCY', () => {
     let sqlite: any;
     let syncCoordinator: SqliteSyncCoordinator;
     let vehicleRepo: VehicleRepository;
+    let testDbPath: string;
 
     beforeAll(async () => {
         vi.useFakeTimers();
 
+        const testDir = path.join(process.cwd(), '.data', 'test');
+        if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
+        testDbPath = path.join(testDir, `test_idempotency_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.sqlite`);
+
         vi.spyOn(StorageEngine, 'getEngine').mockReturnValue('SQLITE');
         
-        sqlite = SQLiteManager.getInstance().getDatabase();
+        sqlite = SQLiteManager.initForTest(testDbPath).getDatabase();
         sqlite.exec('DELETE FROM outbox_events;');
         sqlite.exec('DELETE FROM vehicles;');
 
@@ -33,6 +40,10 @@ describe('PHASE 3.1 - C: ACK LOST & REMOTE IDEMPOTENCY', () => {
     afterAll(() => {
         vi.restoreAllMocks();
         vi.useRealTimers();
+        SQLiteManager.resetInstance();
+        if (testDbPath && fs.existsSync(testDbPath)) {
+            try { fs.unlinkSync(testDbPath); } catch {}
+        }
     });
 
     it('C1: SyncCoordinator must retry if the network drops before ACK (ACK Lost)', async () => {
@@ -52,13 +63,15 @@ describe('PHASE 3.1 - C: ACK LOST & REMOTE IDEMPOTENCY', () => {
         // Mock: First call fails simulating a network timeout AFTER the server processed it.
         // Second call succeeds.
         let callCount = 0;
-        vi.spyOn(SupabaseClient, 'rpc').mockImplementation(async () => {
-            callCount++;
-            if (callCount === 1) {
-                // Simulate ACK lost (Timeout)
-                throw new Error('ETIMEDOUT: Connection lost before receiving ACK');
-            }
-            return { data: { success: true }, error: null };
+        (SupabaseClient as any).from = vi.fn().mockReturnValue({
+            upsert: vi.fn().mockImplementation(async () => {
+                callCount++;
+                if (callCount === 1) {
+                    // Simulate ACK lost (Timeout)
+                    throw new Error('ETIMEDOUT: Connection lost before receiving ACK');
+                }
+                return { data: { success: true }, error: null };
+            })
         });
 
         // 1st Attempt -> Should fail and move to RETRY

@@ -4,6 +4,8 @@ import { QueueService } from '../../Sync/application/QueueService.js';
 import { StorageEngine } from '../../../infrastructure/database/StorageEngine.js';
 import { SqliteDebtRepository } from './SqliteDebtRepository.js';
 
+import { CanonFactory } from '../domain/CanonFactory';
+
 export class NeDBDebtRepository {
     private queue = new QueueService();
 
@@ -44,6 +46,12 @@ export class NeDBDebtRepository {
     async findBySubscriptionId(subscriptionId: string): Promise<Debt[]> {
         return await db.debts.find({ subscriptionId }) as Debt[];
     }
+
+    async findCanonBySubscriptionAndPeriod(subscriptionId: string, billingPeriod: string): Promise<Debt | null> {
+        const canonicalId = CanonFactory.getCanonicalId(subscriptionId, billingPeriod);
+        const debt = await db.debts.findOne({ id: canonicalId }) as Debt | undefined;
+        return debt || null;
+    }
 }
 
 export class DebtRepository {
@@ -53,7 +61,8 @@ export class DebtRepository {
     }
     async findBySubscriptionIdAndMonth(subscriptionId: string, monthStart: Date, monthEnd: Date): Promise<Debt[]> { return this.impl.findBySubscriptionIdAndMonth(subscriptionId, monthStart, monthEnd); }
     async findById(id: string): Promise<Debt | undefined> { return this.impl.findById(id); }
-    async save(debt: Debt): Promise<Debt> { return this.impl.save(debt); }
+    async save(debt: Debt, tx?: any): Promise<Debt> { return this.impl.save(debt, tx); }
     async findByCustomerId(customerId: string): Promise<Debt[]> { return this.impl.findByCustomerId(customerId); }
     async findBySubscriptionId(subscriptionId: string): Promise<Debt[]> { return this.impl.findBySubscriptionId(subscriptionId); }
+    async findCanonBySubscriptionAndPeriod(subscriptionId: string, billingPeriod: string): Promise<Debt | null> { return this.impl.findCanonBySubscriptionAndPeriod(subscriptionId, billingPeriod); }
 }

@@ -8,7 +8,11 @@ export class SqliteVehicleRepository extends BaseSqliteRepository<Vehicle> {
         super('vehicles', 'Vehicle');
     }
 
-    async save(vehicle: Vehicle): Promise<Vehicle> {
+    async save(vehicle: Vehicle, arg2?: any, arg3?: any): Promise<Vehicle> {
+        let externalTx: any = undefined;
+        if (arg2 && typeof arg2 === 'string') externalTx = arg3;
+        else if (arg2 && typeof arg2 === 'object') externalTx = arg2;
+
         if (!vehicle.id) vehicle.id = uuidv4();
 
         const existing = await this.findById(vehicle.id);
@@ -37,7 +41,7 @@ export class SqliteVehicleRepository extends BaseSqliteRepository<Vehicle> {
         }
 
         const operation = existing ? 'UPDATE' : 'CREATE';
-        return await super.save(vehicle, operation);
+        return await super.save(vehicle, operation, externalTx);
     }
 
     async findByPlate(plate: string, garageId?: string): Promise<Vehicle | null> {

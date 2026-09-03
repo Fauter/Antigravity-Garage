@@ -40,7 +40,15 @@ if (!fs.existsSync(DATA_DIR)) {
     }
 }
 
+const isTest = Boolean(process.env.NODE_ENV === 'test' || process.env.VITEST);
+
 const createStore = (name: string) => {
+    if (isTest) {
+        return Datastore.create({
+            inMemoryOnly: true,
+            timestampData: true
+        });
+    }
     return Datastore.create({
         filename: path.join(DATA_DIR, `${name}.db`),
         autoload: true,

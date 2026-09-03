@@ -66,6 +66,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             setUser(userData);
             sessionStorage.setItem('ag_user', JSON.stringify(userData));
             setIsGlobalSyncing(true); // Assuming sync started on backend
+            
+            const resolvedGarageId = garage_id || userData.garage_id || (userData as any).garageId;
+            if (resolvedGarageId) {
+                api.post('/sync/bootstrap', { garageId: resolvedGarageId }).catch(e => console.error('Bootstrap failed', e));
+            } else {
+                console.warn('⚠️ No garageId available for bootstrap sync.');
+                setIsGlobalSyncing(false);
+            }
+            
             return true;
         } catch (error) {
             console.error('Login failed', error);

@@ -12,13 +12,18 @@ describe('PHASE 3.1 - F: ATTACHMENTS OFFLINE', () => {
     let sqlite: any;
     let syncCoordinator: SqliteSyncCoordinator;
     let accessController: AccessController;
+    let testDbPath: string;
 
     beforeAll(async () => {
         vi.useFakeTimers();
 
+        const testDir = path.join(process.cwd(), '.data', 'test');
+        if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
+        testDbPath = path.join(testDir, `test_attachments_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.sqlite`);
+
         vi.spyOn(StorageEngine, 'getEngine').mockReturnValue('SQLITE');
         
-        sqlite = SQLiteManager.getInstance().getDatabase();
+        sqlite = SQLiteManager.initForTest(testDbPath).getDatabase();
         sqlite.exec('DELETE FROM outbox_events;');
         sqlite.exec('DELETE FROM attachments_outbox;');
         sqlite.exec('DELETE FROM stays;');
@@ -42,6 +47,10 @@ describe('PHASE 3.1 - F: ATTACHMENTS OFFLINE', () => {
     afterAll(() => {
         vi.restoreAllMocks();
         vi.useRealTimers();
+        SQLiteManager.resetInstance();
+        if (testDbPath && fs.existsSync(testDbPath)) {
+            try { fs.unlinkSync(testDbPath); } catch {}
+        }
     });
 
     it('F1: Base64 photo is saved locally and enqueued in attachments_outbox when offline', async () => {

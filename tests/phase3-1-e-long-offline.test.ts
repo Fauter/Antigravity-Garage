@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import path from 'path';
+import fs from 'fs';
 import { StorageEngine } from '../src/infrastructure/database/StorageEngine';
 import { SQLiteManager } from '../src/infrastructure/database/sqlite/SQLiteManager';
 import { SqliteSyncCoordinator } from '../src/modules/Sync/application/SqliteSyncCoordinator';
@@ -10,14 +12,22 @@ describe('PHASE 3.1 - E: LONG OFFLINE (GC SAFETY)', () => {
     let sqlite: any;
     let syncCoordinator: SqliteSyncCoordinator;
     let vehicleRepo: VehicleRepository;
+    let testDbPath: string;
 
     beforeAll(async () => {
         vi.useFakeTimers();
 
-        vi.spyOn(StorageEngine, 'getEngine').mockReturnValue('SQLITE');
-        vi.spyOn(SupabaseClient, 'rpc').mockRejectedValue(new Error('ENOTFOUND'));
+        const testDir = path.join(process.cwd(), '.data', 'test');
+        if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
+        testDbPath = path.join(testDir, `test_gc_safety_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.sqlite`);
 
-        sqlite = SQLiteManager.getInstance().getDatabase();
+        vi.spyOn(StorageEngine, 'getEngine').mockReturnValue('SQLITE');
+        (SupabaseClient as any).from = vi.fn().mockReturnValue({
+            upsert: vi.fn().mockRejectedValue(new Error('ENOTFOUND')),
+            delete: vi.fn().mockReturnValue({ eq: vi.fn().mockRejectedValue(new Error('ENOTFOUND')) })
+        });
+
+        sqlite = SQLiteManager.initForTest(testDbPath).getDatabase();
         sqlite.exec('DELETE FROM outbox_events;');
         sqlite.exec('DELETE FROM vehicles;');
 
@@ -32,6 +42,10 @@ describe('PHASE 3.1 - E: LONG OFFLINE (GC SAFETY)', () => {
     afterAll(() => {
         vi.restoreAllMocks();
         vi.useRealTimers();
+        SQLiteManager.resetInstance();
+        if (testDbPath && fs.existsSync(testDbPath)) {
+            try { fs.unlinkSync(testDbPath); } catch {}
+        }
     });
 
     it('E1: Events pending for 72+ hours should not be GCed and should drain when online', async () => {
@@ -61,7 +75,10 @@ describe('PHASE 3.1 - E: LONG OFFLINE (GC SAFETY)', () => {
         expect(pendingOrRetry).toBe(1);
 
         // Now come back online
-        vi.spyOn(SupabaseClient, 'rpc').mockResolvedValue({ data: { success: true }, error: null } as any);
+        (SupabaseClient as any).from = vi.fn().mockReturnValue({
+            upsert: vi.fn().mockResolvedValue({ data: { success: true }, error: null }),
+            delete: vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ data: { success: true }, error: null }) })
+        });
         await syncCoordinator.processOutbox();
 
         const acked = sqlite.prepare("SELECT COUNT(*) as c FROM outbox_events WHERE status = 'ACKED'").get().c;

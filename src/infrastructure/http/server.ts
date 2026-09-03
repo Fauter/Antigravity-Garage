@@ -12,20 +12,29 @@ import { MigrationOrchestrator } from '../database/sqlite/MigrationOrchestrator.
 import { SUPABASE_URL } from '../lib/supabase.js';
 import fs from 'fs';
 
+import { StorageEngine } from '../database/StorageEngine.js';
+
 export const startServer = async (port?: number) => {
     // -----------------------------------------------------
-    // Phase 1.5 - Snapshot Consistency (Bloqueo de Tráfico)
+    // Phase 1.5 - Snapshot Consistency & Database Health Check
     // -----------------------------------------------------
     try {
-        console.log('🛡️ Iniciando protección de snapshot pre-cutover...');
-        // Instancia SQLiteManager para aplicar PRAGMAs y versionamiento V1
-        SQLiteManager.getInstance();
+        console.log('🛡️ Verificando estado de salud de la base de datos local SQLite...');
+        const activeEngine = StorageEngine.getEngine();
+        const activeDbPath = SQLiteManager.getInstance().getDbPath();
+        const isTestMode = Boolean(process.env.NODE_ENV === 'test' || process.env.VITEST);
+        console.log(`🗄️ ACTIVE STORAGE ENGINE: ${activeEngine}`);
+        console.log(`🗄️ ACTIVE SQLITE PATH: ${activeDbPath}`);
+        console.log(`🗄️ TEST MODE: ${isTestMode}`);
         
         // Bloqueamos el inicio del servidor hasta que el Shadow sea VALID o falle la validación,
         // asegurando que no entren requests HTTP que modifiquen NeDB durante el volcado.
         await MigrationOrchestrator.initializeShadow();
-    } catch (e) {
-        console.error('❌ Error fatal en Shadow Orchestrator:', e);
+    } catch (e: any) {
+        console.error('❌ FATAL DATABASE HEALTH ERROR: Error crítico al inicializar base de datos local SQLite:');
+        console.error(e);
+        console.error('🛑 El servidor no puede iniciar en un estado de base de datos corrupto o no disponible. Abortando.');
+        process.exit(1);
     }
     // -----------------------------------------------------
 
@@ -176,6 +185,10 @@ export const startServer = async (port?: number) => {
             if (garageController?.updateCochera) return garageController.updateCochera(req, res);
             res.status(404).send('Method not found');
         });
+        app.post('/api/cocheras/:id/agregar-vehiculo', (req, res) => {
+            if (garageController?.addVehicleAtomic) return garageController.addVehicleAtomic(req, res);
+            res.status(404).send();
+        });
         app.post('/api/cocheras/desvincular-vehiculo', (req, res) => {
             if (garageController?.unassignVehicle) return garageController.unassignVehicle(req, res);
             res.status(404).send();
@@ -195,7 +208,11 @@ export const startServer = async (port?: number) => {
             res.status(404).send('Method not found');
         });
         app.post('/api/abonos/alta-completa', (req, res) => {
-            if (garageController?.createFullSubscription) return garageController.createFullSubscription(req, res);
+            if (garageController?.createSubscription) return garageController.createSubscription(req, res);
+            res.status(404).send('Method not found');
+        });
+        app.post('/api/abonos/renovar/preview', (req, res) => {
+            if (garageController?.previewMultiMonthDebt) return garageController.previewMultiMonthDebt(req, res);
             res.status(404).send('Method not found');
         });
         app.post('/api/abonos/renovar', (req, res) => {
@@ -369,21 +386,38 @@ export const startServer = async (port?: number) => {
         app.get('/api/sync/check', async (req, res) => {
             if (syncService) {
                 const status = await syncService.getStatus();
+                // If there are blocked events, we want to fetch them if requested
+                if (req.query.include_blocked === 'true' && status.blocked > 0) {
+                    try {
+                        const SQLiteManager = require('../database/sqlite/SQLiteManager').SQLiteManager;
+                        const dbSq = SQLiteManager.getInstance().getDatabase();
+                        const blockedEvents = dbSq.prepare(`SELECT sequence, entity_type, entity_id, operation, status, created_at, updated_at, last_error, last_error_code, payload FROM outbox_events WHERE status = 'BLOCKED'`).all();
+                        status.blockedEvents = blockedEvents;
+                    } catch (e) {
+                        console.error('Error fetching blocked events', e);
+                    }
+                }
                 res.json(status);
             } else {
                 res.json({ state: 'OFFLINE', isSyncing: false, pending: 0, blocked: 0 });
             }
         });
 
-        // Requeue blocked events (Gate 30)
-        app.post('/api/sync/requeue-blocked', async (req, res) => {
+        // Requeue blocked events (selective)
+        app.post('/api/sync/retry-blocked', async (req, res) => {
             try {
+                const { sequences } = req.body;
+                if (!sequences || !Array.isArray(sequences)) return res.status(400).json({ error: 'sequences array required' });
+                
                 const StorageEngine = require('../database/StorageEngine').StorageEngine;
                 if (StorageEngine.getEngine() === 'SQLITE') {
                     const SQLiteManager = require('../database/sqlite/SQLiteManager').SQLiteManager;
                     const dbSq = SQLiteManager.getInstance().getDatabase();
-                    // Just change status to RETRY and reset attempts
-                    dbSq.prepare(`UPDATE outbox_events SET status = 'RETRY', attempts = 0 WHERE status = 'BLOCKED'`).run();
+                    
+                    const placeholders = sequences.map(() => '?').join(',');
+                    if (placeholders.length > 0) {
+                        dbSq.prepare(`UPDATE outbox_events SET status = 'RETRY' WHERE status = 'BLOCKED' AND sequence IN (${placeholders})`).run(...sequences);
+                    }
                     res.json({ success: true, message: 'Blocked events requeued' });
                 } else {
                     res.status(400).json({ success: false, message: 'Not in SQLite mode' });

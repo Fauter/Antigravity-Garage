@@ -11,6 +11,7 @@ import { JsonDB } from '../../../infrastructure/database/json-db';
 import { db } from '../../../infrastructure/database/datastore';
 import { v4 as uuidv4 } from 'uuid';
 import { CorrelativeGenerator } from '../../../shared/CorrelativeGenerator';
+import { TransactionHelper } from '../../../infrastructure/database/sqlite/TransactionHelper';
 
 interface VehicleTypeData {
     id?: string;
@@ -232,7 +233,13 @@ export class AccessController {
             // Patch linking details
             (entry as any).vehicleType = resolvedType;
             (entry as any).vehicleId = vehicleId;
-            if (garageId) (entry as any).garageId = garageId;
+            if (garageId) {
+                (entry as any).garageId = garageId;
+                const garage: any = await db.garages.findOne({ id: garageId });
+                if (garage) {
+                    (entry as any).ownerId = garage.owner_id || garage.ownerId;
+                }
+            }
 
             // 🔓 HARDWARE: Explicitly reset/ensure hardware fields for new entry
               // --- ATTACHMENTS (Phase F) ---
@@ -262,21 +269,23 @@ export class AccessController {
                 prepaidMovement.relatedEntityId = entry.id;
             }
 
-            // 6. Persist in sequence (Atomicity workaround)
-            let savedStay;
+            // 6. Persist with atomic transaction
+            let savedStay: any = entry;
             try {
-                savedStay = await this.stayRepository.save(entry as any);
-                
-                if (prepaidMovement) {
-                    await this.movementRepository.save(prepaidMovement as any);
-                    console.log(`💰 Entry: Prepaid Movement saved for ${plate}. Amount: $${prepaidAmount}, Method: ${prepaidPaymentMethod}`);
-                    (savedStay as any).prepaidMovement = prepaidMovement;
-                }
+                await TransactionHelper.runAsync(async (tx) => {
+                    savedStay = await this.stayRepository.save(entry as any, 'CREATE', tx);
+                    
+                    if (prepaidMovement) {
+                        await this.movementRepository.save(prepaidMovement as any, 'CREATE', tx);
+                        console.log(`💰 Entry: Prepaid Movement saved for ${plate}. Amount: $${prepaidAmount}, Method: ${prepaidPaymentMethod}`);
+                        (savedStay as any).prepaidMovement = prepaidMovement;
+                    }
 
-                if (vehicleToSave) {
-                    await this.vehicleRepository.save(vehicleToSave);
-                    console.log(`🚗 Entry: Vehicle ${vehicleId} saved/updated for ${plate}`);
-                }
+                    if (vehicleToSave) {
+                        await this.vehicleRepository.save(vehicleToSave, vehicleToSave.id ? 'UPDATE' : 'CREATE', tx);
+                        console.log(`🚗 Entry: Vehicle ${vehicleId} saved/updated for ${plate}`);
+                    }
+                });
             } catch (persistError) {
                 console.error(`❌ Entry: Persistence error for ${plate}:`, persistError);
                 return res.status(500).json({ error: 'Ocurrió un error al guardar la entrada en la base de datos.' });
@@ -370,14 +379,16 @@ export class AccessController {
             });
             console.log(`🔓 Exit: Barrier authorized for ${closedStay.plate} (ticket: ${(closedStay as any).ticket_code})`);
 
-            await this.stayRepository.save(closedStay as any);
+            await TransactionHelper.runAsync(async (tx) => {
+                await this.stayRepository.save(closedStay as any, 'UPDATE', tx);
 
-            if (exitMovement) {
-                // Inject correlative receipt_number and ticket_code
-                (exitMovement as any).receipt_number = receiptNumber;
-                (exitMovement as any).ticket_code = receiptNumber;
-                await this.movementRepository.save(exitMovement);
-            }
+                if (exitMovement) {
+                    // Inject correlative receipt_number and ticket_code
+                    (exitMovement as any).receipt_number = receiptNumber;
+                    (exitMovement as any).ticket_code = receiptNumber;
+                    await this.movementRepository.save(exitMovement, 'CREATE', tx);
+                }
+            });
 
             // 🧟 ZOMBIE CLEANUP: Close any other open stays for this plate
             // This ensures the HardwareService finds the SAME stay the cashier authorized

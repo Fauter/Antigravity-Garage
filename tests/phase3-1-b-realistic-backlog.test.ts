@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import path from 'path';
+import fs from 'fs';
 import { StorageEngine } from '../src/infrastructure/database/StorageEngine';
 import { SQLiteManager } from '../src/infrastructure/database/sqlite/SQLiteManager';
 import { SqliteSyncCoordinator } from '../src/modules/Sync/application/SqliteSyncCoordinator';
@@ -12,18 +14,26 @@ describe('PHASE 3.1 - B: REALISTIC OFFLINE BACKLOG & DRAIN', () => {
     let syncCoordinator: SqliteSyncCoordinator;
     let vehicleRepo: VehicleRepository;
     let customerRepo: CustomerRepository;
+    let testDbPath: string;
 
     beforeAll(async () => {
         vi.useFakeTimers();
+
+        const testDir = path.join(process.cwd(), '.data', 'test');
+        if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
+        testDbPath = path.join(testDir, `test_backlog_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.sqlite`);
 
         // 1. Force SQLite Engine & Offline mode
         vi.spyOn(StorageEngine, 'getEngine').mockReturnValue('SQLITE');
         
         // Mock Supabase to be completely OFFLINE
-        vi.spyOn(SupabaseClient, 'rpc').mockRejectedValue(new Error('ENOTFOUND: supabase.co is unreachable'));
+        (SupabaseClient as any).from = vi.fn().mockReturnValue({
+            upsert: vi.fn().mockRejectedValue(new Error('ENOTFOUND: supabase.co is unreachable')),
+            delete: vi.fn().mockReturnValue({ eq: vi.fn().mockRejectedValue(new Error('ENOTFOUND: supabase.co is unreachable')) })
+        });
 
         // 2. Initialize Fresh Database
-        sqlite = SQLiteManager.getInstance().getDatabase();
+        sqlite = SQLiteManager.initForTest(testDbPath).getDatabase();
         // Clear outbox for this test
         sqlite.exec('DELETE FROM outbox_events;');
         sqlite.exec('DELETE FROM vehicles;');
@@ -37,6 +47,10 @@ describe('PHASE 3.1 - B: REALISTIC OFFLINE BACKLOG & DRAIN', () => {
     afterAll(() => {
         vi.restoreAllMocks();
         vi.useRealTimers();
+        SQLiteManager.resetInstance();
+        if (testDbPath && fs.existsSync(testDbPath)) {
+            try { fs.unlinkSync(testDbPath); } catch {}
+        }
     });
 
     it('B1: Should accumulate 300 mixed realistic operations offline', async () => {
@@ -87,11 +101,11 @@ describe('PHASE 3.1 - B: REALISTIC OFFLINE BACKLOG & DRAIN', () => {
         
         // Restart 1
         SQLiteManager.resetInstance();
-        sqlite = SQLiteManager.getInstance().getDatabase();
+        sqlite = SQLiteManager.initForTest(testDbPath).getDatabase();
         
         // Restart 2
         SQLiteManager.resetInstance();
-        sqlite = SQLiteManager.getInstance().getDatabase();
+        sqlite = SQLiteManager.initForTest(testDbPath).getDatabase();
 
         const snapshot2 = sqlite.prepare('SELECT * FROM outbox_events ORDER BY created_at ASC').all();
         
@@ -132,10 +146,10 @@ describe('PHASE 3.1 - B: REALISTIC OFFLINE BACKLOG & DRAIN', () => {
 
     it('B4 & B5: Automatic Reconnect and Complete Drain', async () => {
         // 1. Reconnect Network
-        vi.spyOn(SupabaseClient, 'rpc').mockResolvedValue({
-            data: { success: true },
-            error: null
-        } as any);
+        (SupabaseClient as any).from = vi.fn().mockReturnValue({
+            upsert: vi.fn().mockResolvedValue({ data: { success: true }, error: null }),
+            delete: vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ data: { success: true }, error: null }) })
+        });
 
         // 2. Trigger automatic reconnect repeatedly until drained
         while (true) {

@@ -10,30 +10,33 @@ import { DATA_DIR } from '../src/infrastructure/database/datastore';
 
 describe('PHASE 2.6 - End-to-End Offline Proof', () => {
 
-    let originalRpc: any;
+    let originalFrom: any;
+    let testDbPath: string;
 
     beforeAll(() => {
+        const testDir = path.join(DATA_DIR, 'test');
+        if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
+        testDbPath = path.join(testDir, `test_e2e_offline_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.sqlite`);
         StorageEngine.setEngine('SQLITE');
-        SQLiteManager.resetInstance();
-        
-        const dbPath = path.join(DATA_DIR, 'garageia.sqlite');
-        try { fs.unlinkSync(dbPath); } catch (e) {}
-        
-        // Ensure schemas are created
-        const db = SQLiteManager.getInstance().getDatabase();
+        SQLiteManager.initForTest(testDbPath);
 
         // MOCK SUPABASE TO BE INACCESSIBLE (GLOBAL CONNECTIVITY FAILURE)
-        originalRpc = supabase.rpc;
-        supabase.rpc = vi.fn().mockImplementation(() => {
-            throw new Error('ENOTFOUND: supabase.co is unreachable');
+        originalFrom = supabase.from;
+        (supabase as any).from = vi.fn().mockReturnValue({
+            upsert: vi.fn().mockRejectedValue(new Error('ENOTFOUND: supabase.co is unreachable')),
+            delete: vi.fn().mockReturnValue({ eq: vi.fn().mockRejectedValue(new Error('ENOTFOUND: supabase.co is unreachable')) }),
+            select: vi.fn().mockReturnValue({ eq: vi.fn().mockRejectedValue(new Error('ENOTFOUND: supabase.co is unreachable')) })
         });
     });
 
     afterAll(() => {
         StorageEngine.setEngine('NEDB');
         SQLiteManager.resetInstance();
-        supabase.rpc = originalRpc;
+        (supabase as any).from = originalFrom;
         vi.restoreAllMocks();
+        if (testDbPath && fs.existsSync(testDbPath)) {
+            try { fs.unlinkSync(testDbPath); } catch (e) {}
+        }
     });
 
     it('TEST 18: End-to-End Offline Real - API Success while Backend Offline', async () => {
@@ -70,6 +73,7 @@ describe('PHASE 2.6 - End-to-End Offline Proof', () => {
     it('TEST 19 & 20: Restart Offline & Continued Operation', async () => {
         // SIMULATE APP RESTART
         SQLiteManager.resetInstance();
+        SQLiteManager.initForTest(testDbPath);
         
         const db = SQLiteManager.getInstance().getDatabase();
         
@@ -94,10 +98,12 @@ describe('PHASE 2.6 - End-to-End Offline Proof', () => {
 
     it('TEST 21: Auto-Reconnect Convergence', async () => {
         // SIMULATE RECONNECTION (Supabase returns online)
-        let rpcCalls = 0;
-        supabase.rpc = vi.fn().mockImplementation(() => {
-            rpcCalls++;
-            return { error: null, data: 'success' };
+        let upsertCalls = 0;
+        (supabase as any).from = vi.fn().mockReturnValue({
+            upsert: vi.fn().mockImplementation(() => {
+                upsertCalls++;
+                return Promise.resolve({ error: null, data: 'success' });
+            })
         });
 
         const syncWorker = new SqliteSyncCoordinator();
@@ -108,6 +114,6 @@ describe('PHASE 2.6 - End-to-End Offline Proof', () => {
         // Assert Both Events were processed and became ACKED
         const events = db.prepare(`SELECT * FROM outbox_events WHERE status = 'ACKED'`).all();
         expect(events.length).toBe(2);
-        expect(rpcCalls).toBe(2);
+        expect(upsertCalls).toBe(2);
     });
 });

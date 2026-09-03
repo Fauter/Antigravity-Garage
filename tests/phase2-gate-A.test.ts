@@ -7,17 +7,23 @@ import { TransactionHelper } from '../src/infrastructure/database/sqlite/Transac
 import { DATA_DIR } from '../src/infrastructure/database/datastore';
 
 describe('GATE A - SQLite Infra & Transaction Helper', () => {
+    let testDbPath: string;
     
     beforeAll(() => {
-        StorageEngine.setEngine('SQLITE'); // Force SQLITE for test
-        SQLiteManager.resetInstance(); // Ensure we get the fresh DB
+        const testDir = path.join(DATA_DIR, 'test');
+        if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
+        testDbPath = path.join(testDir, `test_gate_a_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.sqlite`);
+        StorageEngine.setEngine('SQLITE');
+        SQLiteManager.initForTest(testDbPath);
     });
 
     afterAll(() => {
         // Cleanup test DB
         SQLiteManager.resetInstance();
         StorageEngine.setEngine('NEDB'); // Reset to default
-        try { fs.unlinkSync(path.join(DATA_DIR, 'garageia.sqlite')); } catch (e) {}
+        if (testDbPath && fs.existsSync(testDbPath)) {
+            try { fs.unlinkSync(testDbPath); } catch (e) {}
+        }
     });
 
     it('TEST A4: Marker temp write failure handled gracefully (Atomic rename)', () => {

@@ -7,22 +7,49 @@ import { FRESH_SCHEMA, DOMAIN_TABLES } from './schema/index';
 
 export class SQLiteManager {
     private db: DatabaseSync;
+    private dbPath: string;
     private static instance: SQLiteManager;
+    private static customDbPath: string | null = null;
 
-    private constructor() {
+    private constructor(overridePath?: string) {
         const engine = StorageEngine.getEngine();
+        const isTestEnv = Boolean(process.env.NODE_ENV === 'test' || process.env.VITEST);
         
-        // Determinar archivo dependiendo del Engine actual
-        // Para migración/Shadow usamos 'garageia-shadow.sqlite' o tmp. 
-        // Para productivo (SQLITE) usamos 'garageia.sqlite'.
-        let dbName = 'garageia-shadow.sqlite';
-        if (engine === 'SQLITE') {
-            dbName = 'garageia.sqlite';
+        let dbPath: string;
+        if (overridePath || SQLiteManager.customDbPath) {
+            dbPath = overridePath || SQLiteManager.customDbPath!;
+        } else if (isTestEnv) {
+            // Guard: in test environment, default to isolated test database
+            const testDir = path.join(DATA_DIR, 'test');
+            if (!fs.existsSync(testDir)) {
+                fs.mkdirSync(testDir, { recursive: true });
+            }
+            dbPath = path.join(testDir, `test_garageia_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.sqlite`);
+        } else {
+            // Determinar archivo dependiendo del Engine actual
+            // Para migración/Shadow usamos 'garageia-shadow.sqlite' o tmp. 
+            // Para productivo (SQLITE) usamos 'garageia.sqlite'.
+            let dbName = 'garageia-shadow.sqlite';
+            if (engine === 'SQLITE') {
+                dbName = 'garageia.sqlite';
+            }
+            dbPath = path.join(DATA_DIR, dbName);
         }
 
-        const dbPath = path.join(DATA_DIR, dbName);
-        console.log(`🗄️ SQLite: Inicializando en ${dbPath} (Engine: ${engine})`);
+        // --- HARD SAFETY GUARD: NEVER OPEN PRODUCTION DB IN TEST ENVIRONMENT ---
+        if (isTestEnv) {
+            const prodDbPath = path.resolve(DATA_DIR, 'garageia.sqlite').toLowerCase();
+            const shadowDbPath = path.resolve(DATA_DIR, 'garageia-shadow.sqlite').toLowerCase();
+            const resolvedPath = path.resolve(dbPath);
+            const resolvedLower = resolvedPath.toLowerCase();
+            if (resolvedLower === prodDbPath || resolvedLower === shadowDbPath) {
+                throw new Error(`FATAL TEST SAFETY: Attempted to open production local database during tests: ${resolvedPath}`);
+            }
+        }
+
+        console.log(`🗄️ SQLite: Inicializando en ${dbPath} (Engine: ${engine}, isTest: ${isTestEnv})`);
         
+        this.dbPath = dbPath;
         this.db = new DatabaseSync(dbPath);
         
         try {
@@ -47,12 +74,29 @@ export class SQLiteManager {
         return SQLiteManager.instance;
     }
 
+    // Para testing o reset del singleton con BD temporal aislada
+    public static initForTest(testPath?: string): SQLiteManager {
+        SQLiteManager.resetInstance();
+        const testDir = path.join(DATA_DIR, 'test');
+        if (!fs.existsSync(testDir)) {
+            fs.mkdirSync(testDir, { recursive: true });
+        }
+        SQLiteManager.customDbPath = testPath || path.join(testDir, `test_garageia_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.sqlite`);
+        SQLiteManager.instance = new SQLiteManager(SQLiteManager.customDbPath);
+        return SQLiteManager.instance;
+    }
+
+    public getDbPath(): string {
+        return this.dbPath;
+    }
+
     // Para testing o reset del singleton
     public static resetInstance(): void {
         if (SQLiteManager.instance) {
             try { SQLiteManager.instance.db.close(); } catch(e){}
             (SQLiteManager as any).instance = undefined;
         }
+        SQLiteManager.customDbPath = null;
     }
 
     public getDatabase(): DatabaseSync {
@@ -71,7 +115,7 @@ export class SQLiteManager {
     private applyMigrations() {
         const currentVersionResult = this.db.prepare('PRAGMA user_version;').get() as { user_version: number };
         const currentVersion = currentVersionResult.user_version;
-        const targetVersion = 3; // Phase 3 V3 Schema (Attachments)
+        const targetVersion = 4; // Phase 3 V4 Schema (last_error)
 
         console.log(`🗄️ SQLite: Versión actual del Schema = ${currentVersion}, Esperado = ${targetVersion}`);
 
@@ -116,13 +160,30 @@ export class SQLiteManager {
                 this.runMigration2to3();
             }
 
+            if (currentVersion < 4) {
+                this.runMigration3to4();
+            }
+
             this.db.exec(`PRAGMA user_version = ${targetVersion};`);
             this.db.exec('COMMIT;');
-            console.log('🗄️ SQLite: Migración de schema exitosa a V3 sin pérdida de datos.');
+            console.log(`🗄️ SQLite: Migración de schema exitosa a V${targetVersion} sin pérdida de datos.`);
         } catch (error) {
             this.db.exec('ROLLBACK;');
             console.error('❌ SQLite: Error ejecutando migraciones de schema:', error);
             throw error;
+        }
+    }
+
+    private runMigration3to4() {
+        console.log('🗄️ Ejecutando Migración V3 -> V4 (last_error)...');
+        try {
+            this.db.exec(`ALTER TABLE attachments_outbox ADD COLUMN last_error TEXT;`);
+        } catch (e: any) {
+            if (e.message && e.message.includes('duplicate column name')) {
+                // Ignore if it somehow already exists
+            } else {
+                throw e;
+            }
         }
     }
 

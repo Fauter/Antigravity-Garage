@@ -3,14 +3,22 @@ import { StorageEngine } from '../src/infrastructure/database/StorageEngine';
 import { SQLiteManager } from '../src/infrastructure/database/sqlite/SQLiteManager';
 import { SqliteSyncCoordinator } from '../src/modules/Sync/application/SqliteSyncCoordinator';
 
+import path from 'path';
+import fs from 'fs';
+
 describe('PHASE 3.1 - H: OBSERVABILITY', () => {
     let sqlite: any;
     let syncCoordinator: SqliteSyncCoordinator;
+    let testDbPath: string;
 
     beforeAll(() => {
+        const testDir = path.join(process.cwd(), '.data', 'test');
+        if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
+        testDbPath = path.join(testDir, `test_observability_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.sqlite`);
+
         vi.spyOn(StorageEngine, 'getEngine').mockReturnValue('SQLITE');
         
-        sqlite = SQLiteManager.getInstance().getDatabase();
+        sqlite = SQLiteManager.initForTest(testDbPath).getDatabase();
         sqlite.exec('DELETE FROM outbox_events;');
         sqlite.exec('DELETE FROM attachments_outbox;');
 
@@ -23,6 +31,10 @@ describe('PHASE 3.1 - H: OBSERVABILITY', () => {
 
     afterAll(() => {
         vi.restoreAllMocks();
+        SQLiteManager.resetInstance();
+        if (testDbPath && fs.existsSync(testDbPath)) {
+            try { fs.unlinkSync(testDbPath); } catch {}
+        }
     });
 
     it('H1: getStatus() returns detailed queues and errors for Technical Support', async () => {

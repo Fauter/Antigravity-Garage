@@ -26,6 +26,9 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
     response => response,
     error => {
+        if (axios.isCancel(error) || error.name === 'CanceledError' || error.code === 'ERR_CANCELED') {
+            return Promise.reject(error);
+        }
         if (import.meta.env.DEV) {
             console.error('[FRONTEND:HTTP-ERROR]', {
                 method: error.config?.method?.toUpperCase(),

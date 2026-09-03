@@ -74,32 +74,44 @@ export class SqliteConfigRepository {
     }
 
     async getPrices(garageId: string, method: string = 'EFECTIVO'): Promise<Price[]> {
+        if (!garageId || typeof garageId !== 'string') return [];
+        let priceList = 'standard';
+        const m = (method || '').toUpperCase();
+        if (m === 'ELECTRONIC' || m === 'MERCADO_PAGO' || m === 'MERCADOPAGO' || m === 'TRANSFERENCIA' || m === 'DEBITO' || m === 'CREDITO' || m === 'QR') {
+            priceList = 'electronic';
+        }
+        if (m === 'EFECTIVO' || method.toLowerCase() === 'standard') {
+            priceList = 'standard';
+        }
+
         const db = SQLiteManager.getInstance().getDatabase();
-        const rows = db.prepare(`SELECT json_data FROM prices WHERE json_extract(json_data, '$.garageId') = ? AND json_extract(json_data, '$.method') = ?`).all(garageId, method.toUpperCase()) as any[];
+        const rows = db.prepare(`
+            SELECT json_data FROM prices 
+            WHERE json_extract(json_data, '$.garageId') = ? 
+              AND (
+                json_extract(json_data, '$.priceList') = ? 
+                OR json_extract(json_data, '$.price_list') = ? 
+                OR UPPER(json_extract(json_data, '$.method')) = ?
+              )
+        `).all(garageId, priceList, priceList, (method || '').toUpperCase()) as any[];
         
         if (rows.length > 0) {
             return rows.map(r => {
                 const p = JSON.parse(r.json_data);
                 return {
                     id: p.id,
-                    vehicleTypeId: p.vehicleTypeId,
-                    tariffId: p.tariffId,
+                    vehicleTypeId: p.vehicleTypeId || p.vehicle_type_id,
+                    tariffId: p.tariffId || p.tariff_id,
                     price: p.amount || p.price,
                     amount: p.amount || p.price,
                     currency: p.currency,
-                    garageId: p.garageId,
-                    method: p.method
+                    garageId: p.garageId || p.garage_id,
+                    method: p.method || (p.priceList === 'electronic' ? 'ELECTRONIC' : 'EFECTIVO')
                 };
             });
         }
 
         try {
-            let priceList = 'standard';
-            if (method.toUpperCase() === 'ELECTRONIC' || method.toUpperCase() === 'MERCADO_PAGO' || method.toUpperCase() === 'TRANSFERENCIA' || method.toUpperCase() === 'DEBITO' || method.toUpperCase() === 'CREDITO') {
-                priceList = 'electronic';
-            }
-            if (method.toUpperCase() === 'EFECTIVO') priceList = 'standard';
-
             const { data, error } = await supabase.from('prices').select('*').eq('garage_id', garageId).eq('price_list', priceList);
             if (error) throw error;
             return (data || []).map(row => ({
@@ -119,7 +131,7 @@ export class SqliteConfigRepository {
     }
 
     async getParams(garageId?: string): Promise<any> {
-        if (garageId) {
+        if (garageId && typeof garageId === 'string') {
             const db = SQLiteManager.getInstance().getDatabase();
             const rows = db.prepare(`SELECT json_data FROM financial_configs WHERE json_extract(json_data, '$.garageId') = ?`).all(garageId) as any[];
             
@@ -135,6 +147,16 @@ export class SqliteConfigRepository {
                 const numericUntilDay = rawUntilDay === null || rawUntilDay === undefined ? null : Number(rawUntilDay);
                 const subscriptionFullPriceUntilDay = Number.isInteger(numericUntilDay) && numericUntilDay! >= 1 && numericUntilDay! <= 31 ? numericUntilDay : null;
 
+                let parsedSurchargeConfig = config.surchargeConfig ?? config.surcharge_config;
+                if (typeof parsedSurchargeConfig === 'string') {
+                    try {
+                        parsedSurchargeConfig = JSON.parse(parsedSurchargeConfig);
+                    } catch (e) {
+                        console.error('Invalid surcharge_config JSON string in DB:', e);
+                        parsedSurchargeConfig = {};
+                    }
+                }
+
                 return {
                     initial_tolerance: config.initialTolerance ?? 15,
                     fractionate_after: config.fractionateAfter ?? 0,
@@ -144,7 +166,8 @@ export class SqliteConfigRepository {
                     recargoDia22: 20,
                     permitirCobroAnticipado: false,
                     subscriptionFullPriceEnabled,
-                    subscriptionFullPriceUntilDay
+                    subscriptionFullPriceUntilDay,
+                    surchargeConfig: parsedSurchargeConfig
                 };
             }
         }

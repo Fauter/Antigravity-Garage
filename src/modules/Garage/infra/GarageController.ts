@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { SubscriptionManager } from '../domain/SubscriptionManager';
 import { ConfigRepository } from '../../Configuration/infra/ConfigRepository';
+import { TransactionHelper } from '../../../infrastructure/database/sqlite/TransactionHelper';
+import { SQLiteManager } from '../../../infrastructure/database/sqlite/SQLiteManager';
 import { SubscriptionRepository } from './SubscriptionRepository';
 import { CustomerRepository } from './CustomerRepository';
 import { DocumentService } from '../application/DocumentService.js';
@@ -88,28 +90,153 @@ const PRICING_CONFIG = {
 };
 
 export class GarageController {
+    private cocheraRepo?: any;
     private subscriptionRepo: SubscriptionRepository;
     private customerRepo: CustomerRepository;
     private vehicleRepo: VehicleRepository;
     private movementRepo: MovementRepository;
     private debtRepo: DebtRepository;
 
-    constructor() {
-        this.subscriptionRepo = new SubscriptionRepository();
-        this.customerRepo = new CustomerRepository();
-        this.vehicleRepo = new VehicleRepository();
-        this.movementRepo = new MovementRepository();
-        this.debtRepo = new DebtRepository();
+    constructor(
+        cocheraRepo?: any,
+        customerRepo?: CustomerRepository,
+        vehicleRepo?: VehicleRepository,
+        subscriptionRepo?: SubscriptionRepository,
+        debtRepo?: DebtRepository,
+        movementRepo?: MovementRepository
+    ) {
+        this.cocheraRepo = cocheraRepo;
+        this.subscriptionRepo = subscriptionRepo || new SubscriptionRepository();
+        this.customerRepo = customerRepo || new CustomerRepository();
+        this.vehicleRepo = vehicleRepo || new VehicleRepository();
+        this.movementRepo = movementRepo || new MovementRepository();
+        this.debtRepo = debtRepo || new DebtRepository();
     }
 
-    private recalculateCocheraPrice = async (cochera: any, garageId: string): Promise<number> => {
+    private resolveSubscriptionMonthlyPrice = async (
+        subToRenew: any,
+        paymentMethod: string,
+        garageId: string
+    ): Promise<number> => {
+        const allCocheras = await (this.cocheraRepo ? this.cocheraRepo.findAll() : cocherasDB.getAll());
+        const subClientId = subToRenew.customerId || subToRenew.customer_id || subToRenew.clientId;
+        const subSpotNumber = subToRenew.spotNumber;
+        const subVehicleId = subToRenew.vehicleId || subToRenew.vehicle_id;
+        const subPlate = subToRenew.plate || subToRenew.vehicleData?.plate;
+
+        let relatedCochera = null;
+        if (subClientId || subSpotNumber || subPlate) {
+            relatedCochera = allCocheras.find((c: any) => {
+                const cocheraClientId = c.clienteId || c.cliente_id;
+                if (subClientId && cocheraClientId && cocheraClientId !== subClientId) return false;
+                const isSpotMatch = subSpotNumber && String(c.numero) === String(subSpotNumber);
+                const isPlateMatch = subPlate && c.vehiculos && c.vehiculos.some((v: any) =>
+                    (typeof v === 'string' ? v.trim() : v.plate?.trim()) === subPlate.trim()
+                );
+                if (subSpotNumber || subPlate) {
+                    return Boolean(isSpotMatch || isPlateMatch);
+                }
+                return Boolean(subClientId && cocheraClientId === subClientId);
+            });
+        }
+
+        const cocheraBasePrice = relatedCochera ? Number(relatedCochera.precioBase || 0) : 0;
+
+        // 1. Determinar tipo de vehículo (vKey)
+        let vKey = '';
+        if (relatedCochera && relatedCochera.vehiculos && relatedCochera.vehiculos.length > 0) {
+            const plateStr = typeof relatedCochera.vehiculos[0] === 'string' ? relatedCochera.vehiculos[0] : (relatedCochera.vehiculos[0] as any).plate;
+            if (plateStr) {
+                const v = await this.vehicleRepo.findByPlate(plateStr);
+                if (v && v.type) vKey = String(v.type).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+            }
+        }
+        if (!vKey && subVehicleId) {
+            const v = await this.vehicleRepo.findById(subVehicleId);
+            if (v && v.type) vKey = String(v.type).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+        }
+        if (!vKey && subPlate) {
+            const v = await this.vehicleRepo.findByPlate(subPlate);
+            if (v && v.type) vKey = String(v.type).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+        }
+        if (!vKey && subToRenew.vehicleData?.type) {
+            vKey = String(subToRenew.vehicleData.type).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+        }
+
+        // 2. Determinar tipo de tarifa (tKey)
+        const subTypeRaw = subToRenew.type || subToRenew.subscriptionType || relatedCochera?.tipo || 'Movil';
+        let tKey = String(subTypeRaw).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+        if (subTypeRaw === 'Exclusiva') tKey = 'abono exclusivo';
+        else tKey = `abono ${tKey}`;
+
+        // 3. Buscar en la matriz de precios para el garage y método de pago
+        let priceList = 'standard';
+        const m = (paymentMethod || '').toUpperCase();
+        if (m === 'ELECTRONIC' || m === 'MERCADO_PAGO' || m === 'MERCADOPAGO' || m === 'TRANSFERENCIA' || m === 'DEBITO' || m === 'CREDITO' || m === 'QR') {
+            priceList = 'electronic';
+        }
+
+        try {
+            const [prices, vehicleTypes, tariffs] = await Promise.all([
+                (new ConfigRepository()).getPrices(garageId, priceList),
+                (new ConfigRepository()).getVehicleTypes(garageId),
+                (new ConfigRepository()).getTariffs(garageId)
+            ]);
+
+            const vTypeMap = new Map(vehicleTypes.map((v: any) => [v.id.trim(), v.name]));
+            const tariffMap = new Map(tariffs.map((t: any) => [t.id.trim(), t.name]));
+
+            const priceMatrix: Record<string, Record<string, number>> = {};
+            prices.forEach((p: any) => {
+                const vIdRaw = (p.vehicleTypeId || p.vehicle_type_id || '').trim();
+                const tIdRaw = (p.tariffId || p.tariff_id || '').trim();
+                const vName = vTypeMap.get(vIdRaw);
+                const tName = tariffMap.get(tIdRaw);
+                if (vName && tName) {
+                    const normV = String(vName).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+                    const normT = String(tName).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+                    if (!priceMatrix[normV]) priceMatrix[normV] = {};
+                    priceMatrix[normV][normT] = Number(p.amount ?? p.price ?? 0);
+                }
+            });
+
+            if (priceMatrix[vKey]) {
+                const rawNormalized = String(subTypeRaw).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+                if (priceMatrix[vKey][tKey] > 0) {
+                    return priceMatrix[vKey][tKey];
+                }
+                if (priceMatrix[vKey][`${rawNormalized} abono`] > 0) {
+                    return priceMatrix[vKey][`${rawNormalized} abono`];
+                }
+                if (priceMatrix[vKey][rawNormalized] > 0) {
+                    return priceMatrix[vKey][rawNormalized];
+                }
+            }
+        } catch (err) {
+            console.error("Error buscando precio en matriz:", err);
+        }
+
+        // 4. Fallback a cochera.precioBase si > 0
+        if (cocheraBasePrice > 0) {
+            return cocheraBasePrice;
+        }
+
+        // 5. Fallback a subToRenew.price si > 0
+        if (Number(subToRenew.price) > 0) {
+            return Number(subToRenew.price);
+        }
+
+        return 0;
+    };
+
+    private recalculateCocheraPrice = async (cochera: any, garageId: string, priceType: string = 'standard'): Promise<number> => {
         if (!cochera.vehiculos || cochera.vehiculos.length === 0) {
             return cochera.precioBase || 0;
         }
 
         try {
             const [prices, vehicleTypes, tariffs] = await Promise.all([
-                (new ConfigRepository()).getPrices(garageId, 'standard' ),
+                (new ConfigRepository()).getPrices(garageId, priceType),
                 (new ConfigRepository()).getVehicleTypes(garageId),
                 (new ConfigRepository()).getTariffs(garageId)
             ]);
@@ -167,13 +294,13 @@ export class GarageController {
                 return maxPrice;
             }
 
-            // Fallback robusto a PRICING_CONFIG o precioBase
-            const fallbackValue = PRICING_CONFIG.mensual[cochera.tipo as keyof typeof PRICING_CONFIG.mensual]?.Efectivo || cochera.precioBase || 0;
+            // Fallback prioritario a precioBase, luego a PRICING_CONFIG
+            const fallbackValue = cochera.precioBase || PRICING_CONFIG.mensual[cochera.tipo as keyof typeof PRICING_CONFIG.mensual]?.Efectivo || 0;
             return fallbackValue;
 
         } catch (error) {
             console.error("Error recalculando precio de cochera:", error);
-            return PRICING_CONFIG.mensual[cochera.tipo as keyof typeof PRICING_CONFIG.mensual]?.Efectivo || cochera.precioBase || 0;
+            return cochera.precioBase || PRICING_CONFIG.mensual[cochera.tipo as keyof typeof PRICING_CONFIG.mensual]?.Efectivo || 0;
         }
     };
 
@@ -271,6 +398,146 @@ export class GarageController {
             await cocherasDB.create(newCochera);
             res.json(newCochera);
         } catch (error: any) {
+            res.status(500).json({ error: error.message });
+        }
+    }
+
+    addVehicleAtomic = async (req: Request, res: Response) => {
+        try {
+            const { id } = req.params as { id: string }; // cocheraId
+            const { vehicleData, paymentMethod, billingType, operator, amount } = req.body;
+            const garageId = req.headers['x-garage-id'] as string;
+
+            if (!vehicleData || !vehicleData.plate || !vehicleData.type) {
+                return res.status(400).json({ error: 'Faltan datos del vehículo (patente o tipo)' });
+            }
+
+            const cochera = await cocherasDB.getById(id);
+            if (!cochera) return res.status(404).json({ error: 'Cochera no encontrada' });
+            if (!cochera.clienteId) return res.status(400).json({ error: 'La cochera no tiene un cliente asignado' });
+
+            const cocheraRepo = await getCocheraRepo();
+            let receiptNumber = null;
+            let finalOldPrice = 0;
+            let finalNewPrice = 0;
+            let finalUpgradeAmount = 0;
+
+            await TransactionHelper.runAsync(async (tx) => {
+                // 1. Resolve or Create Vehicle
+                let vehicleEntity = await this.vehicleRepo.findByPlate(vehicleData.plate);
+                if (vehicleEntity) {
+                    vehicleEntity = {
+                        ...vehicleEntity,
+                        brand: vehicleData.brand || vehicleEntity.brand,
+                        model: vehicleData.model || vehicleEntity.model,
+                        color: vehicleData.color || vehicleEntity.color,
+                        year: vehicleData.year || vehicleEntity.year,
+                        insurance: vehicleData.insurance || vehicleEntity.insurance,
+                        type: vehicleData.type || vehicleEntity.type,
+                        customerId: cochera.clienteId, // Adopt owner
+                        isSubscriber: true,
+                        updatedAt: new Date()
+                    };
+                } else {
+                    vehicleEntity = {
+                        id: uuidv4(),
+                        customerId: cochera.clienteId,
+                        garageId: garageId || cochera.garageId,
+                        plate: vehicleData.plate,
+                        type: vehicleData.type,
+                        brand: vehicleData.brand,
+                        model: vehicleData.model,
+                        color: vehicleData.color,
+                        year: vehicleData.year,
+                        insurance: vehicleData.insurance,
+                        isSubscriber: true,
+                        createdAt: new Date(),
+                        updatedAt: new Date()
+                    };
+                }
+
+                // 2. Add plate to cochera if not present
+                if (!cochera.vehiculos) cochera.vehiculos = [];
+                const hasPlate = cochera.vehiculos.some((v: any) => typeof v === 'string' ? v === vehicleEntity.plate : v.plate === vehicleEntity.plate);
+                if (!hasPlate) {
+                    cochera.vehiculos.push(vehicleEntity.plate);
+                }
+
+                // 3. Save vehicle
+                await this.vehicleRepo.save(vehicleEntity, tx);
+
+                // 4. Calculate new cochera base price (authoritative canonical standard)
+                const newCocheraPrice = await this.recalculateCocheraPrice(cochera, garageId, 'standard');
+                const oldPrice = cochera.precioBase || 0;
+                
+                finalOldPrice = oldPrice;
+                finalNewPrice = newCocheraPrice;
+
+                // Assign new canonical price
+                cochera.precioBase = newCocheraPrice;
+                await cocheraRepo.save(cochera, tx);
+
+                // 5. Update associated Subscription and handle UPGRADE
+                if (newCocheraPrice > oldPrice) {
+                    const subs = await this.subscriptionRepo.findByCustomerId(cochera.clienteId);
+                    const exactSub = this.matchSubscriptionForCochera(cochera, subs, [vehicleEntity.plate]);
+
+                    if (exactSub) {
+                        exactSub.price = newCocheraPrice;
+                        await this.subscriptionRepo.save(exactSub, tx);
+
+                        // Diff calculation
+                        let financialDiff = newCocheraPrice - oldPrice;
+                        if (paymentMethod !== 'Efectivo') {
+                            // Si es electrónico, calculamos la diferencia usando los precios electrónicos
+                            // Para ser precisos, debemos recalcular cómo era antes en electrónico y cómo es ahora
+                            const cocheraWithoutNew = { ...cochera, vehiculos: cochera.vehiculos.filter((p: any) => p !== vehicleEntity.plate) };
+                            const oldElectronicPrice = await this.recalculateCocheraPrice(cocheraWithoutNew, garageId, 'electronic');
+                            const newElectronicPrice = await this.recalculateCocheraPrice(cochera, garageId, 'electronic');
+                            financialDiff = newElectronicPrice - oldElectronicPrice;
+                        }
+
+                        const now = new Date();
+                        const today = now.getDate();
+                        const diasMes = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+                        const proratedCharge = Math.round((financialDiff / diasMes) * ((diasMes - today) + 1));
+
+                        // Generate Movement for upgrade
+                        if (proratedCharge > 0) {
+                            receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
+                            const movement = {
+                                id: uuidv4(),
+                                type: 'CobroAbono',
+                                amount: proratedCharge,
+                                paymentMethod: paymentMethod || 'Efectivo',
+                                timestamp: new Date(),
+                                notes: `Upgrade de vehículo: ${vehicleEntity.plate} (Lista: ${paymentMethod === 'Efectivo' ? 'Standard' : 'Electronic'})`,
+                                relatedEntityId: exactSub.id,
+                                plate: vehicleEntity.plate,
+                                garageId: garageId || cochera.garageId,
+                                operator: operator || 'Sistema',
+                                invoice_type: billingType || 'Final',
+                                ticket_code: receiptNumber,
+                                createdAt: new Date()
+                            };
+                            await this.movementRepo.save(movement as any, tx);
+                            finalUpgradeAmount = proratedCharge;
+                        }
+                    }
+                }
+            });
+
+            const refreshedCochera = await cocherasDB.getById(id);
+            res.json({ 
+                message: 'Vehículo agregado exitosamente', 
+                cochera: refreshedCochera, 
+                ticket_code: receiptNumber,
+                oldBasePrice: finalOldPrice,
+                newBasePrice: finalNewPrice,
+                upgradeAmount: finalUpgradeAmount
+            });
+        } catch (error: any) {
+            console.error('Error in addVehicleAtomic:', error);
             res.status(500).json({ error: error.message });
         }
     }
@@ -374,6 +641,58 @@ export class GarageController {
         }
     }
 
+    private matchSubscriptionForCochera = (cochera: any, subs: any[], fallbackPlates: string[] = []): any | null => {
+        const activeSubs = subs.filter(s => s.active !== false || s.status === 'active');
+        if (activeSubs.length === 0) return null;
+
+        const cocheraClientId = cochera.clienteId;
+        const cocheraNumero = cochera.numero;
+        const cocheraTipo = cochera.tipo ? cochera.tipo.toLowerCase().replace(/fija/g, 'fija').replace(/movil/g, 'movil').replace(/exclusiva/g, 'exclusiva') : '';
+
+        const cleanCocheraPlates = (cochera.vehiculos || []).map((v: any) => typeof v === 'string' ? v.trim() : v.plate?.trim()).filter(Boolean);
+        // Include fallback plates for the unassign case where the plate is already removed from cochera.vehiculos
+        for (const fp of fallbackPlates) {
+            if (!cleanCocheraPlates.includes(fp.trim())) cleanCocheraPlates.push(fp.trim());
+        }
+
+        const candidates = [];
+
+        for (const s of activeSubs) {
+            const subClientId = s.customerId || s.clientId;
+            const subPlate = (s.vehicleData?.plate || s.plate)?.trim();
+            const subSpotNumber = s.spotNumber;
+            const subType = s.type || s.subscriptionType;
+            const normSubType = subType ? subType.toLowerCase().replace(/fija/g, 'fija').replace(/movil/g, 'movil').replace(/exclusiva/g, 'exclusiva') : '';
+            const subCocheraId = s.cocheraId || s.cochera_id;
+
+            // 0. Strict COCHERA ID match (Canonical Identity)
+            if (subCocheraId && String(subCocheraId) === String(cochera.id)) {
+                return s;
+            }
+
+            // 1. Strict SPOT match
+            if (subSpotNumber && cocheraNumero && String(subSpotNumber) === String(cocheraNumero) && subClientId === cocheraClientId) {
+                return s;
+            }
+
+            // 2. Strict Plate match
+            if (subPlate && cleanCocheraPlates.includes(subPlate)) {
+                return s;
+            }
+
+            // 3. Fallback Type match
+            if (subClientId === cocheraClientId && normSubType === cocheraTipo) {
+                candidates.push(s);
+            }
+        }
+
+        if (candidates.length === 1) {
+            return candidates[0];
+        }
+
+        return null;
+    }
+
     deleteCochera = async (req: Request, res: Response) => {
         try {
             const { id } = req.params as { id: string };
@@ -389,68 +708,63 @@ export class GarageController {
     unassignVehicle = async (req: Request, res: Response) => {
         try {
             const { cocheraId, plate } = req.body;
-
             const cochera = await cocherasDB.getById(String(cocheraId));
             if (!cochera) return res.status(404).json({ error: 'Cochera no encontrada' });
 
-            // Remove vehicle from cochera
-            cochera.vehiculos = (cochera.vehiculos || []).filter((v: any) => typeof v === 'string' ? v !== plate : (v as any).plate !== plate);
-
-            // Recalculate base price after removing vehicle
             const garageId = cochera.garageId || req.headers['x-garage-id'] as string || '';
-            cochera.precioBase = await this.recalculateCocheraPrice(cochera, garageId);
+            const originalClienteId = cochera.clienteId;
+            const cocheraRepo = await getCocheraRepo();
 
-            await cocherasDB.updateOne({ id: cocheraId } as any, cochera);
+            await TransactionHelper.runAsync(async (tx) => {
+                // Remove vehicle from cochera
+                cochera.vehiculos = (cochera.vehiculos || []).filter((v: any) => typeof v === 'string' ? v !== plate : (v as any).plate !== plate);
 
-            // Change isSubscriber to false for this specific vehicle and decouple from customer
-            const vehicle = await this.vehicleRepo.findByPlate(plate);
-            if (vehicle) {
-                vehicle.isSubscriber = false;
-                vehicle.customerId = null as any; // Detach client mapping
-                await this.vehicleRepo.save(vehicle);
-            }
+                // Recalculate base price after removing vehicle
+                cochera.precioBase = await this.recalculateCocheraPrice(cochera, garageId);
 
-            // AUTO-RELEASE: If no vehicles remain, fully release the cochera
-            if (cochera.vehiculos.length === 0) {
-                const originalClienteId = cochera.clienteId;
-                cochera.clienteId = null as any;
-                cochera.status = 'Disponible';
-                cochera.piso = null as any;
-                await cocherasDB.updateOne({ id: cocheraId } as any, cochera);
+                // Change isSubscriber to false for this specific vehicle, BUT KEEP customerId
+                const vehicle = await this.vehicleRepo.findByPlate(plate);
+                if (vehicle) {
+                    vehicle.isSubscriber = false;
+                    await this.vehicleRepo.save(vehicle, tx);
+                }
 
-                // Deactivate matching subscriptions + cancel ALL associated CANON debts
-                if (originalClienteId) {
-                    const subs = await this.subscriptionRepo.findByCustomerId(originalClienteId);
-                    // Buscar en TODAS las subs (no solo activas) para atrapar deudas huérfanas
-                    for (const sub of subs) {
-                        const subSpot = (sub as any).spotNumber;
-                        const subPlate = sub.plate || sub.vehicleData?.plate;
-                        const spotMatch = subSpot && cochera.numero && String(subSpot) === String(cochera.numero);
-                        const plateMatch = subPlate && subPlate === plate;
-                        const typeMatch = !subSpot && !subPlate && (sub.type || (sub as any).subscriptionType) === cochera.tipo;
+                // AUTO-RELEASE: If no vehicles remain, fully release the cochera
+                if (cochera.vehiculos.length === 0) {
+                    cochera.clienteId = null as any;
+                    cochera.status = 'Disponible';
+                    cochera.piso = null as any;
 
-                        if (spotMatch || plateMatch || typeMatch) {
-                            // Desactivar si aún estaba activa
-                            if (sub.active) {
-                                sub.active = false;
-                                sub.endDate = new Date();
-                                await this.subscriptionRepo.save(sub);
+                    // Exact Subscription Matching
+                    if (originalClienteId) {
+                        const subs = await this.subscriptionRepo.findByCustomerId(originalClienteId);
+                        const exactSub = this.matchSubscriptionForCochera(cochera, subs, [plate]);
+
+                        if (exactSub) {
+                            if (exactSub.active) {
+                                exactSub.active = false;
+                                exactSub.endDate = new Date();
+                                await this.subscriptionRepo.save(exactSub, tx);
                             }
 
                             // Cancelar TODAS las deudas CANON PENDING de esta suscripción
-                            const debts = await this.debtRepo.findBySubscriptionId(sub.id);
+                            const debts = await this.debtRepo.findBySubscriptionId(exactSub.id);
                             for (const debt of debts) {
                                 if (debt.status === 'PENDING' && AUTO_CANCELLABLE_DEBT_TYPES.includes((debt as any).type || 'CANON')) {
                                     debt.status = 'CANCELLED';
-                                    await this.debtRepo.save(debt);
+                                    await this.debtRepo.save(debt, tx);
                                 }
                             }
                         }
                     }
                 }
-            }
+                
+                // Finally update cochera
+                await cocheraRepo.save(cochera, tx);
+            });
 
-            res.json({ message: 'Vehículo desvinculado correctamente', cochera });
+            const refreshedCochera = await cocherasDB.getById(String(cocheraId));
+            res.json({ message: 'Vehículo desvinculado correctamente', cochera: refreshedCochera });
         } catch (error: any) {
             res.status(500).json({ error: error.message });
         }
@@ -459,66 +773,57 @@ export class GarageController {
     releaseCochera = async (req: Request, res: Response) => {
         try {
             const { cocheraId } = req.body;
-
             const cochera = await cocherasDB.getById(String(cocheraId));
             if (!cochera) return res.status(404).json({ error: 'Cochera no encontrada' });
 
             const vehiclesToRelease = cochera.vehiculos || [];
-
-            // 1. Capture the explicit client BEFORE deleting it from cochera
             const originalClienteId = cochera.clienteId;
+            const cocheraRepo = await getCocheraRepo();
 
-            // Empty cochera vehicles and detach client
-            cochera.vehiculos = [];
-            cochera.clienteId = null as any; // REMOVE OWNER (explicitly null for serialization)
-            cochera.status = 'Disponible'; // MAKE AVAILABLE
-            cochera.piso = null as any; // CLEAR PISO on release
-
-            await cocherasDB.updateOne({ id: cocheraId } as any, cochera);
-
-            // Set all associated vehicles isSubscriber to false and detach them
-            for (const v of vehiclesToRelease) {
-                const plate = typeof v === 'string' ? v : (v as any).plate;
-                const vehicle = await this.vehicleRepo.findByPlate(plate);
-                if (vehicle) {
-                    vehicle.isSubscriber = false;
-                    vehicle.customerId = null as any; // Detach client mapping
-                    await this.vehicleRepo.save(vehicle);
+            await TransactionHelper.runAsync(async (tx) => {
+                // Empty cochera vehicles and detach client
+                cochera.vehiculos = [];
+                cochera.clienteId = null as any; // REMOVE OWNER
+                cochera.status = 'Disponible'; // MAKE AVAILABLE
+                cochera.piso = null as any; // CLEAR PISO on release
+                
+                // Set all associated vehicles isSubscriber to false but DO NOT detach customerId
+                for (const v of vehiclesToRelease) {
+                    const plate = typeof v === 'string' ? v : (v as any).plate;
+                    const vehicle = await this.vehicleRepo.findByPlate(plate);
+                    if (vehicle) {
+                        vehicle.isSubscriber = false;
+                        await this.vehicleRepo.save(vehicle, tx);
+                    }
                 }
-            }
 
-            // Find subscriptions for this cochera/client and deactivate + cancel debts
-            if (originalClienteId) {
-                const subs = await this.subscriptionRepo.findByCustomerId(originalClienteId);
-                const vehiclePlates = vehiclesToRelease.map((v: any) => typeof v === 'string' ? v : (v as any).plate);
+                // Find EXACT subscription for this cochera/client and deactivate + cancel CANON debts
+                if (originalClienteId) {
+                    const subs = await this.subscriptionRepo.findByCustomerId(originalClienteId);
+                    const fallbackPlates = vehiclesToRelease.map((v: any) => typeof v === 'string' ? v : (v as any).plate);
+                    const exactSub = this.matchSubscriptionForCochera(cochera, subs, fallbackPlates);
 
-                // Buscar en TODAS las subs (no solo activas) para limpiar deudas huérfanas
-                for (const sub of subs) {
-                    const subSpot = (sub as any).spotNumber;
-                    const subPlate = sub.plate || sub.vehicleData?.plate;
-                    const spotMatch = subSpot && cochera.numero && String(subSpot) === String(cochera.numero);
-                    const plateMatch = subPlate && vehiclePlates.includes(subPlate);
-                    const typeMatch = !subSpot && !subPlate && (sub.type || (sub as any).subscriptionType) === cochera.tipo;
-
-                    if (spotMatch || plateMatch || typeMatch) {
-                        // Desactivar si aún estaba activa
-                        if (sub.active) {
-                            sub.active = false;
-                            sub.endDate = new Date();
-                            await this.subscriptionRepo.save(sub);
+                    if (exactSub) {
+                        if (exactSub.active) {
+                            exactSub.active = false;
+                            exactSub.endDate = new Date();
+                            await this.subscriptionRepo.save(exactSub, tx);
                         }
 
                         // Cancelar TODAS las deudas CANON PENDING de esta suscripción
-                        const debts = await this.debtRepo.findBySubscriptionId(sub.id);
+                        const debts = await this.debtRepo.findBySubscriptionId(exactSub.id);
                         for (const debt of debts) {
                             if (debt.status === 'PENDING' && AUTO_CANCELLABLE_DEBT_TYPES.includes((debt as any).type || 'CANON')) {
                                 debt.status = 'CANCELLED';
-                                await this.debtRepo.save(debt);
+                                await this.debtRepo.save(debt, tx);
                             }
                         }
                     }
                 }
-            }
+                
+                // Finally update cochera
+                await cocheraRepo.save(cochera, tx);
+            });
 
             res.json({ message: 'Cochera liberada correctamente', cochera });
         } catch (error: any) {
@@ -562,16 +867,18 @@ export class GarageController {
                 return res.status(422).json({ error: "La exoneración inicial solamente está disponible durante los últimos dos días del mes." });
             }
 
-            // 1. Process Customer (Find or Create)
-            let customer = await this.customerRepo.findByDni(customerData.dni);
-            if (!customer) {
-                const garageIdFromHeader = req.headers['x-garage-id'] as string;
-                console.log('🔍 DEBUG CONTROLLER: garageId extraído de headers:', garageIdFromHeader);
+            // ── PRE-FLIGHT: Reads / lookups (read-only, outside the tx) ────────────────
 
-                customer = {
+            // 1. Find or prepare Customer (DNI lookup)
+            let existingCustomer = await this.customerRepo.findByDni(customerData.dni);
+            let isNewCustomer = false;
+            let customerEntity: any;
+            if (!existingCustomer) {
+                isNewCustomer = true;
+                customerEntity = {
                     id: uuidv4(),
                     ...customerData,
-                    garageId: garageIdFromHeader, // <--- ESTA LÍNEA ES VITAL
+                    garageId: garageId,
                     name: customerData.name || customerData.nombreApellido || 'Cliente',
                     dni: customerData.dni,
                     email: customerData.email,
@@ -584,133 +891,116 @@ export class GarageController {
                     createdAt: new Date(),
                     updatedAt: new Date()
                 };
-
-                console.log('🔍 DEBUG CONTROLLER: Cliente listo para Repo:', JSON.stringify(customer));
-                await this.customerRepo.save(customer!);
-                createdCustomerId = customer!.id; // Track for rollback
+            } else {
+                customerEntity = existingCustomer;
             }
 
-            // 2. Process Vehicle
-            let vehicle = await this.vehicleRepo.findByPlate(vehicleData.plate);
-            if (!vehicle) {
-                vehicle = {
+            // 2. Find or prepare Vehicle
+            let existingVehicle = await this.vehicleRepo.findByPlate(vehicleData.plate);
+            let vehicleEntity: any;
+            if (!existingVehicle) {
+                vehicleEntity = {
                     id: uuidv4(),
-                    customerId: customer!.id,
+                    customerId: customerEntity.id,
                     garageId: garageId,
                     plate: vehicleData.plate,
                     type: vehicleData.type,
                     brand: vehicleData.brand,
                     model: vehicleData.model,
                     color: vehicleData.color,
-                    year: vehicleData.year || vehicleData.anio, // Frontend might send 'anio'
-                    insurance: vehicleData.insurance || vehicleData.seguro, // Frontend might send 'seguro'
-                    rfid_tag: vehicleData.rfid_tag || null, // RFID Tag from frontend
-                    isSubscriber: true, // Created via Subscription -> True
+                    year: vehicleData.year || vehicleData.anio,
+                    insurance: vehicleData.insurance || vehicleData.seguro,
+                    rfid_tag: vehicleData.rfid_tag || null,
+                    isSubscriber: true,
                     createdAt: new Date(),
                     updatedAt: new Date()
                 };
-                await this.vehicleRepo.save(vehicle!);
-                createdVehicleId = vehicle!.id; // Track for rollback
             } else {
-                // Update existing vehicle metadata if provided (User requested robustness)
-                // RFID IMMUTABILITY: VehicleRepository.save() handles preservation of existing tags.
-                const updatedVehicle = {
-                    ...vehicle,
-                    brand: vehicleData.brand || vehicle.brand,
-                    model: vehicleData.model || vehicle.model,
-                    color: vehicleData.color || vehicle.color,
-                    year: (vehicleData.year || vehicleData.anio) || vehicle.year,
-                    insurance: (vehicleData.insurance || vehicleData.seguro) || vehicle.insurance,
-                    rfid_tag: vehicleData.rfid_tag || (vehicle as any).rfid_tag || null, // Preserve or update RFID
-                    isSubscriber: true, // Mark as subscriber on new sub
+                vehicleEntity = {
+                    ...existingVehicle,
+                    brand: vehicleData.brand || existingVehicle.brand,
+                    model: vehicleData.model || existingVehicle.model,
+                    color: vehicleData.color || existingVehicle.color,
+                    year: (vehicleData.year || vehicleData.anio) || existingVehicle.year,
+                    insurance: (vehicleData.insurance || vehicleData.seguro) || existingVehicle.insurance,
+                    rfid_tag: vehicleData.rfid_tag || (existingVehicle as any).rfid_tag || null,
+                    isSubscriber: true,
                     updatedAt: new Date()
                 };
-                await this.vehicleRepo.save(updatedVehicle);
-                vehicle = updatedVehicle;
             }
 
-            // 3. Create Subscription
-            const customerSubs = await this.subscriptionRepo.findByCustomerId(customer!.id);
-            const activeSubs = customerSubs.filter(s => s.active);
-
-            // 3. Process Cochera (Find or Create)
+            // 3. Cochera lookup (read-only check before tx)
             const spotNumberStr = req.body.spotNumber || '';
             const allCocheras = await cocherasDB.getAll();
-            let cochera = null;
+            let cocheraForTx: any = null;
+            let newCocheraForTx: any = null;
 
             if (subscriptionType !== 'Movil' && spotNumberStr) {
-                cochera = allCocheras.find((c: any) => c.numero === String(spotNumberStr) && (c as any).garageId === garageId);
+                cocheraForTx = allCocheras.find((c: any) => c.numero === String(spotNumberStr) && (c as any).garageId === garageId);
             }
 
-            if (cochera) {
-                // ── GUARD: Reject if cochera is already occupied ──
-                if (cochera.status === 'Ocupada') {
+            if (cocheraForTx) {
+                if (cocheraForTx.status === 'Ocupada') {
                     return res.status(409).json({
-                        error: `La cochera N° ${cochera.numero || spotNumberStr} ya se encuentra ocupada. Libere la cochera antes de asignar un nuevo abono.`
+                        error: `La cochera N° ${cocheraForTx.numero || spotNumberStr} ya se encuentra ocupada. Libere la cochera antes de asignar un nuevo abono.`
                     });
                 }
-
-                // Update existing cochera (only if available)
-                cochera.clienteId = customer!.id;
-                cochera.vehiculos = [vehicle.plate]; // Replace with new assigned plate
-                cochera.status = 'Ocupada';
-                cochera.precioBase = Number(req.body.basePrice) || cochera.precioBase || 0;
-                cochera.tipo = subscriptionType;
-                cochera.piso = req.body.piso || cochera.piso || null;
-                (cochera as any).garageId = garageId;
-
-                await cocherasDB.updateOne({ id: cochera.id } as any, cochera);
+                // Prepare updated cochera
+                cocheraForTx = {
+                    ...cocheraForTx,
+                    clienteId: customerEntity.id,
+                    vehiculos: [vehicleEntity.plate],
+                    status: 'Ocupada',
+                    precioBase: Number(req.body.basePrice) || cocheraForTx.precioBase || 0,
+                    tipo: subscriptionType,
+                    piso: req.body.piso || cocheraForTx.piso || null,
+                    garageId: garageId,
+                };
             } else {
-                // Create new cochera
-                const newCochera: Cochera = {
+                newCocheraForTx = {
                     id: uuidv4(),
                     tipo: subscriptionType,
                     numero: subscriptionType === 'Movil' ? undefined : String(spotNumberStr),
                     piso: req.body.piso || null,
-                    clienteId: customer!.id,
+                    clienteId: customerEntity.id,
                     status: 'Ocupada',
                     precioBase: Number(req.body.basePrice) || 0,
-                    vehiculos: [vehicle.plate],
+                    vehiculos: [vehicleEntity.plate],
                     garageId: garageId
-                } as any;
-                await cocherasDB.create(newCochera);
+                };
             }
+
+            // 4. Subscription domain object (read + compute, no DB write yet)
+            const customerSubs = await this.subscriptionRepo.findByCustomerId(customerEntity.id);
+            const activeSubs = customerSubs.filter((s: any) => s.active);
+
             const newSubscription = SubscriptionManager.createSubscription(
-                customer!.id,
+                customerEntity.id,
                 subscriptionType,
                 new Date(),
                 activeSubs,
                 PRICING_CONFIG,
-                vehicle,
+                vehicleEntity,
                 new Date(),
                 paymentMethod
             );
+            if (!(newSubscription as any).plate) (newSubscription as any).plate = vehicleEntity.plate;
+            if (!(newSubscription as any).garageId) (newSubscription as any).garageId = garageId;
+            (newSubscription as any).cocheraId = cocheraForTx ? cocheraForTx.id : newCocheraForTx.id;
 
-            // FORCE PLATE PERSISTENCE
-            // SubscriptionManager might not attach it directly to the root object depending on implementation,
-            // so we enforce it here to guarantee the join later.
-            if (!(newSubscription as any).plate) {
-                (newSubscription as any).plate = vehicle.plate;
-            }
-            if (!(newSubscription as any).garageId) {
-                (newSubscription as any).garageId = garageId;
-            }
-
-            // --- SERVER-SIDE PRICE CALCULATION (Authoritative) ---
+            // 5. Server-side price calculation (authoritative)
             const isElectronic = paymentMethod !== 'Efectivo';
             const priceListFilter = isElectronic ? 'electronic' : 'standard';
-
             const [allVehicleTypes, allTariffs, allPrices, financialConfigs] = await Promise.all([
                 (new ConfigRepository()).getVehicleTypes(garageId),
                 (new ConfigRepository()).getTariffs(garageId),
-                (new ConfigRepository()).getPrices(garageId, priceListFilter ),
+                (new ConfigRepository()).getPrices(garageId, priceListFilter),
                 [(await (new ConfigRepository()).getParams(garageId))]
             ]);
 
             const configs = [...financialConfigs].sort((a: any, b: any) => new Date(b.updatedAt || b.updated_at || 0).getTime() - new Date(a.updatedAt || a.updated_at || 0).getTime());
             const config = (configs[0] as any) || {};
-
-            const vType = allVehicleTypes.find((vt: any) => vt.name === vehicle.type);
+            const vType = allVehicleTypes.find((vt: any) => vt.name === vehicleEntity.type);
             const tType = allTariffs.find((t: any) => t.name === subscriptionType);
 
             let calculatedAmount = 0;
@@ -724,33 +1014,25 @@ export class GarageController {
                     const currentDay = now.getDate();
                     const ultimoDiaMes = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
                     const diasRestantes = (ultimoDiaMes - currentDay) + 1;
-                    
                     const rawEnabled = config.subscriptionFullPriceEnabled ?? config.subscription_full_price_enabled;
                     const rawUntilDay = config.subscriptionFullPriceUntilDay ?? config.subscription_full_price_until_day ?? null;
-                    
                     const fullPriceEnabled = rawEnabled === true;
                     const numericUntilDay = rawUntilDay === null || rawUntilDay === undefined ? null : Number(rawUntilDay);
                     const validUntilDay = typeof numericUntilDay === 'number' && Number.isInteger(numericUntilDay) && numericUntilDay >= 1 && numericUntilDay <= 31;
-                    
                     const isFullMonthCharge = fullPriceEnabled === true && validUntilDay && currentDay <= (numericUntilDay as number);
-                    
                     if (isFullMonthCharge) {
                         calculatedAmount = currentPrice;
                     } else {
-                        const exactCalc = (currentPrice / ultimoDiaMes) * diasRestantes;
-                        calculatedAmount = Math.round(exactCalc);
+                        calculatedAmount = Math.round((currentPrice / ultimoDiaMes) * diasRestantes);
                     }
                 }
             }
 
             if (calculatedAmount === 0) {
-                return res.status(400).json({ error: `Precio no configurado en la base de datos para ${vehicle.type} y Tarifa ${subscriptionType} (${paymentMethod}).` });
+                return res.status(400).json({ error: `Precio no configurado en la base de datos para ${vehicleEntity.type} y Tarifa ${subscriptionType} (${paymentMethod}).` });
             }
 
-            // Enforce server-calculated price unconditionally
             newSubscription.price = calculatedAmount;
-            
-            // Exemption Audit Fields
             if (validatedExemption) {
                 (newSubscription as any).initialChargeExempted = true;
                 (newSubscription as any).initialChargeExemptionReason = 'LAST_TWO_DAYS_OF_MONTH';
@@ -758,43 +1040,55 @@ export class GarageController {
                 (newSubscription as any).initialChargeExemptedBy = operator || 'Sistema';
                 (newSubscription as any).calculatedInitialAmount = calculatedAmount;
             }
-            // -----------------------------------------------------
 
-            const savedSub = await this.subscriptionRepo.save(newSubscription);
-            createdSubscriptionId = savedSub.id; // Track for rollback
+            // Validate financial amounts before opening the transaction
+            const montoReal = !validatedExemption
+                ? ((req.body.montoAbonado !== undefined && req.body.montoAbonado !== null && Number(req.body.montoAbonado) > 0)
+                    ? Number(req.body.montoAbonado)
+                    : newSubscription.price)
+                : 0;
 
-            // 4.5. Process Document Photos (Optional — Never blocks transaction)
-            const hasPhotos = photos && typeof photos === 'object' && Object.values(photos).some((v: any) => v && String(v).length > 0);
-            if (hasPhotos) {
-                try {
-                    const docsMeta = await DocumentService.processPhotos(savedSub.id, garageId, photos);
-                    (savedSub as any).documents_metadata = docsMeta;
-                    await this.subscriptionRepo.save(savedSub);
-                    console.log(`📸 [Abonos] Documentación procesada: ${docsMeta.documents.length} archivo(s)`);
-                } catch (photoErr: any) {
-                    console.warn(`⚠️ [Abonos] Error procesando fotos (no se aborta la transacción):`, photoErr?.message || photoErr);
-                    // Photos are optional — subscription proceeds without them
-                }
+            if (!validatedExemption && (montoReal === 0 || isNaN(montoReal))) {
+                throw new Error("Monto a cobrar inválido");
             }
 
-            // 5. Financial Movement (CRITICAL - TODO O NADA)
-            let receiptNumber: string | null = null;
-            if (!validatedExemption) {
-                try {
-                    // Determine actual amount charged (supports partial payment at alta)
-                    const montoReal = (req.body.montoAbonado !== undefined && req.body.montoAbonado !== null && Number(req.body.montoAbonado) > 0)
-                        ? Number(req.body.montoAbonado)
-                        : savedSub.price;
+            const montoAbonado = req.body.montoAbonado;
+            const totalInicial = req.body.totalInicial || newSubscription.price;
+            const diferencia = (!validatedExemption && montoAbonado !== undefined && montoAbonado !== null && Number(montoAbonado) < Number(totalInicial))
+                ? Number(totalInicial) - Number(montoAbonado)
+                : 0;
+            const debtId = diferencia > 0 ? uuidv4() : null;
+            const isPartialAlta = !validatedExemption && montoReal < newSubscription.price;
 
-                    // Validación para evitar montos nulos/ceros en altas de abono
-                    if (montoReal === 0 || isNaN(montoReal)) {
-                        throw new Error("Monto a cobrar inválido");
-                    }
+            // Generate receipt number before transaction (allow sequence gap on rollback — acceptable)
+            const receiptNumber = !validatedExemption ? await CorrelativeGenerator.nextReceiptNumber(garageId) : null;
 
-                    // Generate correlative receipt number
-                    receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
+            // ── ATOMIC TRANSACTION: ALL writes in one BEGIN/COMMIT ───────────────────
+            // Pattern identical to renewSubscription (~line 1429).
+            // sqliteDb = DatabaseSync (node:sqlite). Supports .prepare().
+            let savedSub: any;
+            await TransactionHelper.runAsync(async (sqliteDb: any) => {
+                // A. Customer (new only)
+                if (isNewCustomer) {
+                    await this.customerRepo.save(customerEntity, sqliteDb);
+                }
 
-                    const isPartialAlta = montoReal < savedSub.price;
+                // B. Vehicle (new or updated)
+                await this.vehicleRepo.save(vehicleEntity, sqliteDb);
+
+                // C. Cochera
+                if (cocheraForTx) {
+                    await (await getCocheraRepo()).save(cocheraForTx, sqliteDb);
+                } else if (newCocheraForTx) {
+                    await (await getCocheraRepo()).save(newCocheraForTx, sqliteDb);
+                }
+
+                // D. Subscription
+                savedSub = await this.subscriptionRepo.save(newSubscription, sqliteDb);
+                createdSubscriptionId = savedSub.id;
+
+                // E. Movement (only if not exempted)
+                if (!validatedExemption) {
                     await this.movementRepo.save({
                         id: uuidv4(),
                         type: 'CobroAbono',
@@ -802,67 +1096,56 @@ export class GarageController {
                         paymentMethod: paymentMethod || 'Efectivo',
                         timestamp: new Date(),
                         notes: isPartialAlta
-                            ? `Alta con Pago Parcial ${subscriptionType} - ${vehicle.plate}. Saldo pendiente: $${savedSub.price - montoReal}`
-                            : `Alta Abono ${subscriptionType} - ${vehicle.plate}`,
+                            ? `Alta con Pago Parcial ${subscriptionType} - ${vehicleEntity.plate}. Saldo pendiente: $${newSubscription.price - montoReal}`
+                            : `Alta Abono ${subscriptionType} - ${vehicleEntity.plate}`,
                         relatedEntityId: savedSub.id,
-                        plate: vehicle.plate,
+                        plate: vehicleEntity.plate,
                         garageId: garageId,
                         operator: operator || 'Sistema',
                         invoice_type: billingType,
                         ticket_code: receiptNumber,
                         createdAt: new Date()
-                    } as any);
-
-                } catch (movementError: any) {
-                    console.error('Fallo al crear Movimiento de Caja. Iniciando Rollback...', movementError);
-                    // ROLLBACK MANUAL (Compensatorio)
-                    if (createdSubscriptionId) {
-                        await this.subscriptionRepo.delete(createdSubscriptionId);
-                        // Cleanup orphaned document files from Storage (best-effort)
-                        DocumentService.cleanupOrphanedDocs(garageId, createdSubscriptionId).catch(() => { });
-                    }
-                    if (createdVehicleId) {
-                        // best effort vehicle rollback omitted for now
-                    }
-                    if (createdCustomerId) {
-                        // best effort customer rollback omitted for now
-                    }
-
-                    throw new Error(`Error de Transacción (Rollback ejecutado): ${movementError.message}`);
+                    } as any, sqliteDb);
                 }
-            }
 
-            // 5.5. Alta con Deuda: If montoAbonado < totalInicial, create debt for difference
-            if (!validatedExemption) {
-                const montoAbonado = req.body.montoAbonado;
-                const totalInicial = req.body.totalInicial || savedSub.price;
-                if (montoAbonado !== undefined && montoAbonado !== null && Number(montoAbonado) < Number(totalInicial)) {
-                    const diferencia = Number(totalInicial) - Number(montoAbonado);
-                    if (diferencia > 0) {
-                        const debtId = uuidv4();
-                        await this.debtRepo.save({
-                            id: debtId,
-                            subscriptionId: savedSub.id,
-                            customerId: customer!.id,
-                            garageId: garageId,
-                            amount: Number(totalInicial),
-                            remaining_amount: diferencia,
-                            amount_paid: Number(montoAbonado),
-                            surchargeApplied: 0,
-                            status: 'PENDING',
-                            type: 'CANON',
-                            dueDate: new Date(),
-                            createdAt: new Date(),
-                            updatedAt: new Date()
-                        } as any);
-                        console.log(`📋 [Abonos] Deuda creada por diferencia: $${diferencia} (montoAbonado: $${montoAbonado}, totalInicial: $${totalInicial})`);
-                    }
+                // F. Debt for partial payment
+                if (debtId && diferencia > 0) {
+                    await this.debtRepo.save({
+                        id: debtId,
+                        subscriptionId: savedSub.id,
+                        customerId: customerEntity.id,
+                        garageId: garageId,
+                        amount: Number(totalInicial),
+                        remaining_amount: diferencia,
+                        amount_paid: Number(montoAbonado),
+                        surchargeApplied: 0,
+                        status: 'PENDING',
+                        type: 'CANON',
+                        dueDate: new Date(),
+                        createdAt: new Date(),
+                        updatedAt: new Date()
+                    } as any, sqliteDb);
+                    console.log(`📋 [Abonos] Deuda creada por diferencia: $${diferencia}`);
+                }
+            });
+            // ── END ATOMIC TRANSACTION ───────────────────────────────────────────────
+
+            // Photo processing: side effect AFTER commit (never blocks the transaction)
+            const hasPhotos = photos && typeof photos === 'object' && Object.values(photos).some((v: any) => v && String(v).length > 0);
+            if (hasPhotos && savedSub) {
+                try {
+                    const docsMeta = await DocumentService.processPhotos(savedSub.id, garageId, photos);
+                    (savedSub as any).documents_metadata = docsMeta;
+                    await this.subscriptionRepo.save(savedSub); // standalone save, outside tx
+                    console.log(`📸 [Abonos] Documentación procesada: ${docsMeta.documents.length} archivo(s)`);
+                } catch (photoErr: any) {
+                    console.warn(`⚠️ [Abonos] Error procesando fotos (subscription ya confirmada):`, photoErr?.message || photoErr);
                 }
             }
 
             const effectiveInitialAmount = validatedExemption ? 0 : calculatedAmount;
-            res.json({ 
-                ...savedSub, 
+            res.json({
+                ...savedSub,
                 ticket_code: receiptNumber,
                 exonerated: validatedExemption,
                 movementCreated: !validatedExemption,
@@ -1043,46 +1326,48 @@ export class GarageController {
 
                 if (finalPrice <= 0) continue; // Safety abort
 
-                while (subEndDate < now && loopCount < MAX_LOOPS) {
+                // Avanzamos mes a mes usando el BillingPeriodHelper para evitar problemas de timezone
+                // Evaluamos todos los meses desde el siguiente al vencimiento hasta el mes actual
+                
+                // Empezamos evaluando el mes INMEDIATAMENTE POSTERIOR al coverage
+                let currentEvalDate = new Date(subEndDate.getTime());
+                // Incrementamos al día 1 del siguiente mes en local time, al inicio del día
+                currentEvalDate.setDate(1);
+                currentEvalDate.setMonth(currentEvalDate.getMonth() + 1);
+                currentEvalDate.setHours(0, 0, 0, 0);
+
+                while (currentEvalDate <= now && loopCount < MAX_LOOPS) {
                     loopCount++;
                     try {
-                        const monthStart = new Date(subEndDate.getFullYear(), subEndDate.getMonth(), 1);
-                        const NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
-                        const seedString = `DEBT_${sub.id}_${monthStart.getFullYear()}_${monthStart.getMonth() + 1}`;
-                        const debtId = uuidv5(seedString, NAMESPACE);
+                        const billingPeriod = require('../../Billing/domain/BillingPeriodHelper').BillingPeriodHelper.getBillingPeriod(currentEvalDate);
+                        
+                        // Look up explicit canonical existence for this period
+                        const existingDebt = await this.debtRepo.findCanonBySubscriptionAndPeriod(sub.id, billingPeriod);
 
-                        let existingDebt = null;
-                        if ((this.debtRepo as any).findById) {
-                            existingDebt = await (this.debtRepo as any).findById(debtId);
+                        if (existingDebt) {
+                            // Idempotency: the CANON for this period already exists.
+                            // We do NOT overwrite it, we do NOT change it to PENDING if PAID.
+                            // We simply leave it intact and proceed to the next period.
                         } else {
-                            // Temporary fallback until Repository is updated next Step
-                            const all = await (this.debtRepo as any).db?.getAll() || [];
-                            existingDebt = all.find((d: any) => d.id === debtId);
-                        }
+                            // Create the new canonical debt
+                            const CanonFactory = require('../../Garage/domain/CanonFactory').CanonFactory;
+                            // Set due date to the 1st of the billing period
+                            const dueDate = new Date(currentEvalDate.getFullYear(), currentEvalDate.getMonth(), 1, 0, 0, 0);
+                            
+                            const newDebt = CanonFactory.createCanonDebt(
+                                sub.id,
+                                subClientId,
+                                finalPrice,
+                                billingPeriod,
+                                dueDate
+                            );
 
-                        // Idempotency explicit break
-                        if (existingDebt && existingDebt.amount === finalPrice && existingDebt.status === 'PENDING') {
-                            // Silent pass
-                        } else {
-                            await this.debtRepo.save({
-                                id: debtId,
-                                subscriptionId: sub.id,
-                                customerId: sub.customerId || (sub as any).clientId,
-                                garageId: garageId,
-                                amount: finalPrice,
-                                remaining_amount: (existingDebt && typeof (existingDebt as any).remaining_amount === 'number') ? (existingDebt as any).remaining_amount : finalPrice,
-                                amount_paid: (existingDebt && typeof (existingDebt as any).amount_paid === 'number') ? (existingDebt as any).amount_paid : 0,
-                                surchargeApplied: 0,
-                                status: existingDebt ? existingDebt.status : 'PENDING',
-                                type: 'CANON',
-                                dueDate: new Date(subEndDate.getTime()),
-                                createdAt: existingDebt ? existingDebt.createdAt : new Date(),
-                                updatedAt: new Date()
-                            } as any);
+                            await this.debtRepo.save(newDebt as any);
                             processed++;
                         }
 
-                        subEndDate = new Date(subEndDate.getFullYear(), subEndDate.getMonth() + 2, 0, 23, 59, 59, 999);
+                        // Avanzar al mes siguiente
+                        currentEvalDate.setMonth(currentEvalDate.getMonth() + 1);
                     } catch (evalError) {
                         console.error(`Error en evaluación de deuda para sub ${sub.id}:`, evalError);
                         break;
@@ -1133,7 +1418,7 @@ export class GarageController {
             // Apply Dynamic Surcharge based on real Garage settings from Supabase
             let garageSettings: any = {};
             if (garageId) {
-                const garage: any = await (require("../../../infrastructure/database/sqlite/SQLiteManager").SQLiteManager.getInstance().getDatabase().prepare("SELECT * FROM garages WHERE id = ?").get(garageId) || {});
+                const garage: any = await (SQLiteManager.getInstance().getDatabase().prepare("SELECT * FROM garages WHERE id = ?").get(garageId) || {});
                 // Settings usually mapped to 'settings' or 'config', handle both or root
                 garageSettings = garage?.settings || garage?.config || garage || {};
 
@@ -1228,16 +1513,57 @@ export class GarageController {
             res.status(500).json({ error: error.message });
         }
     }
-
     // --- MISSING METHODS IMPLEMENTATION (Delegation) ---
 
     // Wrapper for server.ts compatibility
     getSubscriptions = this.getAllSubscriptions;
-    createFullSubscription = this.createSubscription;
+    
+    previewMultiMonthDebt = async (req: Request, res: Response) => {
+        try {
+            const { subId, targetDebtIds, paymentMethod = 'Efectivo' } = req.body;
+            const garageId = req.headers['x-garage-id'] as string;
+
+            if (!subId) return res.status(400).json({ error: 'subId is required.' });
+            if (!targetDebtIds || !Array.isArray(targetDebtIds) || targetDebtIds.length === 0) {
+                return res.status(400).json({ error: 'targetDebtIds must be a non-empty array.' });
+            }
+
+            let garageSettings: any = {};
+            if (garageId) {
+                const garage: any = await (SQLiteManager.getInstance().getDatabase().prepare("SELECT * FROM garages WHERE id = ?").get(garageId) || {});
+                garageSettings = garage?.settings || garage?.config || garage || {};
+                const financialConfigs: any = await [(await (new ConfigRepository()).getParams(garageId))];
+                if (financialConfigs && financialConfigs.length > 0) {
+                    garageSettings.surchargeConfig = financialConfigs[0].surchargeConfig || financialConfigs[0];
+                }
+            }
+
+            const subscription = await this.subscriptionRepo.findById(subId);
+            if (!subscription) return res.status(404).json({ error: 'Subscription not found' });
+            
+            const basePrice = await this.resolveSubscriptionMonthlyPrice(subscription, paymentMethod, garageId);
+
+            const allDebts = await this.debtRepo.findBySubscriptionId(subId);
+            const pendingCanon = allDebts.filter(d => d.status === 'PENDING' && d.type === 'CANON' && ((d as any).remaining_amount ?? d.amount) > 0);
+
+            const { DebtPaymentService } = require('../../Billing/application/DebtPaymentService');
+            const previewReq = { subId, targetDebtIds, now: new Date(), config: garageSettings, basePrice };
+            const previewRes = DebtPaymentService.preview(previewReq, pendingCanon);
+            
+            if (!previewRes.isValid) {
+                return res.status(400).json({ error: previewRes.error });
+            }
+            
+            return res.status(200).json(previewRes);
+        } catch (error: any) {
+            console.error('Error en previewMultiMonthDebt:', error);
+            return res.status(500).json({ error: error.message });
+        }
+    };
 
     renewSubscription = async (req: Request, res: Response) => {
         try {
-            const { subId, customerId, amountToPay, paymentMethod, billingType, operator, isDebtPaymentOnly, isGlobalDebt, targetDebts, targetDebtIds } = req.body;
+            const { subId, customerId, amountToPay, paymentMethod, billingType, operator, isDebtPaymentOnly, isGlobalDebt, targetDebts, targetDebtIds, renewalMode = 'DEBT' } = req.body;
             const garageId = req.headers['x-garage-id'] as string;
 
             if (!amountToPay || amountToPay <= 0) {
@@ -1247,7 +1573,7 @@ export class GarageController {
             // ── Load Garage Surcharge Config ──
             let garageSettings: any = {};
             if (garageId) {
-                const garage: any = await (require("../../../infrastructure/database/sqlite/SQLiteManager").SQLiteManager.getInstance().getDatabase().prepare("SELECT * FROM garages WHERE id = ?").get(garageId) || {});
+                const garage: any = await (SQLiteManager.getInstance().getDatabase().prepare("SELECT * FROM garages WHERE id = ?").get(garageId) || {});
                 garageSettings = garage?.settings || garage?.config || garage || {};
                 const financialConfigs: any = await [(await (new ConfigRepository()).getParams(garageId))];
                 if (financialConfigs && financialConfigs.length > 0) {
@@ -1255,246 +1581,436 @@ export class GarageController {
                 }
             }
 
-            // Pay debts flow
-            const allDebts = customerId ? await this.debtRepo.findByCustomerId(String(customerId)) : [];
-            const pendingDebts = allDebts.filter(d => d.status === 'PENDING' && (d as any).garageId === garageId);
+            // WE NOW WRAP EVERYTHING IN A TRANSACTION
+            const resultPayload = await TransactionHelper.runAsync(async (db: any) => {
+                
+                // --- RAMA EXPLÍCITA: RENOVACIÓN ANTICIPADA ---
+                if (renewalMode === 'ADVANCE') {
+                    if (!subId) throw new Error('subId is required for advance payment.');
+                    if (isGlobalDebt) throw new Error('Global debt payment not supported for advance payment.');
+                    
+                    const subToRenew = await this.subscriptionRepo.findById(subId);
+                    if (!subToRenew) throw new Error('Suscripción no encontrada.');
+                    if (!subToRenew.active) throw new Error('No se puede anticipar una suscripción inactiva.');
+                    if (!subToRenew.endDate) throw new Error('Suscripción no tiene endDate.');
+                    
+                    const now = new Date();
+                    const currentEndDate = new Date(subToRenew.endDate);
+                    
+                    // Validar que no esté vencida
+                    if (currentEndDate < now) {
+                        throw new Error('La suscripción está vencida. Utilice el pago normal de deuda.');
+                    }
+                    
+                    // Validar que endDate pertenece al mes calendario actual
+                    if (currentEndDate.getFullYear() !== now.getFullYear() || currentEndDate.getMonth() !== now.getMonth()) {
+                        throw new Error('El próximo período ya se encuentra abonado o la fecha es inválida.');
+                    }
+                    
+                    // Validar CANON pendientes
+                    const allPendingDebts = await this.debtRepo.findBySubscriptionId(subId);
+                    const pendingCanon = allPendingDebts.filter(d => d.status === 'PENDING' && d.type === 'CANON' && ((d as any).remaining_amount ?? d.amount) > 0);
+                    if (pendingCanon.length > 0) {
+                        throw new Error('La suscripción posee meses anteriores impagos. Cancele su deuda histórica primero.');
+                    }
 
-            let debtsToPay: any[] = [];
-            let subsToRenew: Set<string> = new Set();
+                    // En Anticipo, el monto cobrado debe ser tarifa completa
+                    const nextEndDate = SubscriptionManager.getNextCoverageEnd(currentEndDate);
+                    
+                    const expectedPrice = await this.resolveSubscriptionMonthlyPrice(
+                        subToRenew,
+                        paymentMethod || 'Efectivo',
+                        garageId || subToRenew.garageId
+                    );
 
-            if (isGlobalDebt) {
-                if (targetDebtIds && targetDebtIds.length > 0) {
-                    debtsToPay = pendingDebts.filter(d => targetDebtIds.includes(d.id));
-                } else if (targetDebts && targetDebts.length > 0) {
-                    const targetIds = targetDebts.map((td: any) => td.id);
-                    debtsToPay = pendingDebts.filter(d => targetIds.includes(d.id));
+                    if (!expectedPrice || expectedPrice <= 0) {
+                        throw new Error('No se pudo determinar una tarifa válida para este abono.');
+                    }
+
+                    // Pequeña tolerancia por redondeos en frontend
+                    if (Math.abs(amountToPay - expectedPrice) > 5) {
+                        throw new Error(`El importe anticipado debe ser el total exacto. Esperado: ${expectedPrice}, Recibido: ${amountToPay}. [Diags: paymentMethod=${paymentMethod}, vehicleType=${subToRenew.vehicleData?.type || subToRenew.plate}, subType=${subToRenew.type}]`);
+                    }
+
+                    // Aplicar la renovación
+                    const advancedSub = SubscriptionManager.advanceSubscription(
+                        subToRenew,
+                        PRICING_CONFIG as any,
+                        now,
+                        paymentMethod || 'Efectivo',
+                        expectedPrice
+                    );
+
+                    const cocheraSuffix = req.body.spotNumber ? ` - Cochera #${req.body.spotNumber}` : ' - Cochera Móvil';
+                    const movementNotes = `Renovación Abono Anticipada${cocheraSuffix} - Hasta ${nextEndDate.toLocaleDateString('es-AR')}`;
+                    const receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
+
+                    await this.movementRepo.save({
+                        id: uuidv4(),
+                        type: 'CobroAbono',
+                        amount: amountToPay,
+                        paymentMethod: paymentMethod || 'Efectivo',
+                        timestamp: now,
+                        notes: movementNotes,
+                        relatedEntityId: subId,
+                        plate: subToRenew.plate || 'N/A',
+                        garageId: garageId,
+                        operator: operator || 'Sistema',
+                        invoice_type: billingType || 'Final',
+                        ticket_code: receiptNumber,
+                        createdAt: now
+                    } as any, db);
+
+                    await this.subscriptionRepo.save(advancedSub, db);
+
+                    return {
+                        message: 'Pago anticipado exitoso. Cobertura extendida.',
+                        ticket_code: receiptNumber,
+                        isPartial: false,
+                        totalSurchargeCovered: 0,
+                        totalCapitalCovered: amountToPay,
+                        totalRemainingAfter: 0,
+                        subscriptions: [advancedSub],
+                        isAdvancePayment: true,
+                        previousEndDate: currentEndDate,
+                        newEndDate: nextEndDate
+                    };
+                }
+
+                // --- RAMA EXPLÍCITA: PAGO MULTI-MES COMPLETO ---
+                if (renewalMode === 'DEBT_MULTI_FULL') {
+                    if (!subId) throw new Error('subId is required for multi-month payment.');
+                    if (!targetDebtIds || !Array.isArray(targetDebtIds) || targetDebtIds.length === 0) {
+                        throw new Error('targetDebtIds must be a non-empty array.');
+                    }
+                    
+                    const subToRenew = await this.subscriptionRepo.findById(subId);
+                    if (!subToRenew) throw new Error('Suscripción no encontrada.');
+                    
+                    const allDebts = await this.debtRepo.findBySubscriptionId(subId);
+                    const pendingCanon = allDebts.filter(d => d.status === 'PENDING' && d.type === 'CANON' && ((d as any).remaining_amount ?? d.amount) > 0);
+                    
+                    // Lógica abstraída al dominio (Service puro)
+                    const { DebtPaymentService } = require('../../Billing/application/DebtPaymentService');
+                    
+                    const basePrice = await this.resolveSubscriptionMonthlyPrice(subToRenew, paymentMethod, garageId);
+                    
+                    const previewReq = {
+                        subId,
+                        targetDebtIds,
+                        now: new Date(),
+                        config: garageSettings,
+                        basePrice
+                    };
+                    
+                    const previewRes = DebtPaymentService.preview(previewReq, pendingCanon);
+                    if (!previewRes.isValid) {
+                        throw new Error(`Validación Multi-Mes falló: ${previewRes.error}`);
+                    }
+                    
+                    // Verificar amountToPay si vino
+                    if (amountToPay && Math.abs(amountToPay - previewRes.grandTotal) > 5) {
+                        throw new Error(`El total cobrado no coincide con el cálculo backend. Esperado: $${previewRes.grandTotal}, Recibido: ${amountToPay}`);
+                    }
+                    
+                    const receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
+                    const cocheraSuffix = req.body.spotNumber ? ` - Cochera #${req.body.spotNumber}` : ' - Cochera Móvil';
+                    
+                    // Update debts
+                    const updatedDebts = [];
+                    for (const breakdownItem of previewRes.breakdown) {
+                        const debt = allDebts.find(d => d.id === breakdownItem.debtId);
+                        if (!debt || debt.status !== 'PENDING') {
+                            throw new Error('STALE_SELECTION: Alguna de las deudas ya fue pagada o fue modificada por otro usuario.');
+                        }
+                        
+                        const isVirgin = (debt as any).remaining_amount === debt.amount || (debt as any).remaining_amount == null;
+                        
+                        if (isVirgin) {
+                            debt.amount = breakdownItem.principal;
+                            (debt as any).amount_paid = breakdownItem.principal;
+                        } else {
+                            (debt as any).amount_paid = ((debt as any).amount_paid || 0) + breakdownItem.principal;
+                        }
+
+                        debt.status = 'PAID';
+                        (debt as any).remaining_amount = 0;
+                        // SurchargeApplied persistido 
+                        (debt as any).surchargeApplied = ((debt as any).surchargeApplied || 0) + breakdownItem.surchargeAmount;
+                        debt.updatedAt = new Date();
+                        
+                        await this.debtRepo.save(debt, db);
+                        updatedDebts.push(debt);
+                    }
+                    
+                    // Advance coverage safely
+                    const previousEndDate = new Date(subToRenew.endDate || subToRenew.startDate);
+                    const newEndDate = DebtPaymentService.calculateContiguousPaidCoverage(previousEndDate, allDebts);
+                    
+                    subToRenew.endDate = newEndDate.toISOString();
+                    subToRenew.active = true;
+                    await this.subscriptionRepo.save(subToRenew, db);
+                    
+                    // Un solo Movement!
+                    const periodNames = previewRes.breakdown.map((b: any) => b.billingPeriod).join(', ');
+                    const movementNotes = `Cobro Abono (Múltiples Meses: ${periodNames})${cocheraSuffix}`;
+                    
+                    const movement = {
+                        id: uuidv4(),
+                        type: 'CobroAbono',
+                        amount: previewRes.grandTotal,
+                        paymentMethod: paymentMethod || 'Efectivo',
+                        timestamp: new Date(),
+                        notes: movementNotes,
+                        relatedEntityId: subId,
+                        plate: subToRenew.plate || 'N/A',
+                        garageId: garageId || subToRenew.garageId,
+                        operator: operator || 'Sistema',
+                        invoice_type: billingType || 'Final',
+                        ticket_code: receiptNumber,
+                        createdAt: new Date(),
+                        // METADATA CANÓNICA
+                        json_data: JSON.stringify({
+                            renewalMode: 'DEBT_MULTI_FULL',
+                            targetDebtIds,
+                            breakdown: previewRes.breakdown,
+                            principalTotal: previewRes.principalTotal,
+                            surchargeTotal: previewRes.surchargeTotal
+                        })
+                    };
+                    
+                    await this.movementRepo.save(movement as any, db);
+                    
+                    return {
+                        message: 'Pago multi-mes exitoso.',
+                        ticket_code: receiptNumber,
+                        isPartial: false,
+                        totalSurchargeCovered: previewRes.surchargeTotal,
+                        totalCapitalCovered: previewRes.principalTotal,
+                        totalRemainingAfter: 0,
+                        subscriptions: [subToRenew],
+                        updatedDebts,
+                        summary: {
+                            paidMonths: previewRes.breakdown.length,
+                            principalTotal: previewRes.principalTotal,
+                            surchargeTotal: previewRes.surchargeTotal,
+                            grandTotal: previewRes.grandTotal,
+                            newEndDate
+                        },
+                        breakdown: previewRes.breakdown
+                    };
+                }
+
+                // --- RAMA EXPLÍCITA: RENOVACIÓN DE DEUDA VENCIDA (Legacy behavior, now transactional) ---
+                const allDebts = customerId ? await this.debtRepo.findByCustomerId(String(customerId)) : [];
+                const pendingDebts = allDebts.filter(d => d.status === 'PENDING' && (d as any).garageId === garageId);
+                console.log('ALL DEBTS:', allDebts, 'GARAGE ID:', garageId, 'PENDING:', pendingDebts, 'SUBID:', subId);
+
+                let debtsToPay: any[] = [];
+                let subsToRenew: Set<string> = new Set();
+
+                if (isGlobalDebt) {
+                    if (targetDebtIds && targetDebtIds.length > 0) {
+                        debtsToPay = pendingDebts.filter(d => targetDebtIds.includes(d.id));
+                    } else if (targetDebts && targetDebts.length > 0) {
+                        const targetIds = targetDebts.map((td: any) => td.id);
+                        debtsToPay = pendingDebts.filter(d => targetIds.includes(d.id));
+                    } else {
+                        debtsToPay = pendingDebts;
+                    }
+                    for (const debt of debtsToPay) {
+                        if (debt.subscriptionId) subsToRenew.add(debt.subscriptionId);
+                    }
                 } else {
-                    debtsToPay = pendingDebts;
+                    if (!subId) {
+                        throw new Error('subId is required for individual renewal/payment');
+                    }
+                    if (targetDebtIds && targetDebtIds.length > 0) {
+                        debtsToPay = pendingDebts.filter(d => d.subscriptionId === subId && targetDebtIds.includes(d.id));
+                    } else if (targetDebts && targetDebts.length > 0) {
+                        const targetIds = targetDebts.map((td: any) => td.id);
+                        debtsToPay = pendingDebts.filter(d => d.subscriptionId === subId && targetIds.includes(d.id));
+                    } else {
+                        debtsToPay = pendingDebts.filter(d => d.subscriptionId === subId);
+                    }
+                    subsToRenew.add(subId);
+                }
+
+                let remainingPayment = Number(amountToPay);
+                let totalSurchargeCovered = 0;
+                let totalCapitalCovered = 0;
+                let totalRemainingAfter = 0;
+                let allDebtsFullyPaid = true;
+                const notesParts: string[] = [];
+
+                debtsToPay.sort((a: any, b: any) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+
+                for (const debt of debtsToPay) {
+                    if (remainingPayment <= 0) {
+                        allDebtsFullyPaid = false;
+                        break;
+                    }
+                    const debtRemaining = (typeof (debt as any).remaining_amount === 'number' && (debt as any).remaining_amount !== null) ? (debt as any).remaining_amount : debt.amount;
+                    const debtAmountPaid = (typeof (debt as any).amount_paid === 'number' && (debt as any).amount_paid !== null) ? (debt as any).amount_paid : 0;
+                    const surchargeForDebt = PricingEngine.calculateSurcharge(debtRemaining, garageSettings);
+                    const totalOwedThisDebt = debtRemaining + surchargeForDebt;
+
+                    if (remainingPayment >= totalOwedThisDebt) {
+                        remainingPayment -= totalOwedThisDebt;
+                        totalSurchargeCovered += surchargeForDebt;
+                        totalCapitalCovered += debtRemaining;
+                        debt.status = 'PAID';
+                        (debt as any).remaining_amount = 0;
+                        (debt as any).amount_paid = debt.amount;
+                        debt.surchargeApplied = (debt.surchargeApplied || 0) + surchargeForDebt;
+                        debt.updatedAt = new Date();
+                        await this.debtRepo.save(debt, db);
+                    } else {
+                        allDebtsFullyPaid = false;
+                        let appliedToSurcharge = 0;
+                        let appliedToCapital = 0;
+                        if (remainingPayment >= surchargeForDebt) {
+                            appliedToSurcharge = surchargeForDebt;
+                            appliedToCapital = remainingPayment - surchargeForDebt;
+                        } else {
+                            appliedToSurcharge = remainingPayment;
+                            appliedToCapital = 0;
+                        }
+                        totalSurchargeCovered += appliedToSurcharge;
+                        totalCapitalCovered += appliedToCapital;
+                        const newRemaining = debtRemaining - appliedToCapital;
+                        totalRemainingAfter += newRemaining;
+                        (debt as any).remaining_amount = newRemaining;
+                        (debt as any).amount_paid = debtAmountPaid + appliedToCapital;
+                        debt.surchargeApplied = (debt.surchargeApplied || 0) + appliedToSurcharge;
+                        debt.status = 'PENDING';
+                        debt.updatedAt = new Date();
+                        await this.debtRepo.save(debt, db);
+                        notesParts.push(`Parcial Deuda ${debt.id.slice(0, 8)}: Recargo $${appliedToSurcharge}, Capital $${appliedToCapital}, Saldo restante $${newRemaining}`);
+                        remainingPayment = 0;
+                    }
                 }
 
                 for (const debt of debtsToPay) {
-                    if (debt.subscriptionId) subsToRenew.add(debt.subscriptionId);
-                }
-            } else {
-                if (!subId) {
-                    return res.status(400).json({ error: 'subId is required for individual renewal/payment' });
-                }
-
-                if (targetDebtIds && targetDebtIds.length > 0) {
-                    debtsToPay = pendingDebts.filter(d => d.subscriptionId === subId && targetDebtIds.includes(d.id));
-                } else if (targetDebts && targetDebts.length > 0) {
-                    const targetIds = targetDebts.map((td: any) => td.id);
-                    debtsToPay = pendingDebts.filter(d => d.subscriptionId === subId && targetIds.includes(d.id));
-                } else {
-                    debtsToPay = [];
-                }
-
-                subsToRenew.add(subId);
-            }
-
-            // ── PARTIAL PAYMENT LOGIC ──
-            // For each debt: calculate its surcharge, then distribute the amountToPay
-            // Surcharge is covered FIRST, then capital (remaining_amount)
-            let remainingPayment = Number(amountToPay);
-            let totalSurchargeCovered = 0;
-            let totalCapitalCovered = 0;
-            let totalRemainingAfter = 0;
-            let allDebtsFullyPaid = true;
-            const notesParts: string[] = [];
-
-            // Sort debts by dueDate ascending (oldest first)
-            debtsToPay.sort((a: any, b: any) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
-
-            for (const debt of debtsToPay) {
-                if (remainingPayment <= 0) {
-                    allDebtsFullyPaid = false;
-                    break;
-                }
-
-                const debtRemaining = (typeof (debt as any).remaining_amount === 'number' && (debt as any).remaining_amount !== null) ? (debt as any).remaining_amount : debt.amount;
-                const debtAmountPaid = (typeof (debt as any).amount_paid === 'number' && (debt as any).amount_paid !== null) ? (debt as any).amount_paid : 0;
-                const surchargeForDebt = PricingEngine.calculateSurcharge(debtRemaining, garageSettings);
-                const totalOwedThisDebt = debtRemaining + surchargeForDebt;
-
-                if (remainingPayment >= totalOwedThisDebt) {
-                    // Full payment of this debt
-                    remainingPayment -= totalOwedThisDebt;
-                    totalSurchargeCovered += surchargeForDebt;
-                    totalCapitalCovered += debtRemaining;
-
-                    debt.status = 'PAID';
-                    (debt as any).remaining_amount = 0;
-                    (debt as any).amount_paid = debt.amount;
-                    debt.surchargeApplied = (debt.surchargeApplied || 0) + surchargeForDebt;
-                    debt.updatedAt = new Date();
-                    await this.debtRepo.save(debt);
-                } else {
-                    // Partial payment: surcharge first, then capital
-                    allDebtsFullyPaid = false;
-                    let appliedToSurcharge = 0;
-                    let appliedToCapital = 0;
-
-                    if (remainingPayment >= surchargeForDebt) {
-                        appliedToSurcharge = surchargeForDebt;
-                        appliedToCapital = remainingPayment - surchargeForDebt;
-                    } else {
-                        // Not enough even for surcharge — all goes to surcharge
-                        appliedToSurcharge = remainingPayment;
-                        appliedToCapital = 0;
-                    }
-
-                    totalSurchargeCovered += appliedToSurcharge;
-                    totalCapitalCovered += appliedToCapital;
-
-                    const newRemaining = debtRemaining - appliedToCapital;
-                    totalRemainingAfter += newRemaining;
-
-                    (debt as any).remaining_amount = newRemaining;
-                    (debt as any).amount_paid = debtAmountPaid + appliedToCapital;
-                    debt.surchargeApplied = (debt.surchargeApplied || 0) + appliedToSurcharge;
-                    debt.status = 'PENDING'; // Still pending
-                    debt.updatedAt = new Date();
-                    await this.debtRepo.save(debt);
-
-                    notesParts.push(`Parcial Deuda ${debt.id.slice(0, 8)}: Recargo $${appliedToSurcharge}, Capital $${appliedToCapital}, Saldo restante $${newRemaining}`);
-                    remainingPayment = 0;
-                }
-            }
-
-            // Also accumulate remaining for debts not reached
-            for (const debt of debtsToPay) {
-                if (debt.status === 'PENDING') {
-                    const dr = (debt as any).remaining_amount ?? debt.amount;
-                    if (dr > 0 && !notesParts.some(n => n.includes(debt.id.slice(0, 8)))) {
-                        totalRemainingAfter += dr;
-                    }
-                }
-            }
-
-            // 2. Build movement notes with Cochera identifier
-            // Fetch subscription early for cochera context (individual renewals only)
-            const subToFetch = !isGlobalDebt && subId
-                ? await this.subscriptionRepo.findById(subId)
-                : null;
-
-            // Extract cochera data from request body (sent by frontend)
-            const bodySpotNumber = req.body.spotNumber || null;
-            const bodyCocheraType = req.body.cocheraType || null;
-
-            const cocheraSuffix = await (async () => {
-                if (isGlobalDebt) return '';
-
-                // Capa 1: spotNumber enviado desde el frontend
-                if (bodySpotNumber) return ` - Cochera #${bodySpotNumber}`;
-
-                // Capa 2: spotNumber del repositorio de suscripciones
-                const subSpot = (subToFetch as any)?.spotNumber;
-                if (subSpot) return ` - Cochera #${subSpot}`;
-
-                // Capa 3 (Rescate): Buscar en cocherasDB por cliente y patente
-                if (customerId) {
-                    try {
-                        const allCocheras = await cocherasDB.getAll();
-                        const subPlate = subToFetch?.plate;
-                        const match = allCocheras.find((c: any) => {
-                            if (c.clienteId !== customerId) return false;
-                            if (c.numero && subPlate && c.vehiculos?.some((v: any) =>
-                                (typeof v === 'string' ? v : v.plate) === subPlate
-                            )) return true;
-                            return false;
-                        });
-                        if (match?.numero) return ` - Cochera #${match.numero}`;
-                    } catch (e) {
-                        // Silenciar error de rescate — no bloquear la operación
+                    if (debt.status === 'PENDING') {
+                        const dr = (debt as any).remaining_amount ?? debt.amount;
+                        if (dr > 0 && !notesParts.some(n => n.includes(debt.id.slice(0, 8)))) {
+                            totalRemainingAfter += dr;
+                        }
                     }
                 }
 
-                // Capa 4: Tipo Móvil explícito o default
-                if (bodyCocheraType === 'Movil' || (subToFetch as any)?.type === 'Movil') {
+                const subToFetch = !isGlobalDebt && subId ? await this.subscriptionRepo.findById(subId) : null;
+                const bodySpotNumber = req.body.spotNumber || null;
+                const bodyCocheraType = req.body.cocheraType || null;
+
+                const cocheraSuffix = await (async () => {
+                    if (isGlobalDebt) return '';
+                    if (bodySpotNumber) return ` - Cochera #${bodySpotNumber}`;
+                    const subSpot = (subToFetch as any)?.spotNumber;
+                    if (subSpot) return ` - Cochera #${subSpot}`;
+                    if (customerId) {
+                        try {
+                            const allCocheras = await require('../../../infrastructure/database/sqlite/SQLiteManager').SQLiteManager.getInstance().getDatabase().prepare("SELECT * FROM cocheras WHERE clienteId = ? OR cliente_id = ?").all(customerId, customerId);
+                            const subPlate = subToFetch?.plate;
+                            const match = allCocheras.find((c: any) => {
+                                let vehs = c.vehiculos;
+                                try { if(typeof vehs === 'string') vehs = JSON.parse(vehs); } catch(e){}
+                                if (c.numero && subPlate && vehs?.some((v: any) => (typeof v === 'string' ? v : v.plate) === subPlate)) return true;
+                                return false;
+                            });
+                            if (match?.numero) return ` - Cochera #${match.numero}`;
+                        } catch (e) {}
+                    }
+                    if (bodyCocheraType === 'Movil' || (subToFetch as any)?.type === 'Movil') return ' - Cochera Móvil';
                     return ' - Cochera Móvil';
+                })();
+
+                let movementNotes = '';
+                if (allDebtsFullyPaid && debtsToPay.length > 0) {
+                    movementNotes = isGlobalDebt
+                        ? `Pago Total Deuda Acumulada (${debtsToPay.length} deudas)`
+                        : `Pago Total por Renovación${cocheraSuffix}`;
+                } else if (debtsToPay.length > 0) {
+                    movementNotes = isGlobalDebt
+                        ? `Pago Parcial Deuda Acumulada. Saldo restante: $${totalRemainingAfter}`
+                        : `Pago Parcial por Renovación${cocheraSuffix}. Saldo restante: $${totalRemainingAfter}`;
+                } else {
+                    movementNotes = `Renovación Abono Anticipada${cocheraSuffix}`;
                 }
 
-                return ' - Cochera Móvil';
-            })();
+                const plateForMovement = isGlobalDebt ? 'Multiples' : (subToFetch?.plate || 'N/A');
+                const receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
 
-            let movementNotes = '';
-            if (allDebtsFullyPaid && debtsToPay.length > 0) {
-                movementNotes = isGlobalDebt
-                    ? `Pago Total Deuda Acumulada (${debtsToPay.length} deudas)`
-                    : `Pago Total por Renovación${cocheraSuffix}`;
-            } else if (debtsToPay.length > 0) {
-                movementNotes = isGlobalDebt
-                    ? `Pago Parcial Deuda Acumulada. Saldo restante: $${totalRemainingAfter}`
-                    : `Pago Parcial por Renovación${cocheraSuffix}. Saldo restante: $${totalRemainingAfter}`;
-            } else {
-                movementNotes = `Renovación Abono Anticipada${cocheraSuffix}`;
-            }
+                await this.movementRepo.save({
+                    id: uuidv4(),
+                    type: 'CobroAbono',
+                    amount: amountToPay,
+                    paymentMethod: paymentMethod || 'Efectivo',
+                    timestamp: new Date(),
+                    notes: movementNotes,
+                    relatedEntityId: isGlobalDebt ? (customerId || subId) : subId,
+                    plate: plateForMovement,
+                    garageId: garageId,
+                    operator: operator || 'Sistema',
+                    invoice_type: billingType || 'Final',
+                    ticket_code: receiptNumber,
+                    createdAt: new Date()
+                } as any, db);
 
-            const plateForMovement = isGlobalDebt ? 'Multiples' : (subToFetch?.plate || 'N/A');
+                let renewedSubs: any[] = [];
+                for (const subIdToRenew of subsToRenew) {
+                    const subDebtsAfter = await this.debtRepo.findBySubscriptionId(subIdToRenew);
+                    const stillPending = subDebtsAfter.filter(d => d.status === 'PENDING' && d.type === 'CANON' && ((d as any).remaining_amount ?? d.amount) > 0);
 
-            // Generate correlative receipt number for the renewal/debt payment
-            const receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
-
-            await this.movementRepo.save({
-                id: uuidv4(),
-                type: 'CobroAbono',
-                amount: amountToPay,
-                paymentMethod: paymentMethod || 'Efectivo',
-                timestamp: new Date(),
-                notes: movementNotes,
-                relatedEntityId: isGlobalDebt ? (customerId || subId) : subId,
-                plate: plateForMovement,
-                garageId: garageId,
-                operator: operator || 'Sistema',
-                invoice_type: billingType || 'Final',
-                ticket_code: receiptNumber,
-                createdAt: new Date()
-            } as any);
-
-            // 3. Renew Subscriptions ONLY if ALL debts for that sub are fully paid
-            let renewedSubs: any[] = [];
-
-            for (const subIdToRenew of subsToRenew) {
-                // Check if this subscription still has pending debts
-                const subDebtsAfter = await this.debtRepo.findBySubscriptionId(subIdToRenew);
-                const stillPending = subDebtsAfter.filter(d => d.status === 'PENDING' && d.type === 'CANON' && ((d as any).remaining_amount ?? d.amount) > 0);
-
-                if (stillPending.length === 0) {
-                    // All debts paid → renew subscription (extend endDate)
-                    const subToRenew = await this.subscriptionRepo.findById(subIdToRenew);
-                    if (subToRenew && subToRenew.active) {
-                        const renewedSub = SubscriptionManager.renewSubscription(
-                            subToRenew,
-                            new Date(),
-                            PRICING_CONFIG as any
-                        );
-                        await this.subscriptionRepo.save(renewedSub);
-                        renewedSubs.push(renewedSub);
+                    if (stillPending.length === 0) {
+                        const subToR = await this.subscriptionRepo.findById(subIdToRenew);
+                        if (subToR && subToR.active) {
+                            const renewedSub = SubscriptionManager.renewSubscription(
+                                subToR,
+                                new Date(),
+                                PRICING_CONFIG as any
+                            );
+                            await this.subscriptionRepo.save(renewedSub, db);
+                            renewedSubs.push(renewedSub);
+                        }
                     }
                 }
-            }
 
-            const responsePayload: any = {
-                message: allDebtsFullyPaid
-                    ? (isGlobalDebt ? 'Deuda global pagada y suscripciones renovadas' : 'Abono renovado y deuda pagada')
-                    : 'Pago parcial registrado. Saldo pendiente restante.',
-                ticket_code: receiptNumber,
-                isPartial: !allDebtsFullyPaid,
-                totalSurchargeCovered,
-                totalCapitalCovered,
-                totalRemainingAfter
-            };
+                return {
+                    message: allDebtsFullyPaid
+                        ? (isGlobalDebt ? 'Deuda global pagada y suscripciones renovadas' : 'Abono renovado y deuda pagada')
+                        : 'Pago parcial registrado. Saldo pendiente restante.',
+                    ticket_code: receiptNumber,
+                    isPartial: !allDebtsFullyPaid,
+                    totalSurchargeCovered,
+                    totalCapitalCovered,
+                    totalRemainingAfter,
+                    subscriptions: isGlobalDebt ? renewedSubs : (renewedSubs.length > 0 ? renewedSubs : undefined)
+                };
+            });
 
-            if (isGlobalDebt) {
-                responsePayload.subscriptions = renewedSubs;
-            } else {
-                responsePayload.subscription = renewedSubs[0] || null;
-            }
-
-            return res.json(responsePayload);
-
+            res.json(resultPayload);
         } catch (error: any) {
-            console.error('Renew Error:', error);
+            console.error('Error en renewSubscription:', error);
+            if (error.message && (
+                error.message.includes('próximo período ya se encuentra abonado') ||
+                error.message.includes('meses anteriores impagos') ||
+                error.message.includes('STALE_SELECTION')
+            )) {
+                return res.status(409).json({ error: error.message });
+            }
+            if (error.message && (
+                error.message.includes('El importe anticipado') ||
+                error.message.includes('No se pudo determinar') ||
+                error.message.includes('subId is required') ||
+                error.message.includes('La suscripción está vencida') ||
+                error.message.includes('Suscripción no encontrada') ||
+                error.message.includes('No se puede anticipar') ||
+                error.message.includes('amountToPay is required')
+            )) {
+                return res.status(400).json({ error: error.message });
+            }
             res.status(500).json({ error: error.message });
         }
     };

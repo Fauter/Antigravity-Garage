@@ -33,19 +33,6 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
     // Price integrity validation + smart sorting for 'abono' tariffs
     const { getSortedVehicleTypes } = useVehiclePriceValidation('abono');
 
-    // Load Vehicle Types once on mount
-    useEffect(() => {
-        api.get('/tipos-vehiculo')
-            .then(res => {
-                if (res.data && Array.isArray(res.data)) {
-                    console.log("[Abonos] Tipos cargados:", res.data);
-                    setVehicleTypes(res.data);
-                    // Auto-selection removed
-
-                }
-            })
-            .catch(e => console.error("Vehicle Type Load Error:", e));
-    }, []);
 
     // Data
     const [basePriceDisplay, setBasePriceDisplay] = useState(0);
@@ -120,7 +107,6 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
         tipoFactura: '',
     });
 
-    useEffect(() => { loadConfig(); }, [formData.metodoPago]);
     
     // Load Financial Config once on mount (or garage change if supported via context)
     useEffect(() => {
@@ -193,34 +179,31 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
         }
     }, [formData.dni, existingDnis]);
 
-    const loadConfig = async () => {
-        // Fetch prices once (contains both standard and electronic)
-        const fetchPrices = api.get('/precios').catch(e => { console.error("Price load error:", e); return null; });
-        const fetchTypes = api.get('/tipos-vehiculo').catch(e => { console.error("Type load error:", e); return null; });
+    const [allPricesData, setAllPricesData] = useState<any>(null);
 
-        const [priceRes, typeRes] = await Promise.all([fetchPrices, fetchTypes]);
-
-        if (priceRes && priceRes.data) {
-            // New canonical DTO: { standard: Matrix, electronic: Matrix }
-            const standardMatrix = priceRes.data.standard || {};
-            const electronicMatrix = priceRes.data.electronic || {};
-            
-            setStandardPricesMatrix(standardMatrix);
-            // Current price matrix depends on payment method
-            const isEfectivo = formData.metodoPago === 'Efectivo';
-            setPricesMatrix(isEfectivo ? standardMatrix : electronicMatrix);
-        }
-
-        if (typeRes && typeRes.data && Array.isArray(typeRes.data)) {
-            // Only update types if empty to avoid reset issues or just ensure list is fresh
-            if (vehicleTypes.length === 0) {
-                console.log("[Abonos] Tipos cargados:", typeRes.data);
+    useEffect(() => {
+        const fetchPricesAndTypes = async () => {
+            const fetchPrices = api.get('/precios').catch(e => { console.error('Price load error:', e); return null; });
+            const fetchTypes = api.get('/tipos-vehiculo').catch(e => { console.error('Type load error:', e); return null; });
+            const [priceRes, typeRes] = await Promise.all([fetchPrices, fetchTypes]);
+            if (typeRes && typeRes.data) {
                 setVehicleTypes(typeRes.data);
-                // Removed auto-selection logic
             }
-        }
-    };
+            if (priceRes && priceRes.data) {
+                setAllPricesData(priceRes.data);
+            }
+        };
+        fetchPricesAndTypes();
+    }, []);
 
+    useEffect(() => {
+        if (!allPricesData) return;
+        const standardMatrix = allPricesData.standard || {};
+        const electronicMatrix = allPricesData.electronic || {};
+        const isEfectivo = formData.metodoPago === 'Efectivo';
+        setPricesMatrix(isEfectivo ? standardMatrix : electronicMatrix);
+        setStandardPricesMatrix(standardMatrix);
+    }, [formData.metodoPago, allPricesData]);
     const calculatePrice = () => {
         const typeKey = formData.tipoVehiculo;
         if (!typeKey) {
@@ -426,13 +409,18 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
             if (!response.data.exonerated && response.data.ticket_code) {
                 try {
                     await PrinterService.printSubscriptionTicket({
-                        ...response.data,
-                        customerName: formData.nombre,
-                        customerDni: formData.dni,
-                        plate: formData.patente,
-                        vehicleBrand: formData.marca,
-                        vehicleModel: formData.modelo,
-                        montoCobrado: montoAbonado, // Print the actual amount paid
+                        ticket_code: response.data.ticket_code,
+                        nombreApellido: formData.nombre || response.data.customerName || 'Consumidor Final',
+                        dni: formData.dni,
+                        patente: formData.patente,
+                        marca: formData.marca,
+                        modelo: formData.modelo,
+                        tipoVehiculo: formData.tipoVehiculo,
+                        tipoCochera: formData.tipoCochera === 'movil' ? 'Móvil' : 'Fija',
+                        numeroCochera: formData.numeroCochera,
+                        basePriceDisplay: response.data.basePriceDisplay || response.data.basePrice || basePriceDisplay,
+                        montoRecibido: montoAbonado,
+                        metodoPago: formData.metodoPago,
                         fechaEmision: new Date().toISOString()
                     });
                 } catch (printerErr) {
@@ -443,14 +431,18 @@ const FormularioAbono: React.FC<FormularioAbonoProps> = ({ onCancel, onSubmit })
                 // Optionally print a simple informational receipt without financial ticket_code
                 try {
                     await PrinterService.printSubscriptionTicket({
-                        ...response.data,
                         ticket_code: 'EXONERADO',
-                        customerName: formData.nombre,
-                        customerDni: formData.dni,
-                        plate: formData.patente,
-                        vehicleBrand: formData.marca,
-                        vehicleModel: formData.modelo,
-                        montoCobrado: 0,
+                        nombreApellido: formData.nombre || response.data.customerName || 'Consumidor Final',
+                        dni: formData.dni,
+                        patente: formData.patente,
+                        marca: formData.marca,
+                        modelo: formData.modelo,
+                        tipoVehiculo: formData.tipoVehiculo,
+                        tipoCochera: formData.tipoCochera === 'movil' ? 'Móvil' : 'Fija',
+                        numeroCochera: formData.numeroCochera,
+                        basePriceDisplay: response.data.basePriceDisplay || response.data.basePrice || basePriceDisplay,
+                        montoRecibido: 0,
+                        metodoPago: formData.metodoPago,
                         fechaEmision: new Date().toISOString(),
                         notes: 'ALTA EXONERADA - SIN COBRO INICIAL\nMotivo: últimos dos días del mes'
                     });

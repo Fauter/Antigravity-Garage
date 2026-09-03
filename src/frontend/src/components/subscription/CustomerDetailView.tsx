@@ -14,7 +14,8 @@ import {
     AlertCircle,
     Edit2,
     X,
-    Camera
+    Camera,
+    RefreshCw
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { toast } from 'sonner';
@@ -23,6 +24,10 @@ import { PrinterService } from '../../services/PrinterService';
 import { useVehiclePriceValidation } from '../../hooks/useVehiclePriceValidation';
 import { WebcamModal } from '../common/WebcamModal';
 import { compressPhotos } from '../../utils/imageCompression';
+import { AdvancePaymentModal } from './AdvancePaymentModal';
+import { ModalPortal } from '../common/ModalPortal';
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock';
+import { resolveSubscriptionForCochera, getAdvanceEligibility } from '../../utils/subscriptionHelper';
 
 interface CustomerDetailViewProps {
     subscriber: any;
@@ -160,8 +165,33 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         hasPendingDebt: false,
         isGlobalDebt: false,
         targetDebts: [] as any[],
-        surchargeStep: null as any
+        surchargeStep: null as any,
+        // Multi-Month UI state
+        multiMonthMode: true, // Default to true if debts > 0
+        multiMonthCount: 1,
+        previewBreakdown: [] as any[],
+        isPreviewLoading: false,
+        previewError: null as string | null
     });
+
+    // --- ADVANCE PAYMENT MODAL STATE ---
+    const [isAdvanceModalOpen, setIsAdvanceModalOpen] = useState(false);
+    const [isAdvanceSubmitting, setIsAdvanceSubmitting] = useState(false);
+    const [isRenewalSubmitting, setIsRenewalSubmitting] = useState(false);
+    const [advanceData, setAdvanceData] = useState({
+        subscription: null as any,
+        cocheraDetails: null as any,
+        vehicleInfo: { plate: '', type: '' },
+        nextMonthLabel: '',
+        nextPeriodLabel: '',
+        currentEndDateStr: '',
+        nextEndDateStr: '',
+        basePrice: 0,
+        finalPrice: 0,
+        metodoPago: 'Efectivo',
+        tipoFactura: 'Final'
+    });
+
     const [confirmModal, setConfirmModal] = useState<{
         isOpen: boolean;
         title: string;
@@ -193,6 +223,9 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     const [photos, setPhotos] = useState<{ [key: string]: string }>({});
     const [showCameraModal, setShowCameraModal] = useState(false);
     const [activePhotoField, setActivePhotoField] = useState<string | null>(null);
+
+    // Body scroll lock when any modal is open
+    useBodyScrollLock(isRenewalModalOpen || isAdvanceModalOpen || isModalOpen || isNewCocheraOpen || confirmModal.isOpen || isEditCustomerOpen || showCameraModal);
 
     const openCamera = (field: string) => { setActivePhotoField(field); setShowCameraModal(true); };
     const handleCapture = (img: string) => {
@@ -583,68 +616,28 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
             const updatedVehicles = [...currentVehicles, vehicleToAdd];
 
-            // FINANCES: Process Upgrade if applicable
-            if (upgradeInfo.isUpgrade && upgradeInfo.diffToPay > 0) {
-                await api.post('/caja/movimientos', {
-                    type: 'CobroAbono',
-                    amount: upgradeInfo.diffToPay,
-                    paymentMethod: newVehicleData.metodoPago,
-                    invoiceType: newVehicleData.tipoFactura,
-                    plate: vehicleToAdd.plate,
-                    relatedEntityId: selectedCochera.id,
-                    garageId: getGarageId(), // Dynamic: from terminal config (ag_terminal_config)
-                    operator: operatorName,
-                    notes: `Upgrade de vehículo: ${vehicleToAdd.plate} (Lista: ${newVehicleData.metodoPago === 'Efectivo' ? 'Standard' : 'Electronic'})`,
-                    timestamp: new Date().toISOString()
-                });
+            // Single Atomic Execution (E/F)
+            const payload = {
+                vehicleData: vehicleToAdd,
+                paymentMethod: newVehicleData.metodoPago,
+                billingType: newVehicleData.tipoFactura,
+                operator: operatorName
+            };
 
-                // Print upgrade ticket (Original + Duplicado)
+            const response = await api.post(`/cocheras/${selectedCochera.id}/agregar-vehiculo`, payload);
+
+            if (response.data?.ticket_code) {
+                // Generar e imprimir ticket (Upgrade financiero)
                 PrinterService.printUpgradeTicket({
                     titular: clientName,
                     patente: vehicleToAdd.plate,
-                    precioAnterior: selectedCochera.precioBase || 0,
-                    precioNuevo: upgradeInfo.newBasePrice,
-                    montoCobrado: upgradeInfo.diffToPay,
+                    precioAnterior: response.data.oldBasePrice || 0,
+                    precioNuevo: response.data.newBasePrice || 0,
+                    montoCobrado: response.data.upgradeAmount || 0,
                     metodoPago: newVehicleData.metodoPago,
                     operador: operatorName,
                     tipoVehiculo: newVehicleData.tipoVehiculo
                 });
-            }
-
-            // Dynamic pricing will handle the new rate on the backend next time we fetch
-            const patchPayload: any = { vehiculos: updatedVehicles };
-            if (upgradeInfo.isUpgrade) {
-                patchPayload.precioBase = upgradeInfo.newBasePrice;
-            }
-
-            await api.patch(`/cocheras/${selectedCochera.id}`, patchPayload);
-
-            // SYNC: Also update the underlying subscription's price so the cronjob
-            // bills the new rate next month (otherwise only the cochera is updated).
-            if (upgradeInfo.isUpgrade && upgradeInfo.newBasePrice > 0) {
-                const associatedSub = subscriptions.find((s: any) => {
-                    if (s.active === false && s.status !== 'active') return false;
-                    const subClientId = s.customerId || s.customer_id || s.clientId;
-                    const cocheraClienteId = selectedCochera.clienteId || selectedCochera.cliente_id;
-                    if (subClientId !== cocheraClienteId) return false;
-
-                    if (s.spotNumber && selectedCochera.numero && String(s.spotNumber) === String(selectedCochera.numero)) return true;
-
-                    const subPlate = s.vehicleData?.plate || s.plate;
-                    const cocheraPlates = (selectedCochera.vehiculos || []).map((v: any) => typeof v === 'string' ? v.trim() : v.plate?.trim());
-                    if (subPlate && cocheraPlates.includes(subPlate.trim())) return true;
-
-                    return false;
-                });
-
-                if (associatedSub) {
-                    await api.patch(`/abonos/${associatedSub.id || associatedSub._id}`, {
-                        price: upgradeInfo.newBasePrice
-                    });
-                    console.log(`✅ [Upgrade] Subscription ${(associatedSub.id || associatedSub._id)?.slice(0, 8)} price updated to $${upgradeInfo.newBasePrice}`);
-                } else {
-                    console.warn('[Upgrade] No associated subscription found for cochera — price not synced to subscription');
-                }
             }
 
             toast.success("Vehículo agregado correctamente", { id: btnSpinner });
@@ -780,6 +773,12 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     };
 
     const handleOpenRenewalModal = (subId: string, cochera: any, baseAmount: number, surchargeAmount: number, totalAmount: number, hasDebt: boolean, isGlobalDebt: boolean = false, targetDebts: any[] = []) => {
+        const sortedDebts = [...targetDebts].sort((a: any, b: any) => {
+            const dateA = new Date(a.dueDate || a.createdAt || 0).getTime();
+            const dateB = new Date(b.dueDate || b.createdAt || 0).getTime();
+            return dateA - dateB;
+        });
+
         setSelectedDebtSubId(subId);
         setRenewalData({
             baseAmount: baseAmount,
@@ -791,10 +790,147 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             cocheraDetails: cochera,
             hasPendingDebt: hasDebt,
             isGlobalDebt: isGlobalDebt,
-            targetDebts: targetDebts,
-            surchargeStep: getActiveSurchargeStep()
+            targetDebts: sortedDebts,
+            surchargeStep: getActiveSurchargeStep(),
+            multiMonthMode: sortedDebts && sortedDebts.length > 0,
+            multiMonthCount: sortedDebts && sortedDebts.length > 0 ? sortedDebts.length : 1,
+            previewBreakdown: [],
+            isPreviewLoading: false,
+            previewError: null
         });
         setIsRenewalModalOpen(true);
+    };
+
+    // Helper to resolve price from matrix with multiple key fallbacks (case-insensitive)
+    const getPriceForSubscription = (matrix: any, vehicleType: string, subscriptionType: string, fallback: number = 0) => {
+        if (!matrix || Object.keys(matrix).length === 0) return fallback;
+        const normalizeStr = (s: string) => s ? String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim() : '';
+        const vKey = normalizeStr(vehicleType || 'Auto');
+        const subTypeRaw = subscriptionType || 'Movil';
+        let tKey = normalizeStr(subTypeRaw);
+        if (normalizeStr(subTypeRaw) === normalizeStr('Exclusiva')) tKey = normalizeStr('abono exclusivo');
+        else tKey = normalizeStr(`abono ${subTypeRaw}`);
+
+        const typeKey = Object.keys(matrix).find(k => normalizeStr(k) === vKey) || Object.keys(matrix).find(k => normalizeStr(k) === normalizeStr('Auto'));
+        if (typeKey && matrix[typeKey]) {
+            const priceKey = Object.keys(matrix[typeKey]).find(k => {
+                const nk = normalizeStr(k);
+                return nk === tKey || nk === `${normalizeStr(subTypeRaw)} abono` || nk === normalizeStr(subTypeRaw) || (tKey === 'abono movil' && nk === 'movil');
+            });
+            if (priceKey && Number(matrix[typeKey][priceKey]) > 0) {
+                return Number(matrix[typeKey][priceKey]);
+            }
+        }
+        return fallback;
+    };
+
+    const handleOpenAdvanceModal = (associatedSub: any, cochera: any, advanceRes: any) => {
+        let plateStr = '';
+        let typeStr = '';
+        if (cochera.vehiculos && cochera.vehiculos.length > 0) {
+            plateStr = typeof cochera.vehiculos[0] === 'string' ? cochera.vehiculos[0] : cochera.vehiculos[0]?.plate;
+        } else if (associatedSub.plate || associatedSub.vehicleData?.plate) {
+            plateStr = associatedSub.plate || associatedSub.vehicleData?.plate;
+        }
+        if (plateStr) {
+            const v = realVehicles.find((rv: any) => rv.plate === plateStr);
+            if (v && v.type) typeStr = v.type;
+        }
+        if (!typeStr && associatedSub.vehicleData?.type) typeStr = associatedSub.vehicleData.type;
+        if (!typeStr && associatedSub.vehicleType) typeStr = associatedSub.vehicleType;
+        if (!typeStr) typeStr = 'Vehículo';
+
+        const initialMethod = 'Efectivo';
+        const subTypeRaw = associatedSub.type || associatedSub.subscriptionType || cochera.tipo || 'Movil';
+        const calculatedPrice = getPriceForSubscription(standardPricesMatrix, typeStr, subTypeRaw, cochera.precioBase || 0);
+
+        setAdvanceData({
+            subscription: associatedSub,
+            cocheraDetails: cochera,
+            vehicleInfo: { plate: plateStr, type: typeStr },
+            nextMonthLabel: advanceRes.nextMonthLabel,
+            nextPeriodLabel: advanceRes.nextPeriodLabel,
+            currentEndDateStr: advanceRes.currentEndDateStr,
+            nextEndDateStr: advanceRes.nextEndDateStr,
+            basePrice: cochera.precioBase || calculatedPrice,
+            finalPrice: calculatedPrice,
+            metodoPago: initialMethod,
+            tipoFactura: 'Final'
+        });
+        setIsAdvanceModalOpen(true);
+    };
+
+    const handleAdvancePaymentMethodChange = (newMethod: string) => {
+        const matrix = newMethod === 'Efectivo' ? standardPricesMatrix : electronicPricesMatrix;
+        const subTypeRaw = advanceData.subscription?.type || advanceData.subscription?.subscriptionType || advanceData.cocheraDetails?.tipo || 'Movil';
+        const newPrice = getPriceForSubscription(matrix, advanceData.vehicleInfo.type, subTypeRaw, advanceData.basePrice);
+
+        setAdvanceData(prev => ({
+            ...prev,
+            metodoPago: newMethod,
+            finalPrice: newPrice
+        }));
+    };
+
+    const handleAdvancePayment = async () => {
+        if (isAdvanceSubmitting) return;
+        if (!advanceData.subscription || !advanceData.finalPrice || advanceData.finalPrice <= 0) {
+            toast.error("Tarifa no válida para pago anticipado");
+            return;
+        }
+
+        setIsAdvanceSubmitting(true);
+        const toastId = toast.loading(`Procesando pago de ${advanceData.nextMonthLabel}...`);
+
+        try {
+            const subId = advanceData.subscription.id || advanceData.subscription._id;
+            const res = await api.post('/abonos/renovar', {
+                subId,
+                customerId: clientId,
+                amountToPay: advanceData.finalPrice,
+                paymentMethod: advanceData.metodoPago,
+                billingType: advanceData.tipoFactura,
+                operator: operatorName,
+                renewalMode: 'ADVANCE',
+                spotNumber: advanceData.cocheraDetails?.numero || null,
+                cocheraType: advanceData.cocheraDetails?.tipo || null
+            });
+
+            if (res.status === 200) {
+                toast.success(`Pago anticipado de ${advanceData.nextMonthLabel} registrado con éxito`, { id: toastId });
+                
+                try {
+                    PrinterService.printRenewalTicket({
+                        titular: clientName,
+                        monto: advanceData.finalPrice,
+                        operador: operatorName,
+                        cocheraTexto: advanceData.cocheraDetails?.tipo === 'Movil' ? 'Móvil' : `#${advanceData.cocheraDetails?.numero || 'S/N'}`,
+                        patentes: [advanceData.vehicleInfo.plate],
+                        ticket_code: res.data?.ticket_code || null
+                    });
+                } catch (e) {
+                    console.error("Printer error:", e);
+                }
+                
+                setIsAdvanceModalOpen(false);
+                await refreshCustomerAssets();
+            } else {
+                toast.error(res.data?.error || "Error al procesar el pago anticipado", { id: toastId });
+            }
+        } catch (err: any) {
+            console.error("Error en pago anticipado:", err);
+            if (err.response?.status === 409) {
+                toast.info("El próximo período ya se encontraba abonado.", { id: toastId });
+                setIsAdvanceModalOpen(false);
+                await refreshCustomerAssets();
+            } else {
+                const msg = err.response?.data?.error || err.message || "Error al registrar el pago anticipado";
+                toast.error(msg, { id: toastId });
+                await refreshCustomerAssets();
+            }
+        } finally {
+            setIsAdvanceSubmitting(false);
+        }
     };
 
     // --- Live Lookup para Renovaciones (Single Source of Truth) ---
@@ -802,6 +938,49 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     // Soporta tanto renovaciones individuales como recálculo masivo de Deuda Global.
     useEffect(() => {
         if (!isRenewalModalOpen || !selectedDebtSubId) return;
+
+        if (renewalData.multiMonthMode && !renewalData.isGlobalDebt && renewalData.targetDebts && renewalData.targetDebts.length > 0) {
+            const count = Math.max(1, Math.min(renewalData.multiMonthCount || 1, renewalData.targetDebts.length));
+            const targetDebtIds = renewalData.targetDebts.slice(0, count).map((d: any) => d.id).filter(Boolean);
+            
+            if (targetDebtIds.length === 0) return;
+
+            const controller = new AbortController();
+            
+            const fetchPreview = async () => {
+                setRenewalData(prev => ({ ...prev, isPreviewLoading: true, previewError: null }));
+                try {
+                    const res = await api.post('/abonos/renovar/preview', {
+                        subId: selectedDebtSubId,
+                        targetDebtIds,
+                        paymentMethod: renewalData.metodoPago
+                    }, { signal: controller.signal });
+                    
+                    if (res.status === 200) {
+                        setRenewalData(prev => ({
+                            ...prev,
+                            baseAmount: res.data.principalTotal,
+                            surchargeAmount: res.data.surchargeTotal,
+                            amountToPay: res.data.grandTotal,
+                            montoCobrado: res.data.grandTotal,
+                            previewBreakdown: res.data.breakdown,
+                            isPreviewLoading: false
+                        }));
+                    }
+                } catch (err: any) {
+                    if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
+                    console.error("Preview error:", err);
+                    setRenewalData(prev => ({ 
+                        ...prev, 
+                        isPreviewLoading: false, 
+                        previewError: err.response?.data?.error || "Error calculando totales" 
+                    }));
+                }
+            };
+            fetchPreview();
+            
+            return () => controller.abort();
+        }
 
         const activeMatrix = renewalData.metodoPago === 'Efectivo' ? standardPricesMatrix : electronicPricesMatrix;
         if (!activeMatrix || Object.keys(activeMatrix).length === 0) return;
@@ -909,26 +1088,32 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             }
         }
 
-    }, [renewalData.metodoPago, isRenewalModalOpen, renewalData.isGlobalDebt, renewalData.targetDebts, selectedDebtSubId, subscriptions, realVehicles, standardPricesMatrix, electronicPricesMatrix]);
+    }, [renewalData.metodoPago, isRenewalModalOpen, renewalData.isGlobalDebt, renewalData.targetDebts, renewalData.multiMonthMode, renewalData.multiMonthCount, selectedDebtSubId, subscriptions, realVehicles, standardPricesMatrix, electronicPricesMatrix]);
 
     const handleRenewSubscription = async () => {
+        if (isRenewalSubmitting) return;
         if (!selectedDebtSubId || !renewalData.montoCobrado || renewalData.montoCobrado <= 0) {
             toast.error("Error al procesar la renovación (Faltan datos o monto inválido)");
             return;
         }
 
+        setIsRenewalSubmitting(true);
         const btnSpinner = toast.loading("Procesando pago...");
         try {
+            const isMultiMonth = renewalData.multiMonthMode && !renewalData.isGlobalDebt && renewalData.targetDebts && renewalData.targetDebts.length > 0;
             const renewResponse = await api.post('/abonos/renovar', {
                 subId: selectedDebtSubId,
                 customerId: clientId,
-                amountToPay: renewalData.montoCobrado,
+                amountToPay: renewalData.montoCobrado, // Note: backend ignores this for DEBT_MULTI_FULL but needs it for partial
                 paymentMethod: renewalData.metodoPago,
                 billingType: renewalData.tipoFactura,
                 operator: operatorName,
                 isDebtPaymentOnly: renewalData.hasPendingDebt,
                 isGlobalDebt: renewalData.isGlobalDebt,
-                targetDebtIds: renewalData.targetDebts ? renewalData.targetDebts.map((d: any) => d.id) : [],
+                renewalMode: isMultiMonth ? 'DEBT_MULTI_FULL' : undefined,
+                targetDebtIds: isMultiMonth 
+                    ? renewalData.targetDebts.slice(0, renewalData.multiMonthCount).map((d: any) => d.id) 
+                    : (renewalData.targetDebts ? renewalData.targetDebts.map((d: any) => d.id) : []),
                 spotNumber: renewalData.cocheraDetails?.numero || null,
                 cocheraType: renewalData.cocheraDetails?.tipo || null
             });
@@ -962,15 +1147,28 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 );
             }
 
-            PrinterService.printRenewalTicket({ ...printPayload, ticket_code: renewResponse.data?.ticket_code || null });
+            // Fire and forget print (non-blocking)
+            try {
+                PrinterService.printRenewalTicket({ ...printPayload, ticket_code: renewResponse.data?.ticket_code || null });
+            } catch (e) {
+                console.error("Printer error:", e);
+            }
 
             setIsRenewalModalOpen(false);
-            refreshCustomerAssets();
+            await refreshCustomerAssets();
 
         } catch (error: any) {
             console.error("Renewal Error:", error);
-            const msg = error.response?.data?.error || error.message;
-            toast.error("Error renovando abono: " + msg, { id: btnSpinner });
+            if (error.response?.status === 409) {
+                toast.error("El estado del abono cambió. Los datos fueron actualizados.", { id: btnSpinner });
+                setIsRenewalModalOpen(false);
+                await refreshCustomerAssets();
+            } else {
+                const msg = error.response?.data?.error || error.message;
+                toast.error("Error renovando abono: " + msg, { id: btnSpinner });
+            }
+        } finally {
+            setIsRenewalSubmitting(false);
         }
     };
 
@@ -1021,29 +1219,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         const cocheraVehicles = realVehicles.filter(v => v.plate && cleanCocheraPlates.includes(v.plate.trim()));
         const cocheraVehicleIds = cocheraVehicles.map(v => v.id);
 
-        // Mismo matching estricto que usa la tarjeta
-        const associatedSub = subscriptions.find(s => {
-            if (s.active === false && s.status !== 'active') return false;
-
-            const subClientId = s.customerId || s.customer_id || s.clientId;
-            const cocheraClienteId = cochera.clienteId || cochera.cliente_id;
-
-            if (s.spotNumber && cochera.numero && String(s.spotNumber) === String(cochera.numero)) {
-                if (subClientId === cocheraClienteId) return true;
-            }
-
-            const subVehicleId = s.vehicleId || s.vehicle_id;
-            const subPlate = s.vehicleData?.plate || s.plate;
-
-            if (subVehicleId && cocheraVehicleIds.includes(subVehicleId)) return true;
-            if (subPlate && cleanCocheraPlates.includes(subPlate.trim())) return true;
-
-            if (subClientId === cocheraClienteId) {
-                const norm = (t: string) => t ? t.toLowerCase().replace(/fija/g, 'fija').replace(/movil/g, 'movil').replace(/exclusiva/g, 'exclusiva') : '';
-                if (norm(s.type || s.subscriptionType) === norm(cochera.tipo)) return true;
-            }
-            return false;
-        });
+        // Usamos el resolver estricto centralizado
+        const { subscription: associatedSub, matchType } = resolveSubscriptionForCochera(cochera, subscriptions, realVehicles);
 
         // Solo si matchea y ESTÁ VENCIDA, habilitamos sus deudas
         if (associatedSub) {
@@ -1216,37 +1393,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                 const cocheraVehicleIds = cocheraVehicles.map(v => v.id);
 
                                 // Encontrar la subscripción asociada
-                                const associatedSub = subscriptions.find(s => {
-                                    // 0. Guardia: ignorar suscripciones inactivas
-                                    if (s.active === false && s.status !== 'active') return false;
-
-                                    // 1. Prioridad por spotNumber — ESTRICTA: exige coincidencia de clienteId
-                                    if (s.spotNumber && cochera.numero && String(s.spotNumber) === String(cochera.numero)) {
-                                        const subClientId = s.customerId || s.customer_id || s.clientId;
-                                        const cocheraClienteId = cochera.clienteId || cochera.cliente_id;
-                                        if (subClientId === cocheraClienteId) return true;
-                                        // Si el spotNumber matchea pero el cliente NO coincide, NO retorna true.
-                                        // Continúa evaluando las prioridades siguientes.
-                                    }
-
-                                    // 2. Prioridad por ID de vehículo y patente
-                                    const subVehicleId = s.vehicleId || s.vehicle_id;
-                                    const subPlate = s.vehicleData?.plate || s.plate;
-
-                                    if (subVehicleId && cocheraVehicleIds.includes(subVehicleId)) return true;
-                                    if (subPlate && cleanCocheraPlates.includes(subPlate.trim())) return true;
-
-                                    // 3. Fallback Genérico relajado
-                                    const subClientId = s.customerId || s.customer_id || s.clientId;
-                                    const cocheraClienteId = cochera.clienteId || cochera.cliente_id;
-
-                                    if (subClientId === cocheraClienteId) {
-                                        const norm = (t: string) => t ? t.toLowerCase().replace(/fija/g, 'fija').replace(/movil/g, 'movil').replace(/exclusiva/g, 'exclusiva') : '';
-                                        if (norm(s.type || s.subscriptionType) === norm(cochera.tipo)) return true;
-                                    }
-
-                                    return false;
-                                });
+                                const { subscription: associatedSub } = resolveSubscriptionForCochera(cochera, subscriptions, realVehicles);
 
                                 // Logic for checking expiration: Compare to subscription dates (supporting snake_case and camelCase)
                                 // otherwise assume standard month based calculation from startDate
@@ -1278,8 +1425,6 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                     expirationDate = nextMonth.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
                                     isExpired = false; // Cannot definitively say expired if no sub
                                 }
-
-                                console.log(`[DEBUG] Cochera #${cochera.numero || 'Móvil ID: ' + cochera.id.slice(0, 4)} - Sub Asociada: ${associatedSub?.id || 'Ninguna'} - EndDate/end_date: ${associatedSub?.endDate || associatedSub?.end_date || 'N/A'} - Expirada: ${isExpired} - Deuda: 0`);
 
                                 return (
                                     <div key={cochera.id} className={`group relative backdrop-blur-md border ${isExpired ? 'bg-red-500/10 border-red-500/50 shadow-lg shadow-red-900/20' : 'bg-gray-900/40 border-gray-800 hover:border-indigo-500/50 hover:shadow-indigo-900/10'} rounded-2xl p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl flex flex-col justify-between overflow-hidden`}>
@@ -1472,6 +1617,21 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                     })()}
                                                 </button>
                                             )}
+
+                                            {!isExpired && associatedSub && (() => {
+                                                const advanceRes = getAdvanceEligibility(associatedSub, debts, true);
+                                                if (advanceRes.eligible && advanceRes.nextMonthLabel) {
+                                                    return (
+                                                        <button
+                                                            onClick={() => handleOpenAdvanceModal(associatedSub, cochera, advanceRes)}
+                                                            className="w-full py-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 border border-emerald-500/20 rounded-lg text-xs font-bold uppercase tracking-widest transition-all"
+                                                        >
+                                                            Pagar {advanceRes.nextMonthLabel} (${(cochera.precioBase || 0).toLocaleString('es-AR')})
+                                                        </button>
+                                                    );
+                                                }
+                                                return null;
+                                            })()}
                                         </div>
                                     </div>
                                 );
@@ -1481,287 +1641,22 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 </div>
 
                 {isModalOpen && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-                        <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl relative">
-                            <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
-                                <Plus className="w-5 h-5 text-emerald-400" />
-                                Agregar Vehículo
-                            </h3>
+                    <ModalPortal>
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+                            <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl relative">
+                                <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
+                                    <Plus className="w-5 h-5 text-emerald-400" />
+                                    Agregar Vehículo
+                                </h3>
 
-                            <div className="space-y-4">
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div>
-                                        <label className={labelStyle}>Tipo Vehículo</label>
-                                        <select
-                                            className={`${inputStyle} appearance-none bg-gray-900`}
-                                            value={newVehicleData.tipoVehiculo}
-                                            onChange={e => setNewVehicleData({ ...newVehicleData, tipoVehiculo: e.target.value })}
-                                        >
-                                            <option value="" disabled>Seleccione...</option>
-                                            {sortedVehicleTypes.map((v: any) => (
-                                                <option key={v.id} value={v.name} disabled={v.disabled}>{v.label}</option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                    <div>
-                                        <label className={labelStyle}>Patente</label>
-                                        <input
-                                            className={`${inputStyle} font-mono uppercase text-center tracking-widest font-bold border-l-[3px] border-l-emerald-500`}
-                                            value={newVehicleData.patente}
-                                            onChange={e => setNewVehicleData({ ...newVehicleData, patente: e.target.value.toUpperCase() })}
-                                            placeholder="AAA123"
-                                            maxLength={7}
-                                        />
-                                    </div>
-                                </div>
-
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div>
-                                        <label className={labelStyle}>Marca</label>
-                                        <input className={inputStyle} value={newVehicleData.marca} onChange={e => setNewVehicleData({ ...newVehicleData, marca: e.target.value })} />
-                                    </div>
-                                    <div>
-                                        <label className={labelStyle}>Modelo</label>
-                                        <input className={inputStyle} value={newVehicleData.modelo} onChange={e => setNewVehicleData({ ...newVehicleData, modelo: e.target.value })} />
-                                    </div>
-                                </div>
-
-                                <div className="grid grid-cols-3 gap-3">
-                                    <div>
-                                        <label className={labelStyle}>Color</label>
-                                        <input className={inputStyle} value={newVehicleData.color} onChange={e => setNewVehicleData({ ...newVehicleData, color: e.target.value })} />
-                                    </div>
-                                    <div>
-                                        <label className={labelStyle}>Año</label>
-                                        <input className={inputStyle} value={newVehicleData.anio} onChange={e => setNewVehicleData({ ...newVehicleData, anio: e.target.value })} />
-                                    </div>
-                                    <div>
-                                        <label className={labelStyle}>Seguro</label>
-                                        <input className={inputStyle} value={newVehicleData.companiaSeguro} onChange={e => setNewVehicleData({ ...newVehicleData, companiaSeguro: e.target.value })} />
-                                    </div>
-                                </div>
-
-                                {/* DOCUMENTACIÓN */}
-                                <div className="flex gap-2 mt-2">
-                                    {['Seguro', 'DNI', 'Cédula'].map(doc => (
-                                        <button key={doc} type="button" onClick={() => openCamera(doc)}
-                                            className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded border border-dashed text-[10px] font-bold uppercase transition-all ${photos[doc] ? 'border-emerald-500/50 bg-emerald-900/10 text-emerald-400' : 'border-gray-800 bg-gray-950/20 text-gray-500 hover:bg-white/5'}`}>
-                                            {photos[doc] ? <Check className="w-3 h-3" /> : <Camera className="w-3 h-3" />} {doc}
-                                        </button>
-                                    ))}
-                                </div>
-
-                                {upgradeInfo.isUpgrade && (
-                                    <div className="grid grid-cols-2 gap-3 mt-4">
-                                        <div>
-                                            <label className={labelStyle}>Método de Pago</label>
-                                            <select className={`${inputStyle} appearance-none bg-gray-900 border-gray-700/50`} value={newVehicleData.metodoPago} onChange={e => setNewVehicleData({ ...newVehicleData, metodoPago: e.target.value })}>
-                                                <option value="Efectivo">Efectivo</option>
-                                                <option value="Transferencia">Transferencia</option>
-                                                <option value="Debito">Débito</option>
-                                                <option value="Credito">Crédito</option>
-                                                <option value="QR">QR</option>
-                                            </select>
-                                        </div>
-                                        <div>
-                                            <label className={labelStyle}>Tipo Factura</label>
-                                            <select className={`${inputStyle} appearance-none bg-gray-900 border-gray-700/50`} value={newVehicleData.tipoFactura} onChange={e => setNewVehicleData({ ...newVehicleData, tipoFactura: e.target.value })}>
-                                                <option value="CC">CC</option>
-                                                <option value="A">A</option>
-                                                <option value="Final">Final</option>
-                                            </select>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {newVehicleData.tipoVehiculo && (
-                                    <div className={`p-4 rounded-lg border ${upgradeInfo.isUpgrade ? 'bg-emerald-900/20 border-emerald-500/30' : 'bg-gray-800/30 border-gray-700/30'} transition-all`}>
-                                        {upgradeInfo.isUpgrade ? (
-                                            <>
-                                                <div className="flex items-center gap-2 mb-2">
-                                                    <AlertTriangle className="w-4 h-4 text-emerald-400" />
-                                                    <span className="text-xs font-bold uppercase text-emerald-400 self-center">Upgrade Detectado</span>
-                                                </div>
-                                                <div className="flex justify-between items-end">
-                                                    <span className="text-gray-400 text-xs">Cobrar hoy:</span>
-                                                    <span className="text-xl font-mono font-bold text-white">${upgradeInfo.diffToPay.toLocaleString()}</span>
-                                                </div>
-                                                <div className="flex justify-between items-end mt-1">
-                                                    <span className="text-gray-500 text-[10px] uppercase">Nuevo Precio Base (Matriz)</span>
-                                                    <span className="text-xs font-mono text-emerald-300">${upgradeInfo.newBasePrice.toLocaleString()}</span>
-                                                </div>
-                                            </>
-                                        ) : (
-                                            <div className="flex items-center gap-2 text-gray-400">
-                                                <Check className="w-4 h-4" />
-                                                <span className="text-xs">Misma categoría en la matriz de precios.</span>
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-
-                            </div>
-
-                            <div className="flex gap-3 mt-6 pt-4 border-t border-gray-800">
-                                <button onClick={() => setIsModalOpen(false)} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-xs font-bold uppercase transition-colors">Cancelar</button>
-                                <button onClick={handleSaveVehicle} className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold uppercase transition-colors shadow-lg shadow-indigo-900/20">Confirmar</button>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {isNewCocheraOpen && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-                        <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-4xl p-4 shadow-2xl relative max-h-[90vh] overflow-y-auto app-scrollbar">
-                            <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-                                <Plus className="w-5 h-5 text-emerald-400" />
-                                Nueva Cochera
-                            </h3>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                {/* COLUMNA IZQUIERDA: Configuración y Pagos */}
                                 <div className="space-y-4">
-                                    {/* 1. CONFIG COCHERA */}
-                                    <div className="p-3 bg-gray-800/30 rounded-lg border border-gray-700/30 space-y-3">
-                                        <div className="flex gap-4 items-end">
-                                            <div className="flex-1">
-                                                <label className={labelStyle}>Tipo</label>
-                                                <div className="flex bg-gray-900 p-1 rounded-lg border border-gray-800">
-                                                    {['Movil', 'Fija'].map(t => (
-                                                        <button
-                                                            key={t}
-                                                            onClick={() => setNewCocheraData({ ...newCocheraData, tipo: t, exclusiva: false, numero: t === 'Movil' ? '' : newCocheraData.numero, piso: t === 'Movil' ? '' : newCocheraData.piso })}
-                                                            className={`flex-1 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${newCocheraData.tipo === t ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-500 hover:text-gray-300'}`}
-                                                        >
-                                                            {t === 'Movil' ? 'Móvil' : t}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                            <div className={`flex-1 transition-all ${newCocheraData.tipo === 'Movil' ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
-                                                <label className={labelStyle}>Número</label>
-                                                <input
-                                                    className={`${inputStyle} text-center font-mono`}
-                                                    value={newCocheraData.numero}
-                                                    onChange={e => setNewCocheraData({ ...newCocheraData, numero: e.target.value })}
-                                                    placeholder="N°"
-                                                />
-                                            </div>
-                                            <div className={`flex items-center gap-2 pb-2 ${newCocheraData.tipo === 'Movil' ? 'opacity-50 pointer-events-none' : ''}`}>
-                                                <input
-                                                    type="checkbox"
-                                                    className="w-4 h-4 accent-amber-500 bg-gray-900 border-gray-700 rounded cursor-pointer"
-                                                    checked={newCocheraData.exclusiva}
-                                                    disabled={newCocheraData.tipo === 'Movil'}
-                                                    onChange={e => setNewCocheraData({ ...newCocheraData, exclusiva: e.target.checked })}
-                                                />
-                                                <span className="text-xs font-bold text-amber-500 uppercase tracking-wide cursor-pointer" onClick={() => { if (newCocheraData.tipo !== 'Movil') setNewCocheraData({ ...newCocheraData, exclusiva: !newCocheraData.exclusiva }) }}>Exclusiva</span>
-                                            </div>
-                                        </div>
-                                        {/* PISO SELECTOR */}
-                                        <div>
-                                            <label className={labelStyle}>Piso</label>
-                                            <select
-                                                className={`${inputStyle} appearance-none bg-gray-900 ${newCocheraData.tipo === 'Movil' ? 'opacity-50' : (newCocheraData.tipo !== 'Movil' && !newCocheraData.piso ? 'border-amber-500/50' : '')}`}
-                                                value={newCocheraData.piso}
-                                                onChange={e => setNewCocheraData({ ...newCocheraData, piso: e.target.value })}
-                                                disabled={newCocheraData.tipo === 'Movil'}
-                                                required={newCocheraData.tipo !== 'Movil'}
-                                            >
-                                                <option value="" disabled>Seleccione piso...</option>
-                                                {buildingLevels.map((level: any) => (
-                                                    <option key={level.id} value={level.displayName || level.display_name}>{level.displayName || level.display_name}</option>
-                                                ))}
-                                            </select>
-                                        </div>
-                                    </div>
-
-                                    {/* 3. FACTURACION */}
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <label className={labelStyle}>Método Pago</label>
-                                            <select className={`${inputStyle} appearance-none bg-gray-900`} value={newCocheraData.metodoPago} onChange={e => setNewCocheraData({ ...newCocheraData, metodoPago: e.target.value })}>
-                                                <option value="" disabled hidden>Seleccionar...</option>
-                                                <option value="Efectivo">Efectivo</option>
-                                                <option value="Transferencia">Transferencia</option>
-                                                <option value="Debito">Débito</option>
-                                                <option value="Credito">Crédito</option>
-                                                <option value="QR">QR</option>
-                                            </select>
-                                        </div>
-                                        <div>
-                                            <label className={labelStyle}>Tipo Factura</label>
-                                            <select className={`${inputStyle} appearance-none bg-gray-900`} value={newCocheraData.tipoFactura} onChange={e => setNewCocheraData({ ...newCocheraData, tipoFactura: e.target.value })}>
-                                                <option value="" disabled hidden>Seleccionar...</option>
-                                                <option value="CC">CC</option>
-                                                <option value="A">A</option>
-                                                <option value="Final">Final</option>
-                                            </select>
-                                        </div>
-                                    </div>
-
-                                    {/* 4. SUMMARY & MONTO A ABONAR */}
-                                    <div className="grid grid-cols-2 gap-4">
-                                        {/* SUMMARY */}
-                                        <div className="bg-emerald-900/10 border border-emerald-500/20 p-3 rounded-xl flex flex-col justify-center items-center text-center h-full">
-                                            <span className="block text-[10px] text-gray-400 uppercase font-bold tracking-widest mb-1">Total Inicial Prorrateado</span>
-                                            <span className="text-2xl font-black text-white tracking-tighter">${newCocheraFinancials.proratedPrice.toLocaleString()}</span>
-                                            <span className="block text-[10px] text-emerald-500 uppercase font-bold tracking-widest mt-1">Base: ${newCocheraFinancials.basePrice.toLocaleString()}</span>
-                                        </div>
-
-                                        {/* MONTO A ABONAR */}
-                                        <div className="p-3 border border-dashed border-gray-800 rounded-xl bg-gray-950/40 flex flex-col justify-center items-center h-full">
-                                            <label className={`${labelStyle} text-center mb-1`}>Monto a Abonar</label>
-                                            <div className="relative w-full max-w-[160px]">
-                                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-500 font-bold text-xl">$</span>
-                                                <input
-                                                    type="number"
-                                                    min={0}
-                                                    max={newCocheraFinancials.proratedPrice}
-                                                    className={`w-full bg-gray-900 border border-gray-700/50 rounded-lg pl-8 pr-2 py-1.5 text-white focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition-all text-2xl font-black font-mono text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`}
-                                                    value={montoAbonadoCochera || ''}
-                                                    onChange={(e) => {
-                                                        let val = Number(e.target.value);
-                                                        if (val > newCocheraFinancials.proratedPrice) val = newCocheraFinancials.proratedPrice;
-                                                        if (val < 0) val = 0;
-                                                        setMontoAbonadoCochera(val);
-                                                    }}
-                                                />
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* DEUDA A CREAR BANNER */}
-                                    {montoAbonadoCochera < newCocheraFinancials.proratedPrice && (
-                                        <div className="bg-amber-500/10 border border-amber-500/30 p-2 rounded-lg flex items-center justify-between px-4 animate-in fade-in zoom-in duration-300">
-                                            <span className="text-xs font-bold text-amber-500 uppercase tracking-wider">Deuda a Crear</span>
-                                            <span className="text-lg font-mono text-amber-400 font-bold">${(newCocheraFinancials.proratedPrice - montoAbonadoCochera).toLocaleString()}</span>
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* COLUMNA DERECHA: Vehiculo */}
-                                <div className="space-y-4">
-                                    <div className="flex items-center gap-2 mb-2 text-gray-500">
-                                        <Car className="w-3.5 h-3.5" /> <span className="text-[10px] font-bold uppercase">Datos del Vehículo</span>
-                                    </div>
                                     <div className="grid grid-cols-2 gap-3">
-                                        <div>
-                                            <label className={labelStyle}>Patente</label>
-                                            <input
-                                                className={`${inputStyle} font-mono uppercase text-center tracking-widest font-bold border-l-[3px] border-l-emerald-500`}
-                                                value={newCocheraData.patente}
-                                                onChange={e => setNewCocheraData({ ...newCocheraData, patente: e.target.value.toUpperCase() })}
-                                                placeholder="AAA123"
-                                                maxLength={7}
-                                            />
-                                        </div>
                                         <div>
                                             <label className={labelStyle}>Tipo Vehículo</label>
                                             <select
                                                 className={`${inputStyle} appearance-none bg-gray-900`}
-                                                value={newCocheraData.tipoVehiculo}
-                                                onChange={e => setNewCocheraData({ ...newCocheraData, tipoVehiculo: e.target.value })}
+                                                value={newVehicleData.tipoVehiculo}
+                                                onChange={e => setNewVehicleData({ ...newVehicleData, tipoVehiculo: e.target.value })}
                                             >
                                                 <option value="" disabled>Seleccione...</option>
                                                 {sortedVehicleTypes.map((v: any) => (
@@ -1769,29 +1664,41 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                 ))}
                                             </select>
                                         </div>
+                                        <div>
+                                            <label className={labelStyle}>Patente</label>
+                                            <input
+                                                className={`${inputStyle} font-mono uppercase text-center tracking-widest font-bold border-l-[3px] border-l-emerald-500`}
+                                                value={newVehicleData.patente}
+                                                onChange={e => setNewVehicleData({ ...newVehicleData, patente: e.target.value.toUpperCase() })}
+                                                placeholder="AAA123"
+                                                maxLength={7}
+                                            />
+                                        </div>
                                     </div>
-                                    <div className="grid grid-cols-3 gap-3">
+
+                                    <div className="grid grid-cols-2 gap-3">
                                         <div>
                                             <label className={labelStyle}>Marca</label>
-                                            <input className={inputStyle} value={newCocheraData.marca} onChange={e => setNewCocheraData({ ...newCocheraData, marca: e.target.value })} />
+                                            <input className={inputStyle} value={newVehicleData.marca} onChange={e => setNewVehicleData({ ...newVehicleData, marca: e.target.value })} />
                                         </div>
                                         <div>
                                             <label className={labelStyle}>Modelo</label>
-                                            <input className={inputStyle} value={newCocheraData.modelo} onChange={e => setNewCocheraData({ ...newCocheraData, modelo: e.target.value })} />
-                                        </div>
-                                        <div>
-                                            <label className={labelStyle}>Color</label>
-                                            <input className={inputStyle} value={newCocheraData.color} onChange={e => setNewCocheraData({ ...newCocheraData, color: e.target.value })} />
+                                            <input className={inputStyle} value={newVehicleData.modelo} onChange={e => setNewVehicleData({ ...newVehicleData, modelo: e.target.value })} />
                                         </div>
                                     </div>
-                                    <div className="grid grid-cols-2 gap-3">
+
+                                    <div className="grid grid-cols-3 gap-3">
+                                        <div>
+                                            <label className={labelStyle}>Color</label>
+                                            <input className={inputStyle} value={newVehicleData.color} onChange={e => setNewVehicleData({ ...newVehicleData, color: e.target.value })} />
+                                        </div>
                                         <div>
                                             <label className={labelStyle}>Año</label>
-                                            <input className={inputStyle} value={newCocheraData.anio} onChange={e => setNewCocheraData({ ...newCocheraData, anio: e.target.value })} />
+                                            <input className={inputStyle} value={newVehicleData.anio} onChange={e => setNewVehicleData({ ...newVehicleData, anio: e.target.value })} />
                                         </div>
                                         <div>
                                             <label className={labelStyle}>Seguro</label>
-                                            <input className={inputStyle} value={newCocheraData.seguro} onChange={e => setNewCocheraData({ ...newCocheraData, seguro: e.target.value })} />
+                                            <input className={inputStyle} value={newVehicleData.companiaSeguro} onChange={e => setNewVehicleData({ ...newVehicleData, companiaSeguro: e.target.value })} />
                                         </div>
                                     </div>
 
@@ -1804,165 +1711,543 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                             </button>
                                         ))}
                                     </div>
-                                </div>
-                            </div>
 
-                            {errorMessage && (
-                                <div className="mt-4 bg-red-500/10 border border-red-500/50 p-3 rounded-xl flex items-start gap-2 animate-in fade-in slide-in-from-top-2">
-                                    <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-                                    <span className="text-xs text-red-400 font-medium leading-relaxed">{errorMessage}</span>
-                                </div>
-                            )}
-
-                            <div className="flex gap-3 mt-4 pt-4 border-t border-gray-800">
-                                <button onClick={() => setIsNewCocheraOpen(false)} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-bold uppercase transition-colors">Cancelar</button>
-                                <button onClick={handleCreateCochera} className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold uppercase transition-colors shadow-lg shadow-emerald-900/20 flex items-center justify-center gap-2">
-                                    <Plus className="w-4 h-4" /> Crear Cochera
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* --- RENEWAL CHECKOUT MODAL --- */}
-                {isRenewalModalOpen && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-                        <div className="bg-gray-900 border border-red-500/30 rounded-2xl w-full max-w-lg p-6 shadow-2xl relative shadow-red-900/20">
-                            <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
-                                <AlertTriangle className="w-5 h-5 text-red-500" />
-                                Renovar Abono
-                            </h3>
-
-                            <div className="space-y-6">
-                                <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex flex-col gap-3 ring-1 ring-inset ring-red-500/10">
-                                    <div className="flex justify-between items-end border-b border-red-500/20 pb-2">
-                                        <div className="text-red-400/80">
-                                            <span className="block text-[10px] uppercase tracking-widest font-bold mb-0.5">Subtotal</span>
-                                            <span className="text-xs font-medium">Monto base</span>
+                                    {upgradeInfo.isUpgrade && (
+                                        <div className="grid grid-cols-2 gap-3 mt-4">
+                                            <div>
+                                                <label className={labelStyle}>Método de Pago</label>
+                                                <select className={`${inputStyle} appearance-none bg-gray-900 border-gray-700/50`} value={newVehicleData.metodoPago} onChange={e => setNewVehicleData({ ...newVehicleData, metodoPago: e.target.value })}>
+                                                    <option value="Efectivo">Efectivo</option>
+                                                    <option value="Transferencia">Transferencia</option>
+                                                    <option value="Debito">Débito</option>
+                                                    <option value="Credito">Crédito</option>
+                                                    <option value="QR">QR</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className={labelStyle}>Tipo Factura</label>
+                                                <select className={`${inputStyle} appearance-none bg-gray-900 border-gray-700/50`} value={newVehicleData.tipoFactura} onChange={e => setNewVehicleData({ ...newVehicleData, tipoFactura: e.target.value })}>
+                                                    <option value="CC">CC</option>
+                                                    <option value="A">A</option>
+                                                    <option value="Final">Final</option>
+                                                </select>
+                                            </div>
                                         </div>
-                                        <div className="text-lg font-bold text-gray-300 font-mono tracking-tighter">
-                                            ${renewalData.baseAmount.toLocaleString()}
-                                        </div>
-                                    </div>
-                                    <div className="flex justify-between items-end border-b border-red-500/20 pb-2">
-                                        <div className="text-red-400">
-                                            <span className="block text-[10px] uppercase tracking-widest font-bold mb-0.5">Mora por Retraso</span>
-                                            {renewalData.surchargeAmount > 0 ? (
-                                                <span className="text-[10px] font-medium block">
-                                                    Aplicado {renewalData.surchargeStep?.percentage}% de recargo por superar el día {renewalData.surchargeStep?.day} del mes
-                                                </span>
+                                    )}
+
+                                    {newVehicleData.tipoVehiculo && (
+                                        <div className={`p-4 rounded-lg border ${upgradeInfo.isUpgrade ? 'bg-emerald-900/20 border-emerald-500/30' : 'bg-gray-800/30 border-gray-700/30'} transition-all`}>
+                                            {upgradeInfo.isUpgrade ? (
+                                                <>
+                                                    <div className="flex items-center gap-2 mb-2">
+                                                        <AlertTriangle className="w-4 h-4 text-emerald-400" />
+                                                        <span className="text-xs font-bold uppercase text-emerald-400 self-center">Upgrade Detectado</span>
+                                                    </div>
+                                                    <div className="flex justify-between items-end">
+                                                        <span className="text-gray-400 text-xs">Cobrar hoy:</span>
+                                                        <span className="text-xl font-mono font-bold text-white">${upgradeInfo.diffToPay.toLocaleString()}</span>
+                                                    </div>
+                                                    <div className="flex justify-between items-end mt-1">
+                                                        <span className="text-gray-500 text-[10px] uppercase">Nuevo Precio Base (Matriz)</span>
+                                                        <span className="text-xs font-mono text-emerald-300">${upgradeInfo.newBasePrice.toLocaleString()}</span>
+                                                    </div>
+                                                </>
                                             ) : (
-                                                <span className="text-xs font-medium">Sin recargos pendientes</span>
+                                                <div className="flex items-center gap-2 text-gray-400">
+                                                    <Check className="w-4 h-4" />
+                                                    <span className="text-xs">Misma categoría en la matriz de precios.</span>
+                                                </div>
                                             )}
                                         </div>
-                                        <div className="text-lg font-bold text-red-300 font-mono tracking-tighter">
-                                            ${renewalData.surchargeAmount.toLocaleString()}
-                                        </div>
-                                    </div>
-                                    <div className="flex justify-between items-end pt-1">
-                                        <div className="text-red-400">
-                                            <span className="block text-[10px] uppercase tracking-widest font-bold mb-1">Total Final</span>
-                                            <span className="text-sm font-medium">Cochera {renewalData.cocheraDetails?.tipo === 'Movil' ? 'Móvil' : renewalData.cocheraDetails?.tipo} #{renewalData.cocheraDetails?.numero || 'S/N'}</span>
-                                        </div>
-                                        <div className="text-3xl font-black text-white font-mono tracking-tighter">
-                                            ${renewalData.amountToPay.toLocaleString()}
-                                        </div>
-                                    </div>
+                                    )}
+
                                 </div>
 
-                                {/* EDITABLE AMOUNT INPUT */}
-                                <div>
-                                    <label className={`${labelStyle} text-white`}>Monto a Cobrar</label>
-                                    <div className="relative">
-                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-lg">$</span>
-                                        <input
-                                            type="number"
-                                            className={`${inputStyle} pl-8 text-xl font-mono font-bold text-center border-2 ${renewalData.montoCobrado < renewalData.amountToPay ? 'border-amber-500/50 bg-amber-950/20 text-amber-300' : 'border-emerald-500/30 bg-gray-950 text-white'}`}
-                                            value={renewalData.montoCobrado || ''}
-                                            onChange={e => {
-                                                let val = Number(e.target.value) || 0;
-                                                if (val > renewalData.amountToPay) val = renewalData.amountToPay;
-                                                setRenewalData({ ...renewalData, montoCobrado: val });
-                                            }}
-                                            min={1}
-                                            max={renewalData.amountToPay}
-                                        />
-                                    </div>
+                                <div className="flex gap-3 mt-6 pt-4 border-t border-gray-800">
+                                    <button onClick={() => setIsModalOpen(false)} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-xs font-bold uppercase transition-colors">Cancelar</button>
+                                    <button onClick={handleSaveVehicle} className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold uppercase transition-colors shadow-lg shadow-indigo-900/20">Confirmar</button>
                                 </div>
+                            </div>
+                        </div>
+                    </ModalPortal>
+                )}
 
-                                {/* PARTIAL PAYMENT WARNING BANNER */}
-                                {renewalData.montoCobrado > 0 && renewalData.montoCobrado < renewalData.amountToPay && (
-                                    <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 flex items-start gap-3 animate-in fade-in slide-in-from-top-2">
-                                        <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                                        <div className="flex-1">
-                                            <span className="block text-xs text-amber-400 font-bold uppercase tracking-wider mb-1">Pago Parcial</span>
-                                            <div className="text-xs text-amber-300/80 space-y-0.5">
-                                                <div className="flex justify-between">
-                                                    <span>Recargo a cubrir:</span>
-                                                    <span className="font-mono font-bold">${Math.min(renewalData.montoCobrado, renewalData.surchargeAmount).toLocaleString()}</span>
+                {isNewCocheraOpen && (
+                    <ModalPortal>
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+                            <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-4xl p-4 shadow-2xl relative max-h-[90vh] overflow-y-auto app-scrollbar">
+                                <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                                    <Plus className="w-5 h-5 text-emerald-400" />
+                                    Nueva Cochera
+                                </h3>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    {/* COLUMNA IZQUIERDA: Configuración y Pagos */}
+                                    <div className="space-y-4">
+                                        {/* 1. CONFIG COCHERA */}
+                                        <div className="p-3 bg-gray-800/30 rounded-lg border border-gray-700/30 space-y-3">
+                                            <div className="flex gap-4 items-end">
+                                                <div className="flex-1">
+                                                    <label className={labelStyle}>Tipo</label>
+                                                    <div className="flex bg-gray-900 p-1 rounded-lg border border-gray-800">
+                                                        {['Movil', 'Fija'].map(t => (
+                                                            <button
+                                                                key={t}
+                                                                onClick={() => setNewCocheraData({ ...newCocheraData, tipo: t, exclusiva: false, numero: t === 'Movil' ? '' : newCocheraData.numero, piso: t === 'Movil' ? '' : newCocheraData.piso })}
+                                                                className={`flex-1 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${newCocheraData.tipo === t ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-500 hover:text-gray-300'}`}
+                                                            >
+                                                                {t === 'Movil' ? 'Móvil' : t}
+                                                            </button>
+                                                        ))}
+                                                    </div>
                                                 </div>
-                                                <div className="flex justify-between">
-                                                    <span>Capital a abonar:</span>
-                                                    <span className="font-mono font-bold">${Math.max(0, renewalData.montoCobrado - renewalData.surchargeAmount).toLocaleString()}</span>
+                                                <div className={`flex-1 transition-all ${newCocheraData.tipo === 'Movil' ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
+                                                    <label className={labelStyle}>Número</label>
+                                                    <input
+                                                        className={`${inputStyle} text-center font-mono`}
+                                                        value={newCocheraData.numero}
+                                                        onChange={e => setNewCocheraData({ ...newCocheraData, numero: e.target.value })}
+                                                        placeholder="N°"
+                                                    />
                                                 </div>
-                                                <div className="flex justify-between border-t border-amber-500/20 pt-1 mt-1">
-                                                    <span className="font-bold">Saldo pendiente restante:</span>
-                                                    <span className="font-mono font-bold text-amber-400">${(renewalData.amountToPay - renewalData.montoCobrado).toLocaleString()}</span>
+                                                <div className={`flex items-center gap-2 pb-2 ${newCocheraData.tipo === 'Movil' ? 'opacity-50 pointer-events-none' : ''}`}>
+                                                    <input
+                                                        type="checkbox"
+                                                        className="w-4 h-4 accent-amber-500 bg-gray-900 border-gray-700 rounded cursor-pointer"
+                                                        checked={newCocheraData.exclusiva}
+                                                        disabled={newCocheraData.tipo === 'Movil'}
+                                                        onChange={e => setNewCocheraData({ ...newCocheraData, exclusiva: e.target.checked })}
+                                                    />
+                                                    <span className="text-xs font-bold text-amber-500 uppercase tracking-wide cursor-pointer" onClick={() => { if (newCocheraData.tipo !== 'Movil') setNewCocheraData({ ...newCocheraData, exclusiva: !newCocheraData.exclusiva }) }}>Exclusiva</span>
+                                                </div>
+                                            </div>
+                                            {/* PISO SELECTOR */}
+                                            <div>
+                                                <label className={labelStyle}>Piso</label>
+                                                <select
+                                                    className={`${inputStyle} appearance-none bg-gray-900 ${newCocheraData.tipo === 'Movil' ? 'opacity-50' : (newCocheraData.tipo !== 'Movil' && !newCocheraData.piso ? 'border-amber-500/50' : '')}`}
+                                                    value={newCocheraData.piso}
+                                                    onChange={e => setNewCocheraData({ ...newCocheraData, piso: e.target.value })}
+                                                    disabled={newCocheraData.tipo === 'Movil'}
+                                                    required={newCocheraData.tipo !== 'Movil'}
+                                                >
+                                                    <option value="" disabled>Seleccione piso...</option>
+                                                    {buildingLevels.map((level: any) => (
+                                                        <option key={level.id} value={level.displayName || level.display_name}>{level.displayName || level.display_name}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        {/* 3. FACTURACION */}
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className={labelStyle}>Método Pago</label>
+                                                <select className={`${inputStyle} appearance-none bg-gray-900`} value={newCocheraData.metodoPago} onChange={e => setNewCocheraData({ ...newCocheraData, metodoPago: e.target.value })}>
+                                                    <option value="" disabled hidden>Seleccionar...</option>
+                                                    <option value="Efectivo">Efectivo</option>
+                                                    <option value="Transferencia">Transferencia</option>
+                                                    <option value="Debito">Débito</option>
+                                                    <option value="Credito">Crédito</option>
+                                                    <option value="QR">QR</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className={labelStyle}>Tipo Factura</label>
+                                                <select className={`${inputStyle} appearance-none bg-gray-900`} value={newCocheraData.tipoFactura} onChange={e => setNewCocheraData({ ...newCocheraData, tipoFactura: e.target.value })}>
+                                                    <option value="" disabled hidden>Seleccionar...</option>
+                                                    <option value="CC">CC</option>
+                                                    <option value="A">A</option>
+                                                    <option value="Final">Final</option>
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        {/* 4. SUMMARY & MONTO A ABONAR */}
+                                        <div className="grid grid-cols-2 gap-4">
+                                            {/* SUMMARY */}
+                                            <div className="bg-emerald-900/10 border border-emerald-500/20 p-3 rounded-xl flex flex-col justify-center items-center text-center h-full">
+                                                <span className="block text-[10px] text-gray-400 uppercase font-bold tracking-widest mb-1">Total Inicial Prorrateado</span>
+                                                <span className="text-2xl font-black text-white tracking-tighter">${newCocheraFinancials.proratedPrice.toLocaleString()}</span>
+                                                <span className="block text-[10px] text-emerald-500 uppercase font-bold tracking-widest mt-1">Base: ${newCocheraFinancials.basePrice.toLocaleString()}</span>
+                                            </div>
+
+                                            {/* MONTO A ABONAR */}
+                                            <div className="p-3 border border-dashed border-gray-800 rounded-xl bg-gray-950/40 flex flex-col justify-center items-center h-full">
+                                                <label className={`${labelStyle} text-center mb-1`}>Monto a Abonar</label>
+                                                <div className="relative w-full max-w-[160px]">
+                                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-500 font-bold text-xl">$</span>
+                                                    <input
+                                                        type="number"
+                                                        min={0}
+                                                        max={newCocheraFinancials.proratedPrice}
+                                                        className={`w-full bg-gray-900 border border-gray-700/50 rounded-lg pl-8 pr-2 py-1.5 text-white focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition-all text-2xl font-black font-mono text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`}
+                                                        value={montoAbonadoCochera || ''}
+                                                        onChange={(e) => {
+                                                            let val = Number(e.target.value);
+                                                            if (val > newCocheraFinancials.proratedPrice) val = newCocheraFinancials.proratedPrice;
+                                                            if (val < 0) val = 0;
+                                                            setMontoAbonadoCochera(val);
+                                                        }}
+                                                    />
                                                 </div>
                                             </div>
                                         </div>
+
+                                        {/* DEUDA A CREAR BANNER */}
+                                        {montoAbonadoCochera < newCocheraFinancials.proratedPrice && (
+                                            <div className="bg-amber-500/10 border border-amber-500/30 p-2 rounded-lg flex items-center justify-between px-4 animate-in fade-in zoom-in duration-300">
+                                                <span className="text-xs font-bold text-amber-500 uppercase tracking-wider">Deuda a Crear</span>
+                                                <span className="text-lg font-mono text-amber-400 font-bold">${(newCocheraFinancials.proratedPrice - montoAbonadoCochera).toLocaleString()}</span>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* COLUMNA DERECHA: Vehiculo */}
+                                    <div className="space-y-4">
+                                        <div className="flex items-center gap-2 mb-2 text-gray-500">
+                                            <Car className="w-3.5 h-3.5" /> <span className="text-[10px] font-bold uppercase">Datos del Vehículo</span>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label className={labelStyle}>Patente</label>
+                                                <input
+                                                    className={`${inputStyle} font-mono uppercase text-center tracking-widest font-bold border-l-[3px] border-l-emerald-500`}
+                                                    value={newCocheraData.patente}
+                                                    onChange={e => setNewCocheraData({ ...newCocheraData, patente: e.target.value.toUpperCase() })}
+                                                    placeholder="AAA123"
+                                                    maxLength={7}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className={labelStyle}>Tipo Vehículo</label>
+                                                <select
+                                                    className={`${inputStyle} appearance-none bg-gray-900`}
+                                                    value={newCocheraData.tipoVehiculo}
+                                                    onChange={e => setNewCocheraData({ ...newCocheraData, tipoVehiculo: e.target.value })}
+                                                >
+                                                    <option value="" disabled>Seleccione...</option>
+                                                    {sortedVehicleTypes.map((v: any) => (
+                                                        <option key={v.id} value={v.name} disabled={v.disabled}>{v.label}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-3 gap-3">
+                                            <div>
+                                                <label className={labelStyle}>Marca</label>
+                                                <input className={inputStyle} value={newCocheraData.marca} onChange={e => setNewCocheraData({ ...newCocheraData, marca: e.target.value })} />
+                                            </div>
+                                            <div>
+                                                <label className={labelStyle}>Modelo</label>
+                                                <input className={inputStyle} value={newCocheraData.modelo} onChange={e => setNewCocheraData({ ...newCocheraData, modelo: e.target.value })} />
+                                            </div>
+                                            <div>
+                                                <label className={labelStyle}>Color</label>
+                                                <input className={inputStyle} value={newCocheraData.color} onChange={e => setNewCocheraData({ ...newCocheraData, color: e.target.value })} />
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label className={labelStyle}>Año</label>
+                                                <input className={inputStyle} value={newCocheraData.anio} onChange={e => setNewCocheraData({ ...newCocheraData, anio: e.target.value })} />
+                                            </div>
+                                            <div>
+                                                <label className={labelStyle}>Seguro</label>
+                                                <input className={inputStyle} value={newCocheraData.seguro} onChange={e => setNewCocheraData({ ...newCocheraData, seguro: e.target.value })} />
+                                            </div>
+                                        </div>
+
+                                        {/* DOCUMENTACIÓN */}
+                                        <div className="flex gap-2 mt-2">
+                                            {['Seguro', 'DNI', 'Cédula'].map(doc => (
+                                                <button key={doc} type="button" onClick={() => openCamera(doc)}
+                                                    className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded border border-dashed text-[10px] font-bold uppercase transition-all ${photos[doc] ? 'border-emerald-500/50 bg-emerald-900/10 text-emerald-400' : 'border-gray-800 bg-gray-950/20 text-gray-500 hover:bg-white/5'}`}>
+                                                    {photos[doc] ? <Check className="w-3 h-3" /> : <Camera className="w-3 h-3" />} {doc}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {errorMessage && (
+                                    <div className="mt-4 bg-red-500/10 border border-red-500/50 p-3 rounded-xl flex items-start gap-2 animate-in fade-in slide-in-from-top-2">
+                                        <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                                        <span className="text-xs text-red-400 font-medium leading-relaxed">{errorMessage}</span>
                                     </div>
                                 )}
 
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className={labelStyle}>Método de Pago</label>
-                                        <select
-                                            className={`${inputStyle} appearance-none bg-gray-950`}
-                                            value={renewalData.metodoPago}
-                                            onChange={e => setRenewalData({ ...renewalData, metodoPago: e.target.value })}
-                                        >
-                                            <option value="Efectivo">Efectivo</option>
-                                            <option value="Transferencia">Transferencia</option>
-                                            <option value="Debito">Débito</option>
-                                            <option value="Credito">Crédito</option>
-                                            <option value="QR">QR</option>
-                                        </select>
-                                    </div>
-                                    <div>
-                                        <label className={labelStyle}>Facturación</label>
-                                        <select
-                                            className={`${inputStyle} appearance-none bg-gray-950`}
-                                            value={renewalData.tipoFactura}
-                                            onChange={e => setRenewalData({ ...renewalData, tipoFactura: e.target.value })}
-                                        >
-                                            <option value="CC">Cuenta Corriente</option>
-                                            <option value="A">Factura A</option>
-                                            <option value="Final">Consumidor Final</option>
-                                        </select>
-                                    </div>
+                                <div className="flex gap-3 mt-4 pt-4 border-t border-gray-800">
+                                    <button onClick={() => setIsNewCocheraOpen(false)} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-bold uppercase transition-colors">Cancelar</button>
+                                    <button onClick={handleCreateCochera} className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold uppercase transition-colors shadow-lg shadow-emerald-900/20 flex items-center justify-center gap-2">
+                                        <Plus className="w-4 h-4" /> Crear Cochera
+                                    </button>
                                 </div>
                             </div>
+                        </div>
+                    </ModalPortal>
+                )}
 
-                            <div className="flex gap-3 mt-8 pt-4 border-t border-gray-800">
-                                <button onClick={() => setIsRenewalModalOpen(false)} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-bold uppercase transition-colors">Cancelar</button>
-                                <button
-                                    onClick={handleRenewSubscription}
-                                    disabled={!renewalData.montoCobrado || renewalData.montoCobrado <= 0}
-                                    className={`flex-1 py-3 ${renewalData.montoCobrado < renewalData.amountToPay ? 'bg-amber-600 hover:bg-amber-500 shadow-amber-900/20' : 'bg-red-600 hover:bg-red-500 shadow-red-900/20'} text-white rounded-xl text-xs font-bold uppercase transition-colors shadow-lg flex items-center justify-center gap-2 disabled:opacity-50`}
-                                >
-                                    <Check className="w-4 h-4" />
-                                    {renewalData.montoCobrado < renewalData.amountToPay ? 'Confirmar Pago Parcial' : 'Confirmar Pago'}
-                                </button>
+                {/* --- RENEWAL CHECKOUT MODAL (DEBT) --- */}
+                {isRenewalModalOpen && (
+                    <ModalPortal>
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
+                            <div className="bg-gray-900 border border-red-500/30 rounded-2xl w-full max-w-lg shadow-2xl shadow-red-900/20 flex flex-col max-h-[calc(100vh-2rem)] overflow-hidden">
+                                {/* Header (Fixed) */}
+                                <div className="flex items-center justify-between p-4 border-b border-gray-800 shrink-0 bg-gray-950/40">
+                                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                                        <AlertTriangle className="w-5 h-5 text-red-500" />
+                                        Renovar Abono
+                                    </h3>
+                                    <button
+                                        disabled={isRenewalSubmitting}
+                                        onClick={() => setIsRenewalModalOpen(false)}
+                                        className="p-1.5 text-gray-500 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
+                                    >
+                                        <X className="w-4 h-4" />
+                                    </button>
+                                </div>
+
+                                {/* Body (Scrollable if viewport is tiny) */}
+                                <div className="p-5 overflow-y-auto space-y-4 flex-1">
+                                    {/* --- MULTI-MONTH TOGGLE & SELECTOR --- */}
+                                    {!renewalData.isGlobalDebt && renewalData.targetDebts && renewalData.targetDebts.length > 0 && (
+                                        <div className="bg-gray-950 border border-gray-800 rounded-xl p-3 flex flex-col gap-3">
+                                            <div className="flex bg-gray-900 p-1 rounded-lg">
+                                                <button
+                                                    disabled={isRenewalSubmitting}
+                                                    onClick={() => setRenewalData({ ...renewalData, multiMonthMode: true, montoCobrado: renewalData.amountToPay })}
+                                                    className={`flex-1 py-1.5 text-xs font-bold uppercase tracking-wider rounded-md transition-colors ${renewalData.multiMonthMode ? 'bg-emerald-600 text-white shadow-sm' : 'text-gray-400 hover:bg-gray-800'}`}
+                                                >
+                                                    Meses Completos
+                                                </button>
+                                                <button
+                                                    disabled={isRenewalSubmitting}
+                                                    onClick={() => setRenewalData({ ...renewalData, multiMonthMode: false })}
+                                                    className={`flex-1 py-1.5 text-xs font-bold uppercase tracking-wider rounded-md transition-colors ${!renewalData.multiMonthMode ? 'bg-amber-600 text-white shadow-sm' : 'text-gray-400 hover:bg-gray-800'}`}
+                                                >
+                                                    Pago Parcial
+                                                </button>
+                                            </div>
+                                            {renewalData.multiMonthMode && renewalData.targetDebts.length > 1 && (
+                                                <div>
+                                                    <label className="block text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-1 ml-1">Meses a pagar</label>
+                                                    <select
+                                                        disabled={isRenewalSubmitting}
+                                                        value={renewalData.multiMonthCount}
+                                                        onChange={(e) => setRenewalData({ ...renewalData, multiMonthCount: Number(e.target.value) })}
+                                                        className={`${inputStyle} text-sm font-bold`}
+                                                    >
+                                                        {Array.from({ length: renewalData.targetDebts.length }, (_, i) => i + 1).map(n => (
+                                                            <option key={n} value={n}>
+                                                                {n} {n === 1 ? 'mes' : 'meses'} {n === renewalData.targetDebts.length ? '(Todos)' : ''}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* --- BREAKDOWN --- */}
+                                    <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex flex-col gap-3 ring-1 ring-inset ring-red-500/10 relative">
+                                        {renewalData.isPreviewLoading && (
+                                            <div className="absolute inset-0 bg-gray-900/80 backdrop-blur-sm rounded-xl flex flex-col items-center justify-center z-10">
+                                                <RefreshCw className="w-6 h-6 text-emerald-500 animate-spin mb-2" />
+                                                <span className="text-emerald-400 font-bold text-xs uppercase tracking-widest animate-pulse">Calculando Totales...</span>
+                                            </div>
+                                        )}
+                                        {renewalData.previewError && (
+                                            <div className="absolute inset-0 bg-red-950/90 backdrop-blur-sm rounded-xl flex flex-col items-center justify-center z-10 p-4 text-center">
+                                                <AlertTriangle className="w-6 h-6 text-red-500 mb-2" />
+                                                <span className="text-red-400 font-bold text-xs">{renewalData.previewError}</span>
+                                                <button onClick={() => setRenewalData({ ...renewalData, multiMonthCount: 1 })} className="mt-3 px-3 py-1 bg-red-900 text-white text-xs rounded hover:bg-red-800">Reintentar</button>
+                                            </div>
+                                        )}
+                                        
+                                        {renewalData.multiMonthMode && renewalData.previewBreakdown && renewalData.previewBreakdown.length > 0 ? (
+                                            <div className="space-y-3">
+                                                {renewalData.previewBreakdown.map((item: any, idx: number) => (
+                                                    <div key={idx} className="flex justify-between items-end border-b border-red-500/20 pb-2">
+                                                        <div className="text-red-400/80">
+                                                            <span className="block text-[10px] uppercase tracking-widest font-bold mb-0.5">{item.billingPeriod || 'Período'}</span>
+                                                            <span className="text-xs font-medium">Base + Mora {item.surchargePercentage ? `(${item.surchargePercentage}%)` : ''}</span>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <div className="text-sm font-bold text-gray-300 font-mono tracking-tighter">${(item.total ?? item.totalAmount ?? (Number(item.principal || 0) + Number(item.surchargeAmount || 0))).toLocaleString()}</div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <>
+                                                <div className="flex justify-between items-end border-b border-red-500/20 pb-2">
+                                                    <div className="text-red-400/80">
+                                                        <span className="block text-[10px] uppercase tracking-widest font-bold mb-0.5">Subtotal</span>
+                                                        <span className="text-xs font-medium">Monto base</span>
+                                                    </div>
+                                                    <div className="text-lg font-bold text-gray-300 font-mono tracking-tighter">
+                                                        ${renewalData.baseAmount.toLocaleString()}
+                                                    </div>
+                                                </div>
+                                                <div className="flex justify-between items-end border-b border-red-500/20 pb-2">
+                                                    <div className="text-red-400">
+                                                        <span className="block text-[10px] uppercase tracking-widest font-bold mb-0.5">Mora por Retraso</span>
+                                                        {renewalData.surchargeAmount > 0 ? (
+                                                            <span className="text-[10px] font-medium block">
+                                                                Aplicado {renewalData.surchargeStep?.percentage}% de recargo por superar el día {renewalData.surchargeStep?.day} del mes
+                                                            </span>
+                                                        ) : (
+                                                            <span className="text-xs font-medium">Sin recargos pendientes</span>
+                                                        )}
+                                                    </div>
+                                                    <div className="text-lg font-bold text-red-300 font-mono tracking-tighter">
+                                                        ${renewalData.surchargeAmount.toLocaleString()}
+                                                    </div>
+                                                </div>
+                                            </>
+                                        )}
+
+                                        <div className="flex justify-between items-end pt-1">
+                                            <div className="text-red-400">
+                                                <span className="block text-[10px] uppercase tracking-widest font-bold mb-1">Total Final</span>
+                                                <span className="text-sm font-medium">Cochera {renewalData.cocheraDetails?.tipo === 'Movil' ? 'Móvil' : renewalData.cocheraDetails?.tipo} #{renewalData.cocheraDetails?.numero || 'S/N'}</span>
+                                            </div>
+                                            <div className="text-3xl font-black text-white font-mono tracking-tighter">
+                                                ${renewalData.amountToPay.toLocaleString()}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* EDITABLE AMOUNT INPUT */}
+                                    <div>
+                                        <label className={`${labelStyle} text-white`}>Monto a Cobrar</label>
+                                        <div className="relative">
+                                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-lg">$</span>
+                                            <input
+                                                type="number"
+                                                disabled={renewalData.multiMonthMode}
+                                                className={`${inputStyle} pl-8 text-xl font-mono font-bold text-center border-2 ${renewalData.montoCobrado < renewalData.amountToPay ? 'border-amber-500/50 bg-amber-950/20 text-amber-300' : 'border-emerald-500/30 bg-gray-950 text-white'} disabled:opacity-50 disabled:cursor-not-allowed`}
+                                                value={renewalData.montoCobrado || ''}
+                                                onChange={e => {
+                                                    let val = Number(e.target.value) || 0;
+                                                    if (val > renewalData.amountToPay) val = renewalData.amountToPay;
+                                                    setRenewalData({ ...renewalData, montoCobrado: val });
+                                                }}
+                                                min={1}
+                                                max={renewalData.amountToPay}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* PARTIAL PAYMENT WARNING BANNER */}
+                                    {renewalData.montoCobrado > 0 && renewalData.montoCobrado < renewalData.amountToPay && (
+                                        <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 flex items-start gap-3 animate-in fade-in slide-in-from-top-2">
+                                            <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                                            <div className="flex-1">
+                                                <span className="block text-xs text-amber-400 font-bold uppercase tracking-wider mb-1">Pago Parcial</span>
+                                                <div className="text-xs text-amber-300/80 space-y-0.5">
+                                                    <div className="flex justify-between">
+                                                        <span>Recargo a cubrir:</span>
+                                                        <span className="font-mono font-bold">${Math.min(renewalData.montoCobrado, renewalData.surchargeAmount).toLocaleString()}</span>
+                                                    </div>
+                                                    <div className="flex justify-between">
+                                                        <span>Capital a abonar:</span>
+                                                        <span className="font-mono font-bold">${Math.max(0, renewalData.montoCobrado - renewalData.surchargeAmount).toLocaleString()}</span>
+                                                    </div>
+                                                    <div className="flex justify-between border-t border-amber-500/20 pt-1 mt-1">
+                                                        <span className="font-bold">Saldo pendiente restante:</span>
+                                                        <span className="font-mono font-bold text-amber-400">${(renewalData.amountToPay - renewalData.montoCobrado).toLocaleString()}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className={labelStyle}>Método de Pago</label>
+                                            <select
+                                                className={`${inputStyle} appearance-none bg-gray-950`}
+                                                value={renewalData.metodoPago}
+                                                onChange={e => setRenewalData({ ...renewalData, metodoPago: e.target.value })}
+                                            >
+                                                <option value="Efectivo">Efectivo</option>
+                                                <option value="Transferencia">Transferencia</option>
+                                                <option value="Debito">Débito</option>
+                                                <option value="Credito">Crédito</option>
+                                                <option value="QR">QR</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className={labelStyle}>Facturación</label>
+                                            <select
+                                                className={`${inputStyle} appearance-none bg-gray-950`}
+                                                value={renewalData.tipoFactura}
+                                                onChange={e => setRenewalData({ ...renewalData, tipoFactura: e.target.value })}
+                                            >
+                                                <option value="CC">Cuenta Corriente</option>
+                                                <option value="A">Factura A</option>
+                                                <option value="Final">Consumidor Final</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Footer (Fixed & Always Visible) */}
+                                <div className="p-4 border-t border-gray-800 bg-gray-950/60 shrink-0 flex gap-3">
+                                    <button onClick={() => setIsRenewalModalOpen(false)} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-bold uppercase transition-colors">Cancelar</button>
+                                    <button
+                                        onClick={handleRenewSubscription}
+                                        disabled={isRenewalSubmitting || renewalData.isPreviewLoading || !!renewalData.previewError || !renewalData.montoCobrado || renewalData.montoCobrado <= 0}
+                                        className={`flex-1 py-2.5 ${renewalData.montoCobrado < renewalData.amountToPay ? 'bg-amber-600 hover:bg-amber-500 shadow-amber-900/20' : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/20'} text-white rounded-xl text-xs font-bold uppercase transition-colors shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed`}
+                                    >
+                                        {isRenewalSubmitting ? (
+                                            <>
+                                                <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                </svg>
+                                                Procesando...
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Check className="w-3 h-3" />
+                                                {renewalData.montoCobrado < renewalData.amountToPay ? 'Confirmar Pago Parcial' : (renewalData.multiMonthMode && renewalData.multiMonthCount > 1 ? `Confirmar Pago (${renewalData.multiMonthCount} meses)` : 'Confirmar Renovación')}
+                                            </>
+                                        )}
+                                    </button>
+                                </div>
                             </div>
                         </div>
-                    </div>
-                )
-                }
+                    </ModalPortal>
+                )}
+
+                {/* === ADVANCE PAYMENT MODAL === */}
+                <AdvancePaymentModal
+                    isOpen={isAdvanceModalOpen}
+                    isSubmitting={isAdvanceSubmitting}
+                    nextMonthLabel={advanceData.nextMonthLabel}
+                    nextPeriodLabel={advanceData.nextPeriodLabel}
+                    currentEndDateStr={advanceData.currentEndDateStr}
+                    nextEndDateStr={advanceData.nextEndDateStr}
+                    spotNumber={advanceData.cocheraDetails?.numero}
+                    cocheraType={advanceData.cocheraDetails?.tipo}
+                    vehiclePlate={advanceData.vehicleInfo.plate}
+                    vehicleType={advanceData.vehicleInfo.type}
+                    amount={advanceData.finalPrice}
+                    paymentMethod={advanceData.metodoPago}
+                    billingType={advanceData.tipoFactura}
+                    priceNotFound={!advanceData.finalPrice || advanceData.finalPrice <= 0}
+                    onPaymentMethodChange={handleAdvancePaymentMethodChange}
+                    onBillingTypeChange={(type) => setAdvanceData(prev => ({ ...prev, tipoFactura: type }))}
+                    onConfirm={handleAdvancePayment}
+                    onClose={() => setIsAdvanceModalOpen(false)}
+                />
 
                 {/* --- CUSTOM CONFIRMATION MODAL (GLOBAL) --- */}
-                {
-                    confirmModal.isOpen && (
+                {confirmModal.isOpen && (
+                    <ModalPortal>
                         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
                             <div className={`bg-gray-900 border ${confirmModal.type === 'danger' ? 'border-red-500/30 shadow-red-900/20' : 'border-amber-500/30 shadow-amber-900/20'} rounded-2xl w-full max-w-md p-6 shadow-2xl relative`}>
                                 <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
@@ -2010,12 +2295,12 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                 </div>
                             </div>
                         </div>
-                    )
-                }
+                    </ModalPortal>
+                )}
 
                 {/* === EDIT CUSTOMER MODAL === */}
-                {
-                    isEditCustomerOpen && (
+                {isEditCustomerOpen && (
+                    <ModalPortal>
                         <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
                             <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setIsEditCustomerOpen(false)} />
                             <div className="relative bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg shadow-2xl animate-in fade-in zoom-in-95 duration-200">
@@ -2068,8 +2353,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                 </div>
                             </div>
                         </div>
-                    )
-                }
+                    </ModalPortal>
+                )}
             </div >
             <WebcamModal isOpen={showCameraModal} onClose={() => setShowCameraModal(false)} onCapture={handleCapture} label={activePhotoField || 'Doc'} />
         </div >

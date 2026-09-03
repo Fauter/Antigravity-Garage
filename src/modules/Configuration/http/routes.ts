@@ -55,10 +55,11 @@ router.get('/precios', async (req, res) => {
         const garageId = (req.query.garageId as string) || (req.headers['x-garage-id'] as string);
         if (!garageId) return res.json({ standard: {}, electronic: {} });
 
-        const [prices, vehicleTypes, tariffs] = await Promise.all([
-            db.prices.find({ garageId }),
-            db.vehicleTypes.find({ garageId }),
-            db.tariffs.find({ garageId })
+        const [pricesStandard, pricesElectronic, vehicleTypes, tariffs] = await Promise.all([
+            configRepo.getPrices(garageId, 'standard'),
+            configRepo.getPrices(garageId, 'electronic'),
+            configRepo.getVehicleTypes(garageId),
+            configRepo.getTariffs(garageId)
         ]);
 
         const standardMatrix: Record<string, Record<string, number>> = {};
@@ -67,27 +68,33 @@ router.get('/precios', async (req, res) => {
         const vTypeMap = new Map(vehicleTypes.map((v: any) => [v.id.trim(), v.name]));
         const tariffMap = new Map(tariffs.map((t: any) => [t.id.trim(), t.name]));
 
-        if (prices.length === 0) {
-            console.warn("⚠️ No local prices found for garage:", garageId);
-        }
-
-        prices.forEach((p: any) => {
+        pricesStandard.forEach((p: any) => {
             const vIdRaw = (p.vehicleTypeId || p.vehicle_type_id || '').trim();
             const tIdRaw = (p.tariffId || p.tariff_id || '').trim();
-
             if (!vIdRaw || !tIdRaw) return;
 
             const vName = vTypeMap.get(vIdRaw);
             const tName = tariffMap.get(tIdRaw);
-
             if (vName && tName) {
                 const vKey = String(vName);
                 const tKey = String(tName);
-                const isElectronic = p.priceList === 'electronic';
-                const targetMatrix = isElectronic ? electronicMatrix : standardMatrix;
+                if (!standardMatrix[vKey]) standardMatrix[vKey] = {};
+                standardMatrix[vKey][tKey] = Number(p.amount ?? p.price ?? 0);
+            }
+        });
 
-                if (!targetMatrix[vKey]) targetMatrix[vKey] = {};
-                targetMatrix[vKey][tKey] = Number(p.amount || 0);
+        pricesElectronic.forEach((p: any) => {
+            const vIdRaw = (p.vehicleTypeId || p.vehicle_type_id || '').trim();
+            const tIdRaw = (p.tariffId || p.tariff_id || '').trim();
+            if (!vIdRaw || !tIdRaw) return;
+
+            const vName = vTypeMap.get(vIdRaw);
+            const tName = tariffMap.get(tIdRaw);
+            if (vName && tName) {
+                const vKey = String(vName);
+                const tKey = String(tName);
+                if (!electronicMatrix[vKey]) electronicMatrix[vKey] = {};
+                electronicMatrix[vKey][tKey] = Number(p.amount ?? p.price ?? 0);
             }
         });
 
@@ -106,9 +113,26 @@ router.get('/building-levels', async (req, res) => {
         const garageId = (req.query.garageId as string) || (req.headers['x-garage-id'] as string);
         if (!garageId) return res.json([]);
 
-        const levels: any[] = await db.buildingLevels.find({ garageId });
+        let levels: any[] = [];
+        const StorageEngine = require('../../../infrastructure/database/StorageEngine').StorageEngine;
+        if (StorageEngine.getEngine() === 'SQLITE') {
+            const SQLiteManager = require('../../../infrastructure/database/sqlite/SQLiteManager').SQLiteManager;
+            const sqliteDb = SQLiteManager.getInstance().getDatabase();
+            const rows = sqliteDb.prepare(`SELECT json_data FROM building_levels WHERE json_extract(json_data, '$.garageId') = ? OR json_extract(json_data, '$.garage_id') = ?`).all(garageId, garageId) as any[];
+            levels = rows.map(r => JSON.parse(r.json_data));
+        } else {
+            levels = await db.buildingLevels.find({ garageId });
+        }
+        
+        // Ensure properties for frontend
+        levels = levels.map(l => ({
+            ...l,
+            sortOrder: l.sortOrder ?? l.sort_order ?? 0,
+            displayName: l.displayName ?? l.display_name ?? 'Sin nombre'
+        }));
+
         // Sort by sortOrder ascending (Subsuelo -> PB -> Piso 1 -> ...)
-        levels.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+        levels.sort((a, b) => a.sortOrder - b.sortOrder);
         res.json(levels);
     } catch (e) {
         res.status(500).json({ error: e });

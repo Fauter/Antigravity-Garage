@@ -292,7 +292,7 @@ export class StayRepository {
         }
     }
 
-    async save(stay: Stay): Promise<Stay> { return this.impl.save(stay); }
+    async save(stay: Stay, arg2?: any, arg3?: any): Promise<Stay> { return this.impl.save(stay, arg2, arg3); }
     async findById(id: string): Promise<Stay | null> {
         if (typeof this.impl.findById === 'function') {
             return this.impl.findById(id);

@@ -465,7 +465,7 @@ export const PrinterService = {
                     </div>
                     <div style="margin-bottom: 5px;">
                         <span style="font-size: 10px;">Cliente:</span><br/>
-                        <span style="font-weight: bold; margin-left: 10px; font-size: 14px;">${data.nombreApellido.toUpperCase()}</span>
+                        <span style="font-weight: bold; margin-left: 10px; font-size: 14px;">${String(data.nombreApellido || 'Consumidor Final').toUpperCase()}</span>
                     </div>
                     <div>
                         <span style="font-size: 10px;">Cochera:</span><br/>

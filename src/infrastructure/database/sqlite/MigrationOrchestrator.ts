@@ -1,16 +1,19 @@
 import fs from 'fs';
 import path from 'path';
 import { DATA_DIR } from '../datastore';
+import { StorageEngine } from '../StorageEngine';
 import { MigrationService } from './MigrationService';
 import { MigrationValidator } from './MigrationValidator';
-import { DatabaseSync } from 'node:sqlite';
+import { SQLiteManager } from './SQLiteManager';
 
 export class MigrationOrchestrator {
-    private static dbPath = path.join(DATA_DIR, 'garageia-shadow.sqlite');
-    private static tmpDbPath = path.join(DATA_DIR, 'garageia-shadow.sqlite.tmp');
-
     public static async initializeShadow(): Promise<void> {
-        let manifest = this.getManifest(this.dbPath);
+        if (StorageEngine.getEngine() === 'SQLITE') {
+            console.log('🗄️ SQLite Engine activo (Post-Cutover). No se requiere Shadow migration.');
+            return;
+        }
+
+        let manifest = this.getManifest();
         
         // If VALID, do not run migration.
         if (manifest && manifest.status === 'VALID') {
@@ -20,21 +23,11 @@ export class MigrationOrchestrator {
 
         console.log('🔄 Iniciando Pre-Cutover Certification (Phase 1.5)...');
         
-        // Clean TMP if left over
-        if (fs.existsSync(this.tmpDbPath)) {
-            fs.unlinkSync(this.tmpDbPath);
-        }
-
         const startTimestamp = new Date().toISOString();
         const migrationId = 'm_' + Date.now();
         
         try {
-            // Pasamos `true` a MigrationService o usamos la TMP db.
-            // Para mantener SQLiteManager simple, renombramos temporalmente el DATA_DIR/garageia-shadow.sqlite a un backup
-            // o instanciamos SQLiteManager contra el tmpPath, pero SQLiteManager es singleton.
-            // Dado que SQLiteManager ya fue instanciado en server.ts, mejor manejamos el manifest aquí.
-            
-            const db = new DatabaseSync(this.dbPath); 
+            const db = SQLiteManager.getInstance().getDatabase();
             // Initialize manifest table manually if missing
             db.exec(`
                 CREATE TABLE IF NOT EXISTS migration_manifest (
@@ -110,10 +103,9 @@ export class MigrationOrchestrator {
         }
     }
 
-    private static getManifest(dbPath: string): any {
+    private static getManifest(): any {
         try {
-            if (!fs.existsSync(dbPath)) return null;
-            const db = new DatabaseSync(dbPath);
+            const db = SQLiteManager.getInstance().getDatabase();
             const row = db.prepare('SELECT * FROM migration_manifest ORDER BY started_at DESC LIMIT 1').get();
             return row;
         } catch (e) {
