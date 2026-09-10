@@ -149,19 +149,7 @@ export class AuthController {
                         console.warn('s? Garage validation failed due to offline state');
                     }
 
-                    // --- 3. TRIGGER SYNC (Bootstrap) ---
-                    if (garage_id) {
-                        (async () => {
-                            try {
-                                console.log('🔄 Init Bootstrap for:', garage_id);
-                                console.log('💉 Injecting SyncService. Available methods:', Object.keys(syncService || {}));
-                                await syncService.pullAllData(garage_id);
-                                syncService.initRealtime(garage_id);
-                            } catch (syncErr) {
-                                console.error('background Sync init Error', syncErr);
-                            }
-                        })();
-                    }
+                                        // --- 3. Removed Trigger Sync (Now handled by Frontend Initial Hydration Gate) ---
                 }
 
                 return res.status(200).json({

@@ -64,6 +64,9 @@ router.get('/precios', async (req, res) => {
 
         const standardMatrix: Record<string, Record<string, number>> = {};
         const electronicMatrix: Record<string, Record<string, number>> = {};
+        
+        const byIdStandard: Record<string, Record<string, number>> = {};
+        const byIdElectronic: Record<string, Record<string, number>> = {};
 
         const vTypeMap = new Map(vehicleTypes.map((v: any) => [v.id.trim(), v.name]));
         const tariffMap = new Map(tariffs.map((t: any) => [t.id.trim(), t.name]));
@@ -75,12 +78,17 @@ router.get('/precios', async (req, res) => {
 
             const vName = vTypeMap.get(vIdRaw);
             const tName = tariffMap.get(tIdRaw);
+            const numPrice = Number(p.amount ?? p.price ?? 0);
+            
             if (vName && tName) {
                 const vKey = String(vName);
                 const tKey = String(tName);
                 if (!standardMatrix[vKey]) standardMatrix[vKey] = {};
-                standardMatrix[vKey][tKey] = Number(p.amount ?? p.price ?? 0);
+                standardMatrix[vKey][tKey] = numPrice;
             }
+            
+            if (!byIdStandard[vIdRaw]) byIdStandard[vIdRaw] = {};
+            byIdStandard[vIdRaw][tIdRaw] = numPrice;
         });
 
         pricesElectronic.forEach((p: any) => {
@@ -90,17 +98,26 @@ router.get('/precios', async (req, res) => {
 
             const vName = vTypeMap.get(vIdRaw);
             const tName = tariffMap.get(tIdRaw);
+            const numPrice = Number(p.amount ?? p.price ?? 0);
+            
             if (vName && tName) {
                 const vKey = String(vName);
                 const tKey = String(tName);
                 if (!electronicMatrix[vKey]) electronicMatrix[vKey] = {};
-                electronicMatrix[vKey][tKey] = Number(p.amount ?? p.price ?? 0);
+                electronicMatrix[vKey][tKey] = numPrice;
             }
+            
+            if (!byIdElectronic[vIdRaw]) byIdElectronic[vIdRaw] = {};
+            byIdElectronic[vIdRaw][tIdRaw] = numPrice;
         });
 
         res.json({
             standard: standardMatrix,
-            electronic: electronicMatrix
+            electronic: electronicMatrix,
+            byId: {
+                standard: byIdStandard,
+                electronic: byIdElectronic
+            }
         });
     } catch (e) {
         res.status(500).json({ error: e });

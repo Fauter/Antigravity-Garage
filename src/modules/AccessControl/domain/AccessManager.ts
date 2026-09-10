@@ -12,7 +12,7 @@ import { db } from '../../../infrastructure/database/datastore';
 
 export class AccessManager {
     /**
-     * Registra la entrada de un vehículo.
+     * Registra la entrada de un veh├¡culo.
      * Crea un registro de Estancia (Stay).
      */
     static processEntry(
@@ -73,12 +73,12 @@ export class AccessManager {
         promoPercentage?: number
     ): Promise<{ closedStay: Stay; exitMovement: Movement | null; price: number }> {
         if (!stay.active) {
-            throw new Error('La estancia ya está cerrada.');
+            throw new Error('La estancia ya est├í cerrada.');
         }
 
         // Ensure garageId is available (from stay or arg)
         const finalGarageId = garageId || (stay as any).garageId;
-        if (!finalGarageId) console.warn('⚠️ AccessManager: Stay missing garageId, pricing might fail.');
+        if (!finalGarageId) console.warn('ÔÜá´©Å AccessManager: Stay missing garageId, pricing might fail.');
 
         // Direct DB Access for Pricing (Unified Logic with routes.ts)
         // We bypass ConfigRepo to ensure we read exactly what is in the local NeDB
@@ -112,22 +112,9 @@ export class AccessManager {
         };
 
         // Mock Repos (Engine only needs getAll/getParams)
-        const tariffRepo = { getAll: () => db.tariffs.find({ garageId: finalGarageId }) };
-        const paramRepo = {
-            getParams: async () => {
-                const configs: any[] = await db.financialConfigs.find({ garageId: finalGarageId });
-                if (configs && configs.length > 0) {
-                    const config = configs[0];
-                    return {
-                        initial_tolerance: config.initialTolerance ?? 15,
-                        fractionate_after: config.fractionateAfter ?? 0,
-                        toleranciaInicial: config.initialTolerance ?? 15,
-                        fraccionarDesde: config.fractionateAfter ?? 0
-                    };
-                }
-                return { toleranciaInicial: 15, fraccionarDesde: 0, initial_tolerance: 15, fractionate_after: 0 };
-            }
-        };
+        const configRepo = new (require('../../Configuration/infra/ConfigRepository').ConfigRepository)();
+        const tariffRepo = { getAll: () => configRepo.getTariffs(finalGarageId) };
+        const paramRepo = { getParams: () => configRepo.getParams(finalGarageId) };
 
         const engine = new PricingEngine(tariffRepo as any, paramRepo as any, priceRepo);
 
@@ -154,34 +141,34 @@ export class AccessManager {
         if ((stay as any).is_subscriber || stay.isSubscriber) {
             price = 0;
             notes = `Salida Abonado - (ID: ${stay.subscriptionId?.slice(0, 8) || 'N/A'})`;
-            console.log(`💎 Exit: Subscriber Departure for ${stay.plate}. Movement Skipped.`);
+            console.log(`­ƒÆÄ Exit: Subscriber Departure for ${stay.plate}. Movement Skipped.`);
 
             return {
                 closedStay: StaySchema.parse(closedStay),
-                exitMovement: null, // Abonados no generan movimiento contable (está prepagado en /abonos)
+                exitMovement: null, // Abonados no generan movimiento contable (est├í prepagado en /abonos)
                 price: 0
             };
         }
 
         // --- PREPAID / ANTICIPADO CHECK ---
-        // Must run BEFORE normal pricing. If within prepaid window → $0 exit.
-        // If exceeded → use virtualStay so PricingEngine calculates only the surplus.
+        // Must run BEFORE normal pricing. If within prepaid window ÔåÆ $0 exit.
+        // If exceeded ÔåÆ use virtualStay so PricingEngine calculates only the surplus.
         const stayIsPrepaid = (stay as any).isPrepaid === true;
         const stayPrepaidUntil = stayIsPrepaid ? new Date((stay as any).prepaidUntil) : null;
 
         if (stayIsPrepaid && stayPrepaidUntil && !isNaN(stayPrepaidUntil.getTime())) {
             if (exitDate <= stayPrepaidUntil) {
-                // Within prepaid window → $0 exit, no Movement
-                console.log(`⏱️ Exit: Prepaid vehicle ${stay.plate}. Within prepaid window (until ${stayPrepaidUntil.toISOString()}). $0 charge.`);
+                // Within prepaid window ÔåÆ $0 exit, no Movement
+                console.log(`ÔÅ▒´©Å Exit: Prepaid vehicle ${stay.plate}. Within prepaid window (until ${stayPrepaidUntil.toISOString()}). $0 charge.`);
                 return {
                     closedStay: StaySchema.parse(closedStay),
                     exitMovement: null,
                     price: 0
                 };
             } else {
-                // EXCEEDED prepaid window → calculate ONLY the surplus
+                // EXCEEDED prepaid window ÔåÆ calculate ONLY the surplus
                 // Strategy: feed PricingEngine a virtual stay starting at prepaidUntil
-                console.log(`⏱️ Exit: Prepaid EXCEEDED for ${stay.plate}. Calculating surplus from ${stayPrepaidUntil.toISOString()}`);
+                console.log(`ÔÅ▒´©Å Exit: Prepaid EXCEEDED for ${stay.plate}. Calculating surplus from ${stayPrepaidUntil.toISOString()}`);
             }
         }
 
@@ -205,7 +192,7 @@ export class AccessManager {
 
         if (isGracePeriod) {
             notes = `Tiempo de Gracia (Salida Temprana)`;
-            console.log(`⏳ Exit: Grace Period for ${stay.plate}. Movement Skipped.`);
+            console.log(`ÔÅ│ Exit: Grace Period for ${stay.plate}. Movement Skipped.`);
             return {
                 closedStay: StaySchema.parse(closedStay),
                 exitMovement: null,
@@ -217,7 +204,7 @@ export class AccessManager {
         if (promoPercentage && promoPercentage > 0) {
             const originalPrice = price;
             price = price * (1 - promoPercentage / 100);
-            console.log(`🎟️ Promo discount applied: ${promoPercentage}% => $${originalPrice} -> $${price}`);
+            console.log(`­ƒÄƒ´©Å Promo discount applied: ${promoPercentage}% => $${originalPrice} -> $${price}`);
         }
 
         // Calculate Duration for Notes
@@ -310,22 +297,9 @@ export class AccessManager {
             }
         };
 
-        const tariffRepo = { getAll: () => db.tariffs.find({ garageId: finalGarageId }) };
-        const paramRepo = {
-            getParams: async () => {
-                const configs: any[] = await db.financialConfigs.find({ garageId: finalGarageId });
-                if (configs && configs.length > 0) {
-                    const config = configs[0];
-                    return {
-                        initial_tolerance: config.initialTolerance ?? 15,
-                        fractionate_after: config.fractionateAfter ?? 0,
-                        toleranciaInicial: config.initialTolerance ?? 15,
-                        fraccionarDesde: config.fractionateAfter ?? 0
-                    };
-                }
-                return { toleranciaInicial: 15, fraccionarDesde: 0, initial_tolerance: 15, fractionate_after: 0 };
-            }
-        };
+        const configRepo = new (require('../../Configuration/infra/ConfigRepository').ConfigRepository)();
+        const tariffRepo = { getAll: () => configRepo.getTariffs(finalGarageId) };
+        const paramRepo = { getParams: () => configRepo.getParams(finalGarageId) };
 
         const engine = new PricingEngine(tariffRepo as any, paramRepo as any, priceRepo);
         const exitDate = now; // Server time = source of truth

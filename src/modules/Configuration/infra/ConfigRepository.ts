@@ -81,7 +81,10 @@ export class NeDBConfigRepository {
                     name: t.name,
                     garageId: t.garageId,
                     type: t.type,
-                    priority: t.priority
+                    priority: t.priority,
+                    days: t.days,
+                    hours: t.hours,
+                    minutes: t.minutes
                 }));
             }
         } catch (err) {
@@ -102,7 +105,10 @@ export class NeDBConfigRepository {
                 name: row.name,
                 garageId: row.garage_id,
                 type: row.type,
-                priority: row.sort_order 
+                priority: row.sort_order,
+                days: row.days,
+                hours: row.hours,
+                minutes: row.minutes
             }));
         } catch (cloudErr: any) {
             console.error('Cloud Tariffs Error', cloudErr.message);

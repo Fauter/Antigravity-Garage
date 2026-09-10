@@ -94,6 +94,9 @@ export class PricingEngine {
 
         // 3. Tolerance Logic:
         const tolerance = params?.initial_tolerance ?? params?.toleranciaInicial ?? 0;
+        
+        console.log(`\n[TOLERANCE TRACE]\ngarageId: ${(stay as any).garageId || 'unknown'}\nrawTolerance: ${params?.initial_tolerance ?? 'undefined'}\neffectiveTolerance: ${tolerance}\n`);
+
         if (tolerance > 0 && minutesTotal <= tolerance) {
             console.log(`[PricingEngine] Within initial_tolerance (${tolerance}m). Charge is $0.`);
             return { price: 0, isGracePeriod: true };

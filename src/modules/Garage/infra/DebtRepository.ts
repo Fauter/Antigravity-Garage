@@ -52,6 +52,10 @@ export class NeDBDebtRepository {
         const debt = await db.debts.findOne({ id: canonicalId }) as Debt | undefined;
         return debt || null;
     }
+
+    async findAll(): Promise<Debt[]> {
+        return await db.debts.find({}) as Debt[];
+    }
 }
 
 export class DebtRepository {
@@ -65,4 +69,5 @@ export class DebtRepository {
     async findByCustomerId(customerId: string): Promise<Debt[]> { return this.impl.findByCustomerId(customerId); }
     async findBySubscriptionId(subscriptionId: string): Promise<Debt[]> { return this.impl.findBySubscriptionId(subscriptionId); }
     async findCanonBySubscriptionAndPeriod(subscriptionId: string, billingPeriod: string): Promise<Debt | null> { return this.impl.findCanonBySubscriptionAndPeriod(subscriptionId, billingPeriod); }
+    async findAll(): Promise<Debt[]> { return this.impl.findAll(); }
 }

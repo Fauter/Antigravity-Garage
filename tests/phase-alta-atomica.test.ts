@@ -50,6 +50,7 @@ vi.mock('../src/modules/Sync/application/QueueService.js', () => ({
 vi.mock('../src/shared/CorrelativeGenerator', () => ({
     CorrelativeGenerator: {
         nextReceiptNumber: vi.fn().mockResolvedValue('00000001'),
+        allocateMovementTicketCode: vi.fn().mockReturnValue('00000002'),
         nextStayTicket: vi.fn().mockResolvedValue('E0000001'),
     }
 }));

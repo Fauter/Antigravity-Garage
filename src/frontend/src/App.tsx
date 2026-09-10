@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { HardwareProvider } from './context/HardwareContext';
@@ -9,6 +10,7 @@ import AltaSuscriptor from './pages/AltaSuscriptor';
 import CajaPage from './pages/CajaPage';
 import AuditoriaVehiculos from './components/audit/AuditoriaVehiculos';
 import ConfigAuditPage from './pages/ConfigAuditPage'; // New Audit Page
+import { InitialSyncScreen } from './components/sync/InitialSyncScreen';
 
 import { useState, useEffect } from 'react';
 
@@ -73,20 +75,34 @@ const ElectronWindowShell = ({ children }: { children: React.ReactNode }) => {
 
 // Protected Route Wrapper
 const ProtectedRoute = () => {
-    const { isAuthenticated, isLoading } = useAuth();
+    const { isAuthenticated, isLoading, initialSyncState } = useAuth();
 
     if (isLoading) return <div className="h-full bg-black flex items-center justify-center text-emerald-500">Cargando...</div>;
 
-    return isAuthenticated ? (
+    if (!isAuthenticated) return <Navigate to="/login" replace />;
+
+    return (
         <MainLayout>
-            <Outlet />
+            {initialSyncState !== 'ready' ? <InitialSyncScreen /> : <Outlet />}
         </MainLayout>
-    ) : (
-        <Navigate to="/login" replace />
     );
 };
 
 function App() {
+    const queryClient = useQueryClient();
+    useEffect(() => {
+        const handleSync = () => {
+            console.log('[App] Sync completed, invalidating config queries...');
+            queryClient.invalidateQueries({ queryKey: ['precios-matrix'] });
+            queryClient.invalidateQueries({ queryKey: ['vehicleTypes'] });
+            queryClient.invalidateQueries({ queryKey: ['tariffs-turno'] });
+            queryClient.invalidateQueries({ queryKey: ['promos'] });
+            queryClient.invalidateQueries({ queryKey: ['validacion-precios'] });
+            queryClient.invalidateQueries({ queryKey: ['building-levels'] });
+        };
+        window.addEventListener('ag:sync-completed', handleSync);
+        return () => window.removeEventListener('ag:sync-completed', handleSync);
+    }, [queryClient]);
     return (
         <ElectronWindowShell>
             <AuthProvider>

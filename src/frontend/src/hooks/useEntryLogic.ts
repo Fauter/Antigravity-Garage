@@ -25,7 +25,8 @@ export interface ErrorInfo {
 }
 
 export const useEntryLogic = () => {
-    const { operatorName } = useAuth();
+    const { operatorName, user } = useAuth();
+    const garageId = user?.garage_id || 'unknown';
     const [plate, setPlateRaw] = useState('');
     const [vehicleType, setVehicleType] = useState('');
     const [photoPath, setPhotoPath] = useState('');
@@ -39,16 +40,18 @@ export const useEntryLogic = () => {
     const [prepaidPaymentMethod, setPrepaidPaymentMethod] = useState('');
     const [prepaidInvoiceType, setPrepaidInvoiceType] = useState('');
 
-    const [promos, setPromos] = useState<any[]>([]);
+    const { data: promos = [] } = useQuery({
+        queryKey: ['promos', garageId],
+        queryFn: async () => {
+            const res = await api.get('/promos');
+            return res.data;
+        }
+    });
     const [selectedPromo, setSelectedPromo] = useState<any>(null);
-
-    useEffect(() => {
-        api.get('/promos').then(res => setPromos(res.data)).catch(console.error);
-    }, []);
 
     // Fetch Vehicle Types
     const { data: rawVehicleTypes = [] } = useQuery({
-        queryKey: ['vehicleTypes'],
+        queryKey: ['vehicleTypes', garageId],
         queryFn: async () => {
             const res = await api.get('/tipos-vehiculo');
             // Map to simplified structure
@@ -70,7 +73,7 @@ export const useEntryLogic = () => {
 
     // --- Unified Fetch Prices (for dynamic display in Prepaid UI) ---
     const { data: priceData } = useQuery({
-        queryKey: ['precios-matrix'],
+        queryKey: ['precios-matrix', garageId],
         queryFn: async () => {
             if (import.meta.env.DEV) console.log('[FRONTEND] prices request started');
             const res = await api.get('/precios');
@@ -101,7 +104,11 @@ export const useEntryLogic = () => {
         if (!tId || typeof tId !== 'string') return null;
         if (!payMethod || typeof payMethod !== 'string') return null;
         
-        const isElectronic = ['Transferencia', 'Débito', 'Crédito', 'QR'].includes(payMethod);
+        // Canonicalize payment method (case-insensitive, accent-safe)
+        const methodNormalized = payMethod.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const electronicMethods = ['transferencia', 'debito', 'credito', 'qr', 'mercadopago', 'mercado_pago'];
+        const isElectronic = electronicMethods.includes(methodNormalized);
+        
         const matrix = isElectronic ? pricesByIdElec : pricesByIdStd;
         
         if (!matrix || typeof matrix !== 'object') return null;
@@ -109,16 +116,19 @@ export const useEntryLogic = () => {
         const vehiclePrices = matrix[vTypeId];
         if (!vehiclePrices || typeof vehiclePrices !== 'object') return null;
         
-        const price = vehiclePrices[tId];
-        if (typeof price === 'number' && Number.isFinite(price)) {
-            return price;
+        const rawPrice = vehiclePrices[tId];
+        if (rawPrice !== null && rawPrice !== undefined && rawPrice !== '') {
+            const numericPrice = Number(rawPrice);
+            if (Number.isFinite(numericPrice)) {
+                return numericPrice;
+            }
         }
         return null;
     }, [pricesByIdStd, pricesByIdElec]);
 
     // --- Fetch Turno Tariffs (for Prepaid selector) ---
     const { data: turnoTariffs = [] } = useQuery({
-        queryKey: ['tariffs-turno'],
+        queryKey: ['tariffs-turno', garageId],
         queryFn: async () => {
             const res = await api.get('/tarifas');
             const all = res.data || [];

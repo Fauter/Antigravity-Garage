@@ -232,7 +232,10 @@ export class SyncServiceProxy {
     }
     async getStatus() { return this.impl.getStatus(); }
     async pullAllData(garageId: string, isSilent: boolean = false) { return this.impl.pullAllData(garageId, isSilent); }
+    async runSyncCycle(garageId: string, reason: string) { if (this.impl.runSyncCycle) return this.impl.runSyncCycle(garageId, reason); }
     initRealtime(garageId: string) { return this.impl.initRealtime(garageId); }
+    startReconciliation(garageId: string) { if (this.impl.startReconciliation) return this.impl.startReconciliation(garageId); }
+    stopReconciliation() { if (this.impl.stopReconciliation) return this.impl.stopReconciliation(); }
 }
 
 const instance = new SyncServiceProxy();
@@ -240,5 +243,8 @@ const instance = new SyncServiceProxy();
 export const syncService = {
     getStatus: instance.getStatus.bind(instance),
     pullAllData: instance.pullAllData.bind(instance),
+    runSyncCycle: instance.runSyncCycle.bind(instance),
     initRealtime: instance.initRealtime.bind(instance),
+    startReconciliation: instance.startReconciliation.bind(instance),
+    stopReconciliation: instance.stopReconciliation.bind(instance),
 };

@@ -32,6 +32,22 @@ export const PrinterService = {
         </div>
     `,
 
+    getStayTicketCode: (stay: any): string => {
+        const code = stay.ticket_code || stay.ticketCode;
+        if (code) return code;
+        const fallback = stay.id ? stay.id.slice(0, 8).toUpperCase() : 'UNKNOWN';
+        console.warn(`[STAY TICKET FALLBACK] No ticket code found for stayId=${stay.id}, plate=${stay.plate}. Falling back to UUID slice: ${fallback}`);
+        return fallback;
+    },
+
+    getMovementTicketCode: (movement: any): string => {
+        const code = movement.ticket_code || movement.ticketCode || movement.receipt_number || movement.receiptNumber;
+        if (code) return code;
+        const fallback = movement.id ? movement.id.slice(0, 8).toUpperCase() : 'UNKNOWN';
+        console.warn(`[MOVEMENT TICKET FALLBACK] No ticket code found for movementId=${movement.id}. Falling back to UUID slice: ${fallback}`);
+        return fallback;
+    },
+
     generateBase64Barcode: (text: string, paperWidth: number = 58): string => {
         try {
             const canvas = document.createElement('canvas');
@@ -55,7 +71,7 @@ export const PrinterService = {
 
     printEntryTicket: async (stay: any) => {
         const config = getGarageConfig();
-        const shortId = stay.ticket_code ? stay.ticket_code : (stay.id ? stay.id.slice(0, 8).toUpperCase() : 'UNKNOWN');
+        const shortId = PrinterService.getStayTicketCode(stay);
         const entryTime = new Date(stay.entryTime || stay.entry_time || Date.now());
         const formattedDate = entryTime.toLocaleString('es-AR', {
             day: '2-digit', month: '2-digit', year: 'numeric',
@@ -166,7 +182,7 @@ export const PrinterService = {
 
     printPrepaidEntryTicket: async (stay: any, movement: any, tariffName: string) => {
         const config = getGarageConfig();
-        const shortId = stay.ticket_code ? stay.ticket_code : (stay.id ? stay.id.slice(0, 8).toUpperCase() : 'UNKNOWN');
+        const shortId = PrinterService.getStayTicketCode(stay);
         const entryTime = new Date(stay.entryTime || stay.entry_time || Date.now());
         const formattedDate = entryTime.toLocaleString('es-AR', {
             day: '2-digit', month: '2-digit', year: 'numeric',
@@ -230,7 +246,8 @@ export const PrinterService = {
 
                 <div style="margin-bottom: 5px;">
                     <h2 style="margin: 0; font-size: 16px; font-weight: bold; letter-spacing: 0.5px; text-transform: uppercase;">PAGO ANTICIPADO</h2>
-                    <div style="font-size: 11px;">Ticket: <b>${shortId}</b></div>
+                    <div style="font-size: 11px;">Ingreso: <b>${shortId}</b></div>
+                    <div style="font-size: 11px; margin-top: 2px;">Ticket: <b>${PrinterService.getMovementTicketCode(movement)}</b></div>
                 </div>
 
                 ${barcodeDataUrl ? `
@@ -309,7 +326,9 @@ export const PrinterService = {
 
     printExitTicket: (stay: any, movement: any) => {
         const config = getGarageConfig();
-        const shortId = stay.ticket_code ? stay.ticket_code : (stay.id ? stay.id.slice(0, 8).toUpperCase() : 'UNKNOWN');
+        const shortId = PrinterService.getStayTicketCode(stay);
+        const movementTicketId = movement ? PrinterService.getMovementTicketCode(movement) : null;
+        
         const isSubscriber = stay.isSubscriber || stay.is_subscriber || (movement && movement.amount === 0 && movement.notes?.includes('Abonado'));
         const ticketType = isSubscriber ? 'SALIDA - ABONADO' : 'TICKET SALIDA';
 
@@ -343,7 +362,7 @@ export const PrinterService = {
                 <div style="border-bottom: 1px dashed #000; margin: 4px 0;"></div>
 
                 <div style="margin-bottom: 5px;">
-                    ${movement?.receipt_number ? `<div style="font-size: 11px; margin-top: 2px;">Ticket: <b>${movement.receipt_number}</b></div>` : ''}
+                    ${movementTicketId ? `<div style="font-size: 11px; margin-top: 2px;">Ticket: <b>${movementTicketId}</b></div>` : ''}
                     <div style="font-size: 11px; margin-top: 1px;">Ingreso: <b>${shortId}</b></div>
                     <div style="font-size: 14px; font-weight: bold; margin-top: 4px;">${ticketType}</div>
                 </div>

@@ -65,7 +65,8 @@ vi.mock('../../Sync/application/QueueService.js', () => {
 
 vi.mock('../../../shared/CorrelativeGenerator', () => ({
     CorrelativeGenerator: {
-        nextReceiptNumber: vi.fn().mockResolvedValue('REC-001')
+        nextReceiptNumber: vi.fn().mockResolvedValue('REC-001'),
+        allocateMovementTicketCode: vi.fn().mockReturnValue('REC-001')
     }
 }));
 
@@ -133,7 +134,8 @@ describe('GarageController - POST /abonos/alta-completa', () => {
         expect(responseData.exonerated).toBe(true);
         expect(responseData.effectiveInitialAmount).toBe(0);
         expect(responseData.movementCreated).toBe(false);
-        expect(CorrelativeGenerator.nextReceiptNumber).not.toHaveBeenCalled();
+        // Si exonerated = true, no debe llamar al generador
+        expect(CorrelativeGenerator.allocateMovementTicketCode).not.toHaveBeenCalled();
 
         vi.useRealTimers();
     });

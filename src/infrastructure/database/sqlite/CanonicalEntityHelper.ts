@@ -7,7 +7,27 @@ export class CanonicalEntityHelper {
         const grouped = new Map<string, T[]>();
 
         for (const entity of entities) {
-            const logicalId = entity.id; // We assume parsed JSON has $.id
+            let logicalId = entity.id; // We assume parsed JSON has $.id
+            
+            if (entityType === 'Debt') {
+                const debt = entity as any;
+                if (debt.type === 'CANON' && debt.subscriptionId) {
+                    try {
+                        let bp = debt.billingPeriod;
+                        if (!bp) {
+                            const d = new Date(debt.dueDate);
+                            const year = d.getUTCFullYear();
+                            const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+                            bp = `${year}-${month}`;
+                        }
+                        const seedString = `CANON|${debt.subscriptionId}|${bp}`;
+                        logicalId = require('uuid').v5(seedString, '6ba7b810-9dad-11d1-80b4-00c04fd430c8');
+                    } catch (e) {
+                        // Fallback to original id
+                    }
+                }
+            }
+
             if (!logicalId) continue;
             if (!grouped.has(logicalId)) {
                 grouped.set(logicalId, []);
@@ -27,7 +47,7 @@ export class CanonicalEntityHelper {
             let canonical = { ...copies[0] };
 
             if (entityType === 'Debt') {
-                canonical = this.mergeDebts(copies as any) as unknown as T;
+                canonical = this.mergeDebts(logicalId, copies as any) as unknown as T;
             } else if (entityType === 'Subscription') {
                 canonical = this.mergeSubscriptions(copies as any) as unknown as T;
             } else {
@@ -40,13 +60,19 @@ export class CanonicalEntityHelper {
         return resolved;
     }
 
-    private static mergeDebts(copies: any[]): any {
-        // Find the copy that looks like it has been updated by Sync (often PAID but lacking remaining_amount)
-        // and the copy that has legacy financial fields.
-        let merged = { ...copies[0] };
+    private static mergeDebts(logicalId: string, copies: any[]): any {
+        let merged = { ...copies[0], id: logicalId };
         let hasPaid = false;
         
+        let referenceAmount = copies[0].amount;
+        let amountConflict = false;
+
         for (const copy of copies) {
+            // Integrity conflict detection
+            if (copy.amount !== undefined && referenceAmount !== undefined && copy.amount !== referenceAmount) {
+                amountConflict = true;
+            }
+
             // 1. Status: If any copy is PAID, the canonical is PAID
             if (copy.status === 'PAID') {
                 merged.status = 'PAID';
@@ -55,18 +81,26 @@ export class CanonicalEntityHelper {
                 merged.status = 'CANCELLED';
             }
             
-            // 2. Financial Completeness
-            if (copy.remaining_amount !== undefined && copy.remaining_amount !== null) {
-                merged.remaining_amount = copy.remaining_amount;
-            }
+            // 2. Financial Completeness (take max amount_paid, min remaining_amount)
             if (copy.amount_paid !== undefined && copy.amount_paid !== null) {
-                merged.amount_paid = copy.amount_paid;
+                if (merged.amount_paid === undefined || copy.amount_paid > merged.amount_paid) {
+                    merged.amount_paid = copy.amount_paid;
+                }
+            }
+            if (copy.remaining_amount !== undefined && copy.remaining_amount !== null) {
+                if (merged.remaining_amount === undefined || copy.remaining_amount < merged.remaining_amount) {
+                    merged.remaining_amount = copy.remaining_amount;
+                }
             }
             
             // 3. Keep newest timestamp if any
             if (copy.updatedAt && (!merged.updatedAt || new Date(copy.updatedAt) > new Date(merged.updatedAt))) {
                 merged.updatedAt = copy.updatedAt;
             }
+        }
+
+        if (amountConflict) {
+            merged.status = 'INTEGRITY_CONFLICT';
         }
 
         // Logical normalizations based on merged status

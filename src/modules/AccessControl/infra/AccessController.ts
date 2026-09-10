@@ -8,7 +8,7 @@ import { SubscriptionRepository } from '../../Garage/infra/SubscriptionRepositor
 import { AttachmentService } from '../../Sync/application/AttachmentService';
 
 import { JsonDB } from '../../../infrastructure/database/json-db';
-import { db } from '../../../infrastructure/database/datastore';
+// NeDB datastore removed
 import { v4 as uuidv4 } from 'uuid';
 import { CorrelativeGenerator } from '../../../shared/CorrelativeGenerator';
 import { TransactionHelper } from '../../../infrastructure/database/sqlite/TransactionHelper';
@@ -28,6 +28,22 @@ export class AccessController {
     private vehicleRepository: VehicleRepository;
     private customerRepository: CustomerRepository;
     private subscriptionRepository: SubscriptionRepository;
+
+    private getGarageOwnerId(garageId: string): string | undefined {
+        if (!garageId) return undefined;
+        try {
+            const SQLiteManager = require('../../../infrastructure/database/sqlite/SQLiteManager').SQLiteManager;
+            const sqliteDb = SQLiteManager.getInstance().getDatabase();
+            const row = sqliteDb.prepare('SELECT json_data FROM garages WHERE id = ?').get(garageId) as any;
+            if (row && row.json_data) {
+                const parsed = JSON.parse(row.json_data);
+                return parsed.owner_id || parsed.ownerId;
+            }
+        } catch (e) {
+            console.error('Error fetching garage owner:', e);
+        }
+        return undefined;
+    }
 
     constructor() {
         this.stayRepository = new StayRepository();
@@ -67,24 +83,20 @@ export class AccessController {
             let resolvedType = 'Auto'; // Default de seguridad
 
             if (vehicleTypeId) {
-                // Buscar directamente en el datastore donde SyncService guarda los datos
-                const found: any = await db.vehicleTypes.findOne({
-                    $or: [{ id: vehicleTypeId }, { _id: vehicleTypeId }],
-                    garageId: garageId
-                });
+                const configRepo = new (require('../../Configuration/infra/ConfigRepository').ConfigRepository)();
+                const vehicleTypes = await configRepo.getVehicleTypes(garageId);
+                const found = vehicleTypes.find((vt: any) => vt.id === vehicleTypeId || (vt as any)._id === vehicleTypeId);
 
                 if (found) {
                     resolvedType = found.name;
-                    console.log(`✅ Tipo de vehículo resuelto desde NeDB: ${resolvedType} (${garageId})`);
+                    console.log(`✅ Tipo de vehículo resuelto: ${resolvedType} (${garageId})`);
                 } else {
-                    console.warn(`⚠️ ID ${vehicleTypeId} no encontrado en NeDB para el garage ${garageId}. Verificando fallback...`);
-                    const fallback: any = await db.vehicleTypes.findOne({ $or: [{ id: vehicleTypeId }, { _id: vehicleTypeId }] });
-                    if (fallback) resolvedType = fallback.name;
+                    console.warn(`⚠️ ID ${vehicleTypeId} no encontrado para el garage ${garageId}. Fallback to Auto...`);
                 }
             }
 
             // 3. Check for Active Subscription
-            const activeSubscription = await this.subscriptionRepository.findActiveByPlate(plate);
+            const activeSubscription = await this.subscriptionRepository.findActiveByPlate(plate, garageId);
             const isSubscriber = !!activeSubscription;
             const subscriptionId = activeSubscription ? activeSubscription.id : null;
 
@@ -122,8 +134,7 @@ export class AccessController {
                 }
             }
 
-            // 4. Generate Correlative Ticket Code
-            const ticketCode = await CorrelativeGenerator.nextStayTicket(garageId);
+            // 4. Generate Correlative Ticket Code (MOVED TO TRANSACTION)
 
             // 4.5. Resolve Prepaid / Anticipado Options
             let prepaidOptions: { isPrepaid: boolean; prepaidUntil: Date; prepaidTariffId: string; prepaidAmount: number; prepaidMovementId: string | null } | undefined;
@@ -138,10 +149,9 @@ export class AccessController {
                 }
 
                 // Lookup tariff in local DB
-                const tariff: any = await db.tariffs.findOne({
-                    $or: [{ id: prepaidTariffId }, { _id: prepaidTariffId }],
-                    garageId
-                });
+                const configRepo = new (require('../../Configuration/infra/ConfigRepository').ConfigRepository)();
+                const tariffs = await configRepo.getTariffs(garageId);
+                const tariff = tariffs.find((t: any) => t.id === prepaidTariffId || (t as any)._id === prepaidTariffId);
 
                 if (!tariff || (tariff.type || '').toLowerCase() !== 'turno') {
                     return res.status(400).json({ error: 'La tarifa anticipada no existe o no es de tipo turno.' });
@@ -160,15 +170,15 @@ export class AccessController {
                 const prepaidUntil = new Date(entryTime.getTime() + durationMs);
 
                 // Lookup price from price matrix
-                const isElectronic = ['Transferencia', 'Débito', 'Crédito', 'QR'].includes(prepaidPaymentMethod);
+                const methodNormalized = prepaidPaymentMethod.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                const electronicMethods = ['transferencia', 'debito', 'credito', 'qr', 'mercadopago', 'mercado_pago'];
+                const isElectronic = electronicMethods.includes(methodNormalized);
+                
                 const repoMethod = isElectronic ? 'electronic' : 'standard';
-                const priceRecord: any = await db.prices.findOne({
-                    garageId,
-                    tariffId: prepaidTariffId,
-                    vehicleTypeId: vehicleTypeId,
-                    priceList: repoMethod
-                });
-                prepaidAmount = priceRecord ? Number(priceRecord.amount || 0) : 0;
+                const pricesForMethod = await configRepo.getPrices(garageId, repoMethod);
+                
+                const priceRecord = pricesForMethod.find((p: any) => p.tariffId === prepaidTariffId && p.vehicleTypeId === vehicleTypeId);
+                prepaidAmount = priceRecord ? Number(priceRecord.amount || priceRecord.price || 0) : 0;
 
                 const promoPercentage = Number(req.body.prepaidPromoPercentage || 0);
                 if (promoPercentage > 0 && promoPercentage <= 100) {
@@ -180,12 +190,7 @@ export class AccessController {
                 }
 
                 // Prepare Movement
-                let ownerId: string | undefined;
-                if (garageId) {
-                    const garage: any = await db.garages.findOne({ id: garageId });
-                    if (garage) ownerId = garage.owner_id || garage.ownerId;
-                }
-                const receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
+                const ownerId = this.getGarageOwnerId(garageId);
                 const ticketNumber = Number(Date.now().toString().slice(-9));
                 
                 prepaidMovement = {
@@ -202,8 +207,7 @@ export class AccessController {
                     invoiceType: prepaidInvoiceType,
                     plate: plate,
                     notes: `Pago Anticipado - ${prepaidTariffName}`,
-                    receipt_number: receiptNumber,
-                    ticket_code: receiptNumber,
+                    // receipt_number and ticket_code will be set inside the transaction
                     createdAt: new Date(),
                 };
 
@@ -225,7 +229,7 @@ export class AccessController {
                 null,
                 isSubscriber,
                 subscriptionId,
-                ticketCode,
+                undefined, // Ticket code will be assigned inside the transaction
                 prepaidOptions,
                 entryTime
             );
@@ -235,10 +239,8 @@ export class AccessController {
             (entry as any).vehicleId = vehicleId;
             if (garageId) {
                 (entry as any).garageId = garageId;
-                const garage: any = await db.garages.findOne({ id: garageId });
-                if (garage) {
-                    (entry as any).ownerId = garage.owner_id || garage.ownerId;
-                }
+                const ownerId = this.getGarageOwnerId(garageId);
+                if (ownerId) (entry as any).ownerId = ownerId;
             }
 
             // 🔓 HARDWARE: Explicitly reset/ensure hardware fields for new entry
@@ -273,9 +275,17 @@ export class AccessController {
             let savedStay: any = entry;
             try {
                 await TransactionHelper.runAsync(async (tx) => {
+                    // Generate atomic Stay ticket code
+                    const finalTicketCode = await CorrelativeGenerator.nextStayTicket(garageId, tx);
+                    (entry as any).ticket_code = finalTicketCode;
+                    (entry as any).ticketCode = finalTicketCode;
+                    
                     savedStay = await this.stayRepository.save(entry as any, 'CREATE', tx);
                     
                     if (prepaidMovement) {
+                        const nextCode = CorrelativeGenerator.allocateMovementTicketCode(garageId, tx);
+                        prepaidMovement.ticket_code = nextCode;
+                        prepaidMovement.receipt_number = nextCode;
                         await this.movementRepository.save(prepaidMovement as any, 'CREATE', tx);
                         console.log(`💰 Entry: Prepaid Movement saved for ${plate}. Amount: $${prepaidAmount}, Method: ${prepaidPaymentMethod}`);
                         (savedStay as any).prepaidMovement = prepaidMovement;
@@ -326,7 +336,7 @@ export class AccessController {
                 (stay as any).is_subscriber = isSubscriber;
             }
 
-            const activeSubscription = await this.subscriptionRepository.findActiveByPlate(plate);
+            const activeSubscription = await this.subscriptionRepository.findActiveByPlate(plate, garageId);
             stay.subscriptionId = activeSubscription ? activeSubscription.id : null;
 
             if (isSubscriber) {
@@ -343,15 +353,7 @@ export class AccessController {
             const userOperator = (cleanOperator && cleanOperator !== 'undefined undefined' && cleanOperator !== 'null null') ? cleanOperator : 'Sistema';
 
             // Fetch Owner ID from Garage Config (if available)
-            let ownerId: string | undefined;
-            if (garageId) {
-                // Now db.garages exists
-                const garage: any = await db.garages.findOne({ id: garageId });
-                if (garage) ownerId = garage.owner_id || garage.ownerId;
-            }
-
-            // Generate Correlative Receipt Number
-            const receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
+            const ownerId = this.getGarageOwnerId(garageId);
 
             // Generate Ticket Number (legacy numeric, kept for backward compat)
             const ticketNumber = Number(Date.now().toString().slice(-9));
@@ -383,9 +385,10 @@ export class AccessController {
                 await this.stayRepository.save(closedStay as any, 'UPDATE', tx);
 
                 if (exitMovement) {
-                    // Inject correlative receipt_number and ticket_code
-                    (exitMovement as any).receipt_number = receiptNumber;
-                    (exitMovement as any).ticket_code = receiptNumber;
+                    // Inject correlative receipt_number and ticket_code atomically
+                    const nextCode = CorrelativeGenerator.allocateMovementTicketCode(garageId, tx);
+                    (exitMovement as any).receipt_number = nextCode;
+                    (exitMovement as any).ticket_code = nextCode;
                     await this.movementRepository.save(exitMovement, 'CREATE', tx);
                 }
             });
@@ -457,7 +460,7 @@ export class AccessController {
             prepaidAmount: typeof stay.prepaidAmount === 'number' ? stay.prepaidAmount : (typeof stay.prepaid_amount === 'number' ? stay.prepaid_amount : null),
             prepaidMovementId: stay.prepaidMovementId || stay.prepaid_movement_id || null,
             // Mantener propiedades extras que el frontend pueda necesitar por ahora
-            ticket_code: stay.ticket_code,
+            ticket_code: stay.ticket_code || stay.ticketCode,
             isSubscriber: Boolean(stay.isSubscriber || stay.is_subscriber),
             subscriptionId: stay.subscriptionId || stay.subscription_id || null,
             price: stay.price,
@@ -535,7 +538,31 @@ export class AccessController {
 
             let vehicles: any[] = [];
             if (query.$or.length > 0) {
-                vehicles = await db.vehicles.find(query);
+                const SQLiteManager = require('../../../infrastructure/database/sqlite/SQLiteManager').SQLiteManager;
+                const sqliteDb = SQLiteManager.getInstance().getDatabase();
+                
+                // Get by IDs
+                if (vehicleIds.length > 0) {
+                    const placeholders = vehicleIds.map(() => '?').join(',');
+                    const rows = sqliteDb.prepare(`SELECT json_data FROM vehicles WHERE id IN (${placeholders})`).all(...vehicleIds) as any[];
+                    vehicles.push(...rows.map((r: any) => JSON.parse(r.json_data)));
+                }
+                
+                // Get by Plates
+                if (plates.length > 0) {
+                    const placeholders = plates.map(() => '?').join(',');
+                    const params: any[] = [...plates];
+                    let sql = `SELECT json_data FROM vehicles WHERE json_extract(json_data, '$.plate') IN (${placeholders})`;
+                    if (garageId) {
+                        sql += ` AND json_extract(json_data, '$.garageId') = ?`;
+                        params.push(garageId);
+                    }
+                    const rows = sqliteDb.prepare(sql).all(...params) as any[];
+                    
+                    const existingIds = new Set(vehicles.map(v => v.id));
+                    const newVehicles = rows.map((r: any) => JSON.parse(r.json_data)).filter((v: any) => !existingIds.has(v.id));
+                    vehicles.push(...newVehicles);
+                }
             }
 
             const vehiclesById = new Map(vehicles.map(v => [v.id, v]));
@@ -572,7 +599,11 @@ export class AccessController {
 
     getAllMovements = async (req: Request, res: Response) => {
         try {
-            const movements = await this.movementRepository.findAll();
+            const garageId = (req.headers['x-garage-id'] as string) || (req.query.garageId as string);
+            let movements = await this.movementRepository.findAll();
+            if (garageId) {
+                movements = movements.filter(m => m.garageId === garageId || (m as any).garage_id === garageId);
+            }
             res.json(movements);
         } catch (error: any) {
             res.status(500).json({ error: error.message });

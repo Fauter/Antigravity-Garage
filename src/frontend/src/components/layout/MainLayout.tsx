@@ -51,7 +51,6 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     useEffect(() => {
         if (prevSyncingRef.current && !isGlobalSyncing) {
             setRefreshKey(prev => prev + 1);
-            window.dispatchEvent(new CustomEvent('ag:sync-completed', { detail: { timestamp: Date.now() } }));
         }
         prevSyncingRef.current = isGlobalSyncing;
     }, [isGlobalSyncing]);
@@ -175,7 +174,6 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
 
             setLastSyncTime(new Date());
             setRefreshKey(prev => prev + 1);
-            window.dispatchEvent(new CustomEvent('ag:sync-completed', { detail: { timestamp: Date.now() } }));
 
             if (status.blocked > 0) {
                 toast.error(`Sincronización parcial: ${status.blocked} bloqueos`, { duration: 3000 });
@@ -196,20 +194,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
         }
     };
 
-    // Auto Background Sync cada 5 min
-    const syncIntervalRef = useRef<(() => void) | undefined>(undefined);
-    useEffect(() => {
-        syncIntervalRef.current = handleBackgroundSync;
-    });
-
-    useEffect(() => {
-        if (!user) return;
-        const intervalId = setInterval(() => {
-            if (syncIntervalRef.current) syncIntervalRef.current();
-        }, 5 * 60 * 1000);
-        return () => clearInterval(intervalId);
-    }, [user]);
-
+    // Auto Background Sync (REMOVIDO: delegado al SqliteSyncCoordinator en backend)
     // Timer local para "Hace X min"
     const [syncTimeStr, setSyncTimeStr] = useState('Recién');
     useEffect(() => {

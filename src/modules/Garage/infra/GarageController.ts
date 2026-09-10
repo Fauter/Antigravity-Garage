@@ -90,6 +90,41 @@ const PRICING_CONFIG = {
 };
 
 export class GarageController {
+    
+    getHydration = async (req: Request, res: Response) => {
+        try {
+            const garageId = req.headers['x-garage-id'] as string;
+            if (!garageId) {
+                return res.status(400).json({ error: 'x-garage-id is required' });
+            }
+
+            const [allSubs, allCusts, allVehs, allDebts, allCocheras] = await Promise.all([
+                this.subscriptionRepo.findAll(),
+                this.customerRepo.findAll(),
+                this.vehicleRepo.findAll(),
+                this.debtRepo.findAll(),
+                cocherasDB.getAll()
+            ]);
+
+            const subscriptions = allSubs.filter((x: any) => x.garageId === garageId || (x as any).garage_id === garageId);
+            const customers = allCusts.filter((x: any) => x.garageId === garageId || (x as any).garage_id === garageId);
+            const vehicles = allVehs.filter((x: any) => x.garageId === garageId || (x as any).garage_id === garageId);
+            const debts = allDebts.filter((x: any) => x.garageId === garageId || (x as any).garage_id === garageId);
+            const cocheras = allCocheras.filter((x: any) => x.garageId === garageId || (x as any).garage_id === garageId || !x.garageId);
+
+            return res.json({
+                subscriptions,
+                customers,
+                vehicles,
+                debts,
+                cocheras
+            });
+        } catch (error: any) {
+            console.error('Error in getHydration:', error);
+            return res.status(500).json({ error: error.message });
+        }
+    };
+
     private cocheraRepo?: any;
     private subscriptionRepo: SubscriptionRepository;
     private customerRepo: CustomerRepository;
@@ -504,7 +539,7 @@ export class GarageController {
 
                         // Generate Movement for upgrade
                         if (proratedCharge > 0) {
-                            receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
+                            receiptNumber = CorrelativeGenerator.allocateMovementTicketCode(garageId, tx);
                             const movement = {
                                 id: uuidv4(),
                                 type: 'CobroAbono',
@@ -518,6 +553,7 @@ export class GarageController {
                                 operator: operator || 'Sistema',
                                 invoice_type: billingType || 'Final',
                                 ticket_code: receiptNumber,
+                                receipt_number: receiptNumber,
                                 createdAt: new Date()
                             };
                             await this.movementRepo.save(movement as any, tx);
@@ -1060,8 +1096,7 @@ export class GarageController {
             const debtId = diferencia > 0 ? uuidv4() : null;
             const isPartialAlta = !validatedExemption && montoReal < newSubscription.price;
 
-            // Generate receipt number before transaction (allow sequence gap on rollback — acceptable)
-            const receiptNumber = !validatedExemption ? await CorrelativeGenerator.nextReceiptNumber(garageId) : null;
+            let receiptNumber: string | null = null;
 
             // ── ATOMIC TRANSACTION: ALL writes in one BEGIN/COMMIT ───────────────────
             // Pattern identical to renewSubscription (~line 1429).
@@ -1089,6 +1124,7 @@ export class GarageController {
 
                 // E. Movement (only if not exempted)
                 if (!validatedExemption) {
+                    receiptNumber = CorrelativeGenerator.allocateMovementTicketCode(garageId, sqliteDb);
                     await this.movementRepo.save({
                         id: uuidv4(),
                         type: 'CobroAbono',
@@ -1104,6 +1140,7 @@ export class GarageController {
                         operator: operator || 'Sistema',
                         invoice_type: billingType,
                         ticket_code: receiptNumber,
+                        receipt_number: receiptNumber,
                         createdAt: new Date()
                     } as any, sqliteDb);
                 }
@@ -1643,7 +1680,7 @@ export class GarageController {
 
                     const cocheraSuffix = req.body.spotNumber ? ` - Cochera #${req.body.spotNumber}` : ' - Cochera Móvil';
                     const movementNotes = `Renovación Abono Anticipada${cocheraSuffix} - Hasta ${nextEndDate.toLocaleDateString('es-AR')}`;
-                    const receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
+                    const receiptNumber = CorrelativeGenerator.allocateMovementTicketCode(garageId, db);
 
                     await this.movementRepo.save({
                         id: uuidv4(),
@@ -1658,6 +1695,7 @@ export class GarageController {
                         operator: operator || 'Sistema',
                         invoice_type: billingType || 'Final',
                         ticket_code: receiptNumber,
+                        receipt_number: receiptNumber,
                         createdAt: now
                     } as any, db);
 
@@ -1713,7 +1751,7 @@ export class GarageController {
                         throw new Error(`El total cobrado no coincide con el cálculo backend. Esperado: $${previewRes.grandTotal}, Recibido: ${amountToPay}`);
                     }
                     
-                    const receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
+                    const receiptNumber = CorrelativeGenerator.allocateMovementTicketCode(garageId, db);
                     const cocheraSuffix = req.body.spotNumber ? ` - Cochera #${req.body.spotNumber}` : ' - Cochera Móvil';
                     
                     // Update debts
@@ -1768,6 +1806,7 @@ export class GarageController {
                         operator: operator || 'Sistema',
                         invoice_type: billingType || 'Final',
                         ticket_code: receiptNumber,
+                        receipt_number: receiptNumber,
                         createdAt: new Date(),
                         // METADATA CANÓNICA
                         json_data: JSON.stringify({
@@ -1940,7 +1979,7 @@ export class GarageController {
                 }
 
                 const plateForMovement = isGlobalDebt ? 'Multiples' : (subToFetch?.plate || 'N/A');
-                const receiptNumber = await CorrelativeGenerator.nextReceiptNumber(garageId);
+                const receiptNumber = CorrelativeGenerator.allocateMovementTicketCode(garageId, db);
 
                 await this.movementRepo.save({
                     id: uuidv4(),
@@ -1955,6 +1994,7 @@ export class GarageController {
                     operator: operator || 'Sistema',
                     invoice_type: billingType || 'Final',
                     ticket_code: receiptNumber,
+                    receipt_number: receiptNumber,
                     createdAt: new Date()
                 } as any, db);
 

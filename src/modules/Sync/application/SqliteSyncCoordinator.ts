@@ -2,6 +2,13 @@ import { SQLiteManager } from '../../../infrastructure/database/sqlite/SQLiteMan
 import { supabase } from '../../../infrastructure/lib/supabase.js';
 import { TransactionHelper } from '../../../infrastructure/database/sqlite/TransactionHelper.js';
 
+export interface TableMapping {
+    remoteTable: string;
+    localTable: string;
+    entityType: string;
+    filterColumn?: string;
+}
+
 export class SqliteSyncCoordinator {
     private isSyncing = false;
     public isGlobalSyncing = false;
@@ -14,8 +21,9 @@ export class SqliteSyncCoordinator {
 
     private justReconnected = false;
     private realtimeChannel: any = null;
+    private activeRealtimeGarageId: string | null = null;
 
-    static readonly tableMappings = [
+    static readonly tableMappings: TableMapping[] = [
         { remoteTable: 'customers', localTable: 'customers', entityType: 'Customer' },
         { remoteTable: 'subscriptions', localTable: 'subscriptions', entityType: 'Subscription' },
         { remoteTable: 'vehicles', localTable: 'vehicles', entityType: 'Vehicle' },
@@ -29,8 +37,12 @@ export class SqliteSyncCoordinator {
         { remoteTable: 'prices', localTable: 'prices', entityType: 'Price' },
         { remoteTable: 'financial_configs', localTable: 'financial_configs', entityType: 'FinancialConfig' },
         { remoteTable: 'building_levels', localTable: 'building_levels', entityType: 'BuildingLevel' },
+        { remoteTable: 'movements', localTable: 'movements', entityType: 'Movement' },
+        { remoteTable: 'shift_closes', localTable: 'shift_closes', entityType: 'ShiftClose' },
+        { remoteTable: 'partial_closes', localTable: 'partial_closes', entityType: 'PartialClose' },
+        { remoteTable: 'promos', localTable: 'promos', entityType: 'Promo' },
+        { remoteTable: 'garages', localTable: 'garages', entityType: 'Garage', filterColumn: 'id' },
     ];
-
 
     constructor() {
         console.log('🔄 SqliteSyncCoordinator Initialized (Atomic Outbox Worker)');
@@ -96,6 +108,9 @@ export class SqliteSyncCoordinator {
             status === 400 || status === 404 || status === 409 || status === 422) {
             return 'PERMANENT';
         }
+
+        const isLocalCodeError = msg.includes('Unknown entity type') || msg.includes('Unknown table mapping') || msg.includes('unsupported operation') || msg.includes('invalid local serializer state');
+        if (isLocalCodeError) return 'PERMANENT';
 
         return 'TRANSIENT_NETWORK'; // Default safe to retry
     }
@@ -293,6 +308,7 @@ export class SqliteSyncCoordinator {
             'Debt': 'debts',
             'Movement': 'movements',
             'ShiftClose': 'shift_closes',
+            'PartialClose': 'partial_closes',
             'Employee': 'employee_accounts',
             'Incident': 'incidents',
             'BuildingLevel': 'building_levels'
@@ -309,6 +325,9 @@ export class SqliteSyncCoordinator {
             // Ensure ID is present
             if (!snakePayload.id && entity_id) {
                 snakePayload.id = entity_id;
+            }
+            if (snakePayload._id !== undefined) {
+                delete snakePayload._id;
             }
 
             // --- SCHEMA SAFETY GUARDS FOR SUPABASE ---
@@ -400,39 +419,148 @@ export class SqliteSyncCoordinator {
     }
 
 
-    async pullAllData(garageId: string, isSilent: boolean = false) {
-        if (this.isGlobalSyncing) return;
+    public async runSyncCycle(garageId: string, reason: string): Promise<{ status: 'SUCCESS' | 'WITH_WARNINGS', failedTables: string[] }> {
+        const result: { status: 'SUCCESS' | 'WITH_WARNINGS', failedTables: string[] } = { status: 'SUCCESS', failedTables: [] };
+        
+        if (this.isGlobalSyncing) {
+            console.log(`[SYNC] Skipped runSyncCycle (${reason}): Already syncing.`);
+            return result;
+        }
         this.isGlobalSyncing = true;
         this.garageId = garageId;
+        console.log(`[SYNC] Starting runSyncCycle (${reason}) for garage: ${garageId}`);
 
         try {
-            for (const mapping of SqliteSyncCoordinator.tableMappings) {
-                try {
-                    await this.fetchTable(mapping.remoteTable, mapping.localTable, garageId, mapping.entityType);
-                } catch (tableErr: any) {
-                    console.warn(`⚠️ Pull Error for table ${mapping.remoteTable}:`, tableErr?.message || tableErr);
-                }
+            // STEP 1: PUSH LOCAL (fast-track any pending outbox items before pulling)
+            await this.processOutbox();
+
+            // STEP 2: PULL REMOTE -> RECONCILE LOCAL (Controlled Parallelism)
+            const chunkSize = 4;
+            for (let i = 0; i < SqliteSyncCoordinator.tableMappings.length; i += chunkSize) {
+                const chunk = SqliteSyncCoordinator.tableMappings.slice(i, i + chunkSize);
+                await Promise.all(chunk.map(async (mapping) => {
+                    try {
+                        await this.fetchTable(mapping.remoteTable, mapping.localTable, garageId, mapping.entityType, mapping.filterColumn);
+                    } catch (tableErr: any) {
+                        console.warn(`⚠️ Pull Error for table ${mapping.remoteTable}:`, tableErr?.message || tableErr);
+                        result.failedTables.push(mapping.remoteTable);
+                    }
+                }));
             }
+
             this.backendReachable = true;
             this.lastSuccessfulSyncAt = new Date();
+            
+            if (result.failedTables.length > 0) {
+                result.status = 'WITH_WARNINGS';
+                console.log(`[SYNC] Completed runSyncCycle (${reason}) WITH WARNINGS. Failed tables: ${result.failedTables.join(', ')}`);
+            } else {
+                console.log(`[SYNC] Completed runSyncCycle (${reason}) successfully.`);
+            }
         } catch (e: any) {
-
-            console.error('❌ Pull Error', e);
+            console.error(`❌ [SYNC] Error in runSyncCycle (${reason}):`, e);
+            result.status = 'WITH_WARNINGS';
+            result.failedTables.push('ALL'); // Indicate critical failure
         } finally {
             this.isGlobalSyncing = false;
         }
+        return result;
     }
 
-    private async fetchTable(remoteTable: string, localTable: string, garageId: string, entityType: string) {
-        const { data, error } = await supabase.from(remoteTable).select('*').eq('garage_id', garageId);
-        if (error) throw error;
-        if (!data || data.length === 0) return;
+    async pullAllData(garageId: string, isSilent: boolean = false) {
+        // We now map pullAllData directly to runSyncCycle for DRY and correctness (PUSH -> PULL)
+        return this.runSyncCycle(garageId, isSilent ? 'BACKGROUND_PULL' : 'MANUAL_BOOTSTRAP');
+    }
 
-        TransactionHelper.run((tx) => {
-            for (const row of data) {
-                this.applyRemoteRow(tx, row, remoteTable, localTable, entityType, garageId);
+    private reconciliationInterval: NodeJS.Timeout | null = null;
+    private activeReconciliationGarageId: string | null = null;
+    
+    public startReconciliation(garageId: string) {
+        // Same garage already running — no-op
+        if (this.reconciliationInterval && this.activeReconciliationGarageId === garageId) return;
+        
+        // Different garage — stop old timer first
+        if (this.reconciliationInterval) {
+            this.stopReconciliation();
+        }
+
+        const SYNC_RECONCILIATION_INTERVAL_MS = 300000; // 5 minutes
+        
+        this.activeReconciliationGarageId = garageId;
+        this.reconciliationInterval = setInterval(() => {
+            this.runSyncCycle(garageId, 'PERIODIC').catch(console.error);
+        }, SYNC_RECONCILIATION_INTERVAL_MS);
+        
+        console.log(`⏱️ [SYNC] 5-minute periodic reconciliation started for garage: ${garageId}`);
+    }
+
+    public stopReconciliation() {
+        if (this.reconciliationInterval) {
+            clearInterval(this.reconciliationInterval);
+            this.reconciliationInterval = null;
+            console.log(`⏱️ [SYNC] Periodic reconciliation stopped (was: ${this.activeReconciliationGarageId}).`);
+        }
+        this.activeReconciliationGarageId = null;
+    }
+
+    private async fetchTable(remoteTable: string, localTable: string, garageId: string, entityType: string, filterColumn?: string) {
+        const startMs = Date.now();
+        const db = SQLiteManager.getInstance().getDatabase();
+        
+        // FASE B/C: Config vs Transactional Large
+        const smallConfigTables = ['financial_configs', 'vehicle_types', 'tariffs', 'prices', 'promos', 'building_levels', 'employee_accounts', 'garages'];
+        const isIncremental = !smallConfigTables.includes(remoteTable);
+        
+        const checkpointKey = `${garageId}_${remoteTable}`;
+        let watermark = null;
+        
+        if (isIncremental) {
+            try {
+                const cp = db.prepare("SELECT last_synced_at FROM sync_checkpoints WHERE collection_name = ?").get(checkpointKey) as any;
+                if (cp && cp.last_synced_at) {
+                    // Safety overlap: 120 segundos
+                    const overlapTime = new Date(new Date(cp.last_synced_at).getTime() - 120000).toISOString();
+                    watermark = overlapTime;
+                }
+            } catch (e) {
+                // Table sync_checkpoints might not exist, ignore
             }
-        });
+        }
+        
+        const fetchStart = Date.now();
+        const columnToFilter = filterColumn || 'garage_id';
+        let query = supabase.from(remoteTable).select('*').eq(columnToFilter, garageId);
+        
+        if (isIncremental && watermark) {
+            query = query.gte('updated_at', watermark);
+        }
+        
+        const { data, error } = await query;
+        if (error) throw error;
+        
+        const fetchMs = Date.now() - fetchStart;
+        const rowsFetched = data ? data.length : 0;
+        
+        const applyStart = Date.now();
+        if (data && data.length > 0) {
+            TransactionHelper.run((tx) => {
+                for (const row of data) {
+                    this.applyRemoteRow(tx, row, remoteTable, localTable, entityType, garageId);
+                }
+            });
+        }
+        const applyMs = Date.now() - applyStart;
+        
+        // Update watermark ONLY if pull finished successfully
+        if (isIncremental) {
+            try {
+                const now = new Date().toISOString();
+                db.prepare("INSERT INTO sync_checkpoints (collection_name, last_synced_at) VALUES (?, ?) ON CONFLICT(collection_name) DO UPDATE SET last_synced_at = excluded.last_synced_at").run(checkpointKey, now);
+            } catch (e) {
+                // Table might not exist yet, handled by migrations
+            }
+        }
+
     }
 
     private toCamelCase(obj: any): any {
@@ -452,10 +580,21 @@ export class SqliteSyncCoordinator {
     }
 
     initRealtime(garageId: string) {
-        if (this.realtimeChannel) return;
-        
+        // Same garage already listening — no-op
+        if (this.realtimeChannel && this.activeRealtimeGarageId === garageId) return;
+
+        // Different garage — cleanup old channel first (runs even in test env)
+        if (this.realtimeChannel) {
+            console.log(`🔌 [SYNC] Removing old realtime channel (was: ${this.activeRealtimeGarageId}).`);
+            supabase.removeChannel(this.realtimeChannel);
+            this.realtimeChannel = null;
+            this.activeRealtimeGarageId = null;
+        }
+
         if (process.env.NODE_ENV === 'test' || process.env.VITEST) {
             console.log(`🔌 [SQLITE] Realtime Listener Stub Initialized for ${garageId}`);
+            this.realtimeChannel = { stub: true }; // Dummy object so we know it exists
+            this.activeRealtimeGarageId = garageId;
             return;
         }
 
@@ -466,6 +605,8 @@ export class SqliteSyncCoordinator {
                 this.handleRealtimePayload(payload, garageId);
             })
             .subscribe();
+        
+        this.activeRealtimeGarageId = garageId;
     }
 
     private handleRealtimePayload(payload: any, garageId: string) {

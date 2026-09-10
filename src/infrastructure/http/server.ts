@@ -199,6 +199,11 @@ export const startServer = async (port?: number) => {
         });
 
         // Subscriptions logic
+        app.get('/api/abonos/hydration', (req, res) => {
+            if (garageController?.getHydration) return garageController.getHydration(req, res);
+            res.status(404).send('Method not found');
+        });
+        
         app.get('/api/abonos', (req, res) => {
             if (garageController?.getSubscriptions) return garageController.getSubscriptions(req, res);
             res.status(404).send('Method not found');
@@ -243,6 +248,10 @@ export const startServer = async (port?: number) => {
         });
         app.get('/api/deudas/:clientId', (req, res) => {
             if (garageController?.getDebtsByCustomer) return garageController.getDebtsByCustomer(req, res);
+            res.status(404).send();
+        });
+        app.get('/api/deudas', (req, res) => {
+            if (garageController?.getAllDebts) return garageController.getAllDebts(req, res);
             res.status(404).send();
         });
         app.get('/api/vehiculos', (req, res) => {
@@ -353,14 +362,26 @@ export const startServer = async (port?: number) => {
             const { garageId } = req.body;
             if (!garageId) return res.status(400).json({ error: 'garageId required' });
 
-            console.log(`🔌 Manual Sync Triggered for ${garageId}`);
-            if (syncService?.pullAllData) {
-                syncService.pullAllData(garageId).then(() => {
+            console.log(`🔄 Initial Bootstrap Sync Triggered for ${garageId}`);
+            if (syncService?.runSyncCycle) {
+                try {
+                    const result = await syncService.runSyncCycle(garageId, 'MANUAL_BOOTSTRAP');
                     syncService.initRealtime(garageId);
-                }).catch((err: any) => console.error('Sync Error', err));
+                    if (syncService.startReconciliation) {
+                        syncService.startReconciliation(garageId);
+                    }
+                    if (result && result.status === 'WITH_WARNINGS') {
+                        res.json({ message: 'Sync completed with warnings', warnings: result.failedTables });
+                    } else {
+                        res.json({ message: 'Sync completed successfully' });
+                    }
+                } catch (err: any) {
+                    console.error('Bootstrap Sync Error', err);
+                    res.status(500).json({ error: 'Bootstrap sync failed', details: err.message });
+                }
+            } else {
+                res.status(500).json({ error: 'Sync service not available' });
             }
-
-            res.json({ message: 'Sync started' });
         });
 
         // Background Sync Endpoint (Silent)

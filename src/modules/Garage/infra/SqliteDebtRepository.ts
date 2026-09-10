@@ -74,10 +74,43 @@ export class SqliteDebtRepository extends BaseSqliteRepository<Debt> {
         if (existingDebt) {
             // IDEMPOTENCY DEEP CHECK: Prevent infinite loop of identical updates
             if (existingDebt.amount === debt.amount && existingDebt.status === debt.status && (existingDebt as any).remaining_amount === (debt as any).remaining_amount) {
-                // If the critical fields haven't changed, ignore the save and don't queue.
                 return existingDebt;
             }
-            
+        }
+        
+        // --- LOGICAL DEBT SYNC: Propagate to all physical rows ---
+        if (debt.type === 'CANON' && debt.subscriptionId) {
+            let bp = (debt as any).billingPeriod;
+            if (!bp) {
+                try {
+                    bp = BillingPeriodHelper.getLegacyBillingPeriod(debt);
+                } catch (e) {}
+            }
+            if (bp) {
+                const canonicalId = CanonFactory.getCanonicalId(debt.subscriptionId, bp);
+                if (debt.id === canonicalId) {
+                    const db = SQLiteManager.getInstance().getDatabase();
+                    const allRows = db.prepare(`SELECT id, json_data FROM debts WHERE json_extract(json_data, '$.subscriptionId') = ? AND json_extract(json_data, '$.type') = 'CANON'`).all(debt.subscriptionId) as any[];
+                    for (const row of allRows) {
+                        if (row.id === canonicalId) continue;
+                        const parsed = { id: row.id, ...JSON.parse(row.json_data) };
+                        try {
+                            if (BillingPeriodHelper.getLegacyBillingPeriod(parsed) === bp) {
+                                // Sync financial state to legacy duplicate
+                                parsed.status = debt.status;
+                                parsed.amount_paid = (debt as any).amount_paid;
+                                parsed.remaining_amount = (debt as any).remaining_amount;
+                                parsed.updatedAt = debt.updatedAt || new Date().toISOString();
+                                
+                                await super.save(parsed as unknown as Debt, 'UPDATE', externalTx);
+                            }
+                        } catch(e) {}
+                    }
+                }
+            }
+        }
+
+        if (existingDebt) {
             return await super.save(debt, 'UPDATE', externalTx);
         } else {
             return await super.save(debt, 'CREATE', externalTx);

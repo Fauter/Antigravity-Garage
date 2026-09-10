@@ -75,7 +75,7 @@ export class SubscriptionRepository {
     async findAll(): Promise<any[]> { return this.impl.findAll(); }
     async findByCustomerId(customerId: string): Promise<any[]> { return this.impl.findByCustomerId(customerId); }
     async findById(id: string): Promise<any | null> { return this.impl.findById(id); }
-    async findActiveByPlate(plate: string): Promise<any | null> { return this.impl.findActiveByPlate(plate); }
+    async findActiveByPlate(plate: string, garageId?: string): Promise<any | null> { return this.impl.findActiveByPlate(plate, garageId); }
     async reset(): Promise<void> { return this.impl.reset(); }
     async delete(id: string): Promise<void> { return this.impl.delete(id); }
 }

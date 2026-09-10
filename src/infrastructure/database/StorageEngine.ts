@@ -23,19 +23,32 @@ export class StorageEngine {
             return this.inMemoryEngine;
         }
         const markerPath = this.getMarkerPath();
-        if (!fs.existsSync(markerPath)) {
+        if (fs.existsSync(markerPath)) {
+            try {
+                const data = fs.readFileSync(markerPath, 'utf-8');
+                const parsed = JSON.parse(data);
+                if (['NEDB', 'CUTOVER_PREPARED', 'SQLITE'].includes(parsed.engine)) {
+                    return parsed.engine as EngineState;
+                }
+            } catch (e) {
+                console.error('Error reading storage-engine.json:', e);
+            }
+        }
+        
+        // Post-cutover policy: If marker is missing but garageia.sqlite exists, we are in SQLITE mode.
+        // We NEVER silently fallback to NEDB if the SQLite DB is already active.
+        const sqliteDbPath = path.join(DATA_DIR, 'garageia.sqlite');
+        if (fs.existsSync(sqliteDbPath)) {
+            console.warn('⚠️ [StorageEngine] Marker file missing but garageia.sqlite exists. Auto-recovering marker to SQLITE.');
+            this.setEngine('SQLITE');
+            return 'SQLITE';
+        }
+
+        if (process.env.ALLOW_LEGACY_NEDB === 'true') {
             return 'NEDB';
         }
-        try {
-            const data = fs.readFileSync(markerPath, 'utf-8');
-            const parsed = JSON.parse(data);
-            if (['NEDB', 'CUTOVER_PREPARED', 'SQLITE'].includes(parsed.engine)) {
-                return parsed.engine as EngineState;
-            }
-        } catch (e) {
-            console.error('Error reading storage-engine.json:', e);
-        }
-        return 'NEDB';
+        
+        throw new Error('FATAL: Storage marker missing and ALLOW_LEGACY_NEDB is not true. Cannot determine active engine.');
     }
 
     public static setEngine(engine: EngineState): void {

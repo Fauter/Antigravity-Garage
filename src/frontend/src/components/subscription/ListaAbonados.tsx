@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import { Search, Plus, ArrowUp, ArrowDown, AlertCircle, RefreshCw } from 'lucide-react';
+import { Search, Plus, ArrowUp, ArrowDown, AlertCircle, RefreshCw, User as UserIcon } from 'lucide-react';
 import { api } from '../../services/api';
+import { useQuery } from '@tanstack/react-query';
+import { useAuth } from '../../context/AuthContext';
 
 // --- TypeScript Interfaces ---
 
@@ -55,100 +57,66 @@ interface SubscriberListProps {
     isLoading?: boolean;
 }
 
-const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSubscriber, subscribers, isLoading = false }) => {
-    // Local state
-    const [cocheras, setCocheras] = useState<any[]>([]);
-    const [subscriptions, setSubscriptions] = useState<any[]>([]);
-    const [realVehicles, setRealVehicles] = useState<any[]>([]);
-    const [debts, setDebts] = useState<Debt[]>([]);
-    const [hydrationStatus, setHydrationStatus] = useState<'loading' | 'ready' | 'error'>('loading');
-    const [errorMessage, setErrorMessage] = useState<string | null>(null);
+const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSubscriber, subscribers, isLoading: isParentLoading = false }) => {
+    const { user } = useAuth();
+    const garageId = user?.garage_id || (user as any)?.garageId || 'test';
+
+    const { data: hydrationData, isLoading: isHydrationLoading, isError, error, refetch: loadData } = useQuery({
+        queryKey: ['abonos-hydration', garageId],
+        queryFn: async () => {
+            const res = await api.get('/abonos/hydration');
+            return res.data;
+        },
+        staleTime: 60000,
+        refetchOnWindowFocus: false,
+    });
+
+    const cocheras = hydrationData?.cocheras || [];
+    const subscriptions = hydrationData?.subscriptions || [];
+    const realVehicles = hydrationData?.vehicles || [];
+    const debts = hydrationData?.debts || [];
+    const hydrationStatus = isError ? 'error' : (isHydrationLoading ? 'loading' : 'ready');
+    const errorMessage = isError ? (error as any)?.response?.data?.error || (error as any)?.message || "Error al cargar datos" : null;
+    const isLoading = isParentLoading || isHydrationLoading;
+
     const [searchTerm, setSearchTerm] = useState('');
     const [balanceSort, setBalanceSort] = useState<'default' | 'desc' | 'asc'>('default');
-
-    // --- Atomic Data Hydration (No Intermediate Flashing States) ---
-    const loadData = useCallback(async () => {
-        setHydrationStatus('loading');
-        setErrorMessage(null);
-        try {
-            // 1. Debt sweep trigger
-            await api.post('/abonos/evaluar-deudas', {}).catch(e => console.error(e));
-
-            // 2. Fetch structural collections in parallel
-            const [cocherasRes, subsRes, vehRes] = await Promise.all([
-                api.get('/cocheras'),
-                api.get('/abonos'),
-                api.get('/vehiculos')
-            ]);
-
-            const cocherasData = cocherasRes.data || [];
-            const subsData = subsRes.data || [];
-            const vehData = vehRes.data || [];
-
-            // 3. Extract unique customer IDs
-            const customerIds = new Set<string>();
-            (subscribers || []).forEach((sub: any) => {
-                const id = sub.clientId || sub.customerData?.id || sub.id;
-                if (id) customerIds.add(id);
-            });
-            subsData.forEach((s: any) => {
-                const id = s.customerId || s.customer_id || s.clientId;
-                if (id) customerIds.add(id);
-            });
-            cocherasData.forEach((c: any) => {
-                const id = c.clienteId || c.cliente_id;
-                if (id) customerIds.add(id);
-            });
-
-            const customerIdList = Array.from(customerIds);
-            const allDebts: Debt[] = [];
-
-            // 4. Batch fetch debts for all customers
-            if (customerIdList.length > 0) {
-                const debtResults = await Promise.allSettled(
-                    customerIdList.map(id => api.get(`/deudas/${id}`).catch(() => ({ data: [] })))
-                );
-
-                debtResults.forEach((result, index) => {
-                    if (result.status === 'fulfilled') {
-                        const id = customerIdList[index];
-                        const data = (result.value?.data || []).map((d: any) => ({ ...d, customerId: id }));
-                        allDebts.push(...data);
-                    }
-                });
-            }
-
-            // 5. ATOMIC COMMIT: update all state variables together
-            setCocheras(cocherasData);
-            setSubscriptions(subsData);
-            setRealVehicles(vehData);
-            setDebts(allDebts);
-            setHydrationStatus('ready');
-        } catch (err: any) {
-            console.error("Hydration error in ListaAbonados:", err);
-            setHydrationStatus('error');
-            setErrorMessage(err?.response?.data?.error || err.message || "Error al cargar datos de abonados");
-        }
-    }, [subscribers]);
-
-    useEffect(() => {
-        loadData();
-    }, [loadData]);
 
     // --- Unique Client Aggregation Logic ---
     const uniqueSubscribers = useMemo((): AggregatedSubscriber[] => {
         const map = new Map<string, AggregatedSubscriber>();
-        const rawList = subscribers && subscribers.length > 0 ? subscribers : [];
+        const rawList = subscriptions && subscriptions.length > 0 ? subscriptions : [];
+        
+        // Build O(1) lookup map for customers using hydration data
+        const customersById = new Map<string, any>();
+        const customersData = hydrationData?.customers || [];
+        customersData.forEach((c: any) => {
+            const cid = c.id || c._id;
+            if (cid) customersById.set(cid, c);
+        });
+
+        let resolvedLinks = 0;
+        let unresolvedLinks = 0;
 
         rawList.forEach((sub: any) => {
-            const customerId = sub.clientId || sub.customerData?.id || sub.id;
+            // RULE: Identity must be customer.id, NEVER subscription.id
+            const customerId = sub.customerId || sub.customer_id || sub.clientId || sub.customerData?.id;
             if (!customerId) return;
+            
+            const realCustomer = customersById.get(customerId) || sub.customerData;
+            
+            if (realCustomer) {
+                resolvedLinks++;
+            } else {
+                unresolvedLinks++;
+            }
 
             if (!map.has(customerId)) {
-                const name = sub.customerData?.firstName || sub.customerData?.name || sub.nombreApellido || 'Cliente Desconocido';
-                const rawDni = sub.customerData?.dni || sub.dni || '';
-                const email = sub.customerData?.email || sub.email || '';
-                const phone = sub.customerData?.phone || sub.phone || '';
+                // Read from real Customer object, not from raw subscription fallback
+                const name = realCustomer?.firstName || realCustomer?.name || sub.nombreApellido || 'Cliente Desconocido';
+                const rawDni = realCustomer?.dni || sub.dni || '';
+                const email = realCustomer?.email || sub.email || '';
+                const phone = realCustomer?.phone || sub.phone || '';
 
                 // --- Plate Mapping ---
                 const clientCocheras = cocheras.filter(c => (c.clienteId === customerId || c.cliente_id === customerId) && c.status === 'Ocupada');
@@ -177,10 +145,15 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                         const subClientId = s.customerId || s.customer_id || s.clientId;
                         const cocheraClienteId = cochera.clienteId || cochera.cliente_id;
                         
+                        // Priority 1: Exact Cochera ID match (modern model)
+                        if (s.cocheraId && cochera.id && s.cocheraId === cochera.id) return true;
+                        
+                        // Priority 2: Spot Number Match
                         if (s.spotNumber && cochera.numero && String(s.spotNumber) === String(cochera.numero)) {
                             if (subClientId === cocheraClienteId) return true;
                         }
                         
+                        // Priority 3: Vehicle Match
                         const subVehicleId = s.vehicleId || s.vehicle_id;
                         const subPlate = s.vehicleData?.plate || s.plate;
                         
@@ -239,17 +212,29 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                     return sum + debtValue;
                 }, 0);
 
+                // --- Status Resolutivo Exacto ---
+                let isClientActive = false;
+                if (!isEmptyClient) {
+                    isClientActive = true;
+                    // Opcionalmente se puede cruzar con if the customer has an active subscription
+                }
+
                 map.set(customerId, {
-                    ...sub,
+                    id: sub.id,
+                    clientId: customerId,
+                    customerData: realCustomer,
+                    nombreApellido: name,
+                    dni: rawDni,
+                    active: isClientActive,
                     aggregatedValues: {
                         name,
                         dni: rawDni,
-                        avatar: (name || '?').charAt(0).toUpperCase(),
-                        isActive: sub.status === 'active' || sub.active === true,
+                        avatar: `https://api.dicebear.com/7.x/initials/svg?seed=${name}`,
+                        isActive: isClientActive,
                         balance,
                         plates,
                         email,
-                        phone,
+                        phone
                     }
                 });
             } else {
@@ -269,8 +254,16 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
             return a.aggregatedValues.name.localeCompare(b.aggregatedValues.name, 'es');
         });
 
+        if (import.meta.env.DEV) {
+            console.log('[ABONOS HYDRATION]');
+            console.log(`subscriptions: ${rawList.length}`);
+            console.log(`customers: ${customersData.length}`);
+            console.log(`resolved: ${resolvedLinks}`);
+            console.log(`unresolved: ${unresolvedLinks}`);
+        }
+
         return all;
-    }, [subscribers, cocheras, debts, subscriptions, realVehicles]);
+    }, [cocheras, debts, subscriptions, realVehicles, hydrationData?.customers]);
 
     // --- Reactive Search Filtering ---
     const filteredSubscribers = useMemo((): AggregatedSubscriber[] => {
@@ -364,45 +357,8 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-800/60">
-                        {/* ─── 1. SKELETON LOADING STATE (Eliminates Flash) ─── */}
-                        {(hydrationStatus === 'loading' || isLoading) ? (
-                            Array.from({ length: 6 }).map((_, idx) => (
-                                <tr key={`skeleton-${idx}`} className="animate-pulse">
-                                    {/* Cliente */}
-                                    <td className="py-5 px-4">
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-8 h-8 rounded-full bg-gray-800 shrink-0" />
-                                            <div className="flex flex-col gap-1.5 flex-1">
-                                                <div className="h-4 bg-gray-800 rounded w-28" />
-                                                <div className="h-3 bg-gray-800/60 rounded w-16" />
-                                            </div>
-                                        </div>
-                                    </td>
-                                    {/* Contacto */}
-                                    <td className="py-5 px-4">
-                                        <div className="flex flex-col gap-1.5">
-                                            <div className="h-3.5 bg-gray-800 rounded w-24" />
-                                            <div className="h-2.5 bg-gray-800/60 rounded w-32" />
-                                        </div>
-                                    </td>
-                                    {/* Patentes */}
-                                    <td className="py-5 px-4">
-                                        <div className="flex gap-2">
-                                            <div className="h-6 bg-gray-800 rounded w-16" />
-                                        </div>
-                                    </td>
-                                    {/* Estado */}
-                                    <td className="py-5 px-4">
-                                        <div className="h-5 bg-gray-800 rounded-full w-16" />
-                                    </td>
-                                    {/* Balance */}
-                                    <td className="py-5 px-4 text-right">
-                                        <div className="h-5 bg-gray-800 rounded w-16 ml-auto" />
-                                    </td>
-                                </tr>
-                            ))
-                        ) : hydrationStatus === 'error' ? (
-                            /* ─── 2. ERROR STATE ─── */
+                        {hydrationStatus === 'error' ? (
+                            /* ─── 1. ERROR STATE ─── */
                             <tr>
                                 <td colSpan={5} className="py-12 px-4 text-center">
                                     <div className="flex flex-col items-center justify-center gap-3 text-red-400 max-w-sm mx-auto">
@@ -417,6 +373,38 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                                     </div>
                                 </td>
                             </tr>
+                        ) : (hydrationStatus === 'loading' || isLoading) ? (
+                            /* ─── 2. SKELETON LOADING STATE ─── */
+                            Array.from({ length: 6 }).map((_, idx) => (
+                                <tr key={`skeleton-${idx}`} className="animate-pulse">
+                                    <td className="py-5 px-4">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-8 h-8 rounded-full bg-gray-800 shrink-0" />
+                                            <div className="flex flex-col gap-1.5 flex-1">
+                                                <div className="h-4 bg-gray-800 rounded w-28" />
+                                                <div className="h-3 bg-gray-800/60 rounded w-16" />
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td className="py-5 px-4">
+                                        <div className="flex flex-col gap-1.5">
+                                            <div className="h-3.5 bg-gray-800 rounded w-24" />
+                                            <div className="h-2.5 bg-gray-800/60 rounded w-32" />
+                                        </div>
+                                    </td>
+                                    <td className="py-5 px-4">
+                                        <div className="flex gap-2">
+                                            <div className="h-6 bg-gray-800 rounded w-16" />
+                                        </div>
+                                    </td>
+                                    <td className="py-5 px-4">
+                                        <div className="h-5 bg-gray-800 rounded-full w-16" />
+                                    </td>
+                                    <td className="py-5 px-4 text-right">
+                                        <div className="h-5 bg-gray-800 rounded w-16 ml-auto" />
+                                    </td>
+                                </tr>
+                            ))
                         ) : sortedAndFilteredSubscribers.length === 0 ? (
                             /* ─── 3. EMPTY STATE ─── */
                             <tr>
@@ -437,8 +425,8 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                                         className="group hover:bg-gray-800/30 transition-colors duration-200 cursor-pointer">
                                         <td className="py-5 px-4 font-medium text-white">
                                             <div className="flex items-center gap-3">
-                                                <div className="w-8 h-8 rounded-full bg-indigo-900/50 flex items-center justify-center text-indigo-300 font-bold text-xs ring-1 ring-indigo-500/30">
-                                                    {avatar}
+                                                <div className="w-8 h-8 rounded-full bg-emerald-950/50 flex items-center justify-center shrink-0 overflow-hidden ring-1 ring-emerald-900/40">
+                                                    <UserIcon className="w-[14px] h-[14px] text-emerald-500/80" aria-hidden="true" />
                                                 </div>
                                                 <div className="flex flex-col">
                                                     <span>{name}</span>

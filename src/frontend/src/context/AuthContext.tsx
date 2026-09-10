@@ -1,19 +1,21 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { api } from '../services/api';
+import { useQueryClient } from '@tanstack/react-query';
 
-// Updated interface to match Supabase/Backend response
 export interface User {
     id: string;
     username: string;
-    full_name: string;
-    first_name?: string; // Added for display logic
-    last_name?: string;  // Added for display logic
-    role: 'OWNER' | 'ADMIN' | 'MANAGER' | 'OPERATOR';
-    owner_id: string;
-    garage_id?: string | null;
+    full_name?: string;
+    first_name?: string;
+    last_name?: string;
+    role: string;
+    garage_id?: string;
     permissions?: any;
+    owner_id?: string;
 }
+
+export type InitialSyncState = 'idle' | 'syncing' | 'warmup' | 'ready' | 'offline' | 'timeout' | 'error';
 
 interface AuthContextType {
     user: User | null;
@@ -24,6 +26,11 @@ interface AuthContextType {
     isGlobalSyncing: boolean;
     syncStatus: any;
     operatorName: string;
+    
+    // Initial Hydration Gate variables
+    initialSyncState: InitialSyncState;
+    retryInitialSync: () => void;
+    continueOffline: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -32,6 +39,96 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const [user, setUser] = useState<User | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [isGlobalSyncing, setIsGlobalSyncing] = useState(false);
+    const queryClient = useQueryClient();
+    
+    const [initialSyncState, setInitialSyncState] = useState<InitialSyncState>('idle');
+    const [syncStatus, setSyncStatus] = useState<any>({ state: 'ONLINE', isSyncing: false, pending: 0, blocked: 0 });
+
+    const triggerInitialSync = async (garageId: string) => {
+        setInitialSyncState('syncing');
+        setIsGlobalSyncing(true);
+        
+        let isResolved = false;
+        
+        // 30 second timeout fallback
+        const timeoutTimer = setTimeout(() => {
+            if (!isResolved) {
+                isResolved = true;
+                setInitialSyncState('timeout');
+                setIsGlobalSyncing(false);
+            }
+        }, 30000);
+
+        try {
+            await api.post('/sync/bootstrap', { garageId });
+            
+            if (!isResolved) {
+                // Trigger LOCAL CRITICAL WARMUP
+                setInitialSyncState('warmup');
+                try {
+                    await api.post('/abonos/evaluar-deudas');
+                    await queryClient.prefetchQuery({
+                        queryKey: ['abonos-hydration', garageId],
+                        queryFn: async () => {
+                            const res = await api.get('/abonos/hydration');
+                            return res.data;
+                        },
+                        staleTime: 60000
+                    });
+                } catch (warmupErr) {
+                    console.error('Warmup error (continuing anyway):', warmupErr);
+                }
+
+                isResolved = true;
+                clearTimeout(timeoutTimer);
+                setInitialSyncState('ready');
+                setIsGlobalSyncing(false);
+            }
+        } catch (error: any) {
+            if (!isResolved) {
+                // If it's a network error or 5xx, we might be offline
+                if (!error.response || error.response.status >= 500 || error.message.includes('Network')) {
+                    // Try to warmup from local SQLite anyway
+                    setInitialSyncState('warmup');
+                    try {
+                        await api.post('/abonos/evaluar-deudas');
+                        await queryClient.prefetchQuery({
+                            queryKey: ['abonos-hydration', garageId],
+                            queryFn: async () => {
+                                const res = await api.get('/abonos/hydration');
+                                return res.data;
+                            },
+                            staleTime: 60000
+                        });
+                    } catch (warmupErr) {}
+
+                    isResolved = true;
+                    clearTimeout(timeoutTimer);
+                    setInitialSyncState('offline');
+                    setIsGlobalSyncing(false);
+                    setTimeout(() => {
+                        setInitialSyncState('ready');
+                    }, 2000); // 2s brief notification
+                } else {
+                    isResolved = true;
+                    clearTimeout(timeoutTimer);
+                    setInitialSyncState('error');
+                    setIsGlobalSyncing(false);
+                }
+            }
+        }
+    };
+
+    const retryInitialSync = () => {
+        const resolvedGarageId = user?.garage_id || (user as any)?.garageId;
+        if (resolvedGarageId) {
+            triggerInitialSync(resolvedGarageId);
+        }
+    };
+
+    const continueOffline = () => {
+        setInitialSyncState('ready');
+    };
 
     useEffect(() => {
         if (import.meta.env.DEV) {
@@ -39,40 +136,48 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
     }, [user]);
 
+    // Restore persisted session
     useEffect(() => {
-        // Check session storage for persisted session
         const storedUser = sessionStorage.getItem('ag_user');
         if (storedUser) {
             try {
                 const parsed = JSON.parse(storedUser);
                 if (parsed.id) {
                     setUser(parsed);
+                    // Persisted session startup! Trigger initial sync
+                    const resolvedGarageId = parsed.garage_id || parsed.garageId;
+                    if (resolvedGarageId) {
+                        triggerInitialSync(resolvedGarageId);
+                    } else {
+                        setInitialSyncState('ready');
+                    }
                 }
             } catch (e) {
                 console.error('Failed to parse stored user', e);
                 sessionStorage.removeItem('ag_user');
+                setInitialSyncState('ready');
             }
+        } else {
+            setInitialSyncState('ready');
         }
         setIsLoading(false);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const login = async (username: string, password: string, garage_id?: string): Promise<boolean> => {
         try {
-            // Forward garage_id to backend for Isolation Check
             const res = await api.post('/auth/login', { username, password, garage_id });
-
             const userData: User = res.data;
 
             setUser(userData);
             sessionStorage.setItem('ag_user', JSON.stringify(userData));
-            setIsGlobalSyncing(true); // Assuming sync started on backend
             
             const resolvedGarageId = garage_id || userData.garage_id || (userData as any).garageId;
             if (resolvedGarageId) {
-                api.post('/sync/bootstrap', { garageId: resolvedGarageId }).catch(e => console.error('Bootstrap failed', e));
+                // DON'T block the login return so UI can show the sync screen
+                triggerInitialSync(resolvedGarageId);
             } else {
-                console.warn('⚠️ No garageId available for bootstrap sync.');
-                setIsGlobalSyncing(false);
+                setInitialSyncState('ready');
             }
             
             return true;
@@ -85,13 +190,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const logout = () => {
         setUser(null);
         setIsGlobalSyncing(false);
+        setInitialSyncState('idle');
         sessionStorage.removeItem('ag_user');
-        localStorage.removeItem('ag_user'); // Fallback cleanup in case of legacy data
+        localStorage.removeItem('ag_user');
     };
 
     // Global Sync Indicator Polling
-    const [syncStatus, setSyncStatus] = useState<any>({ state: 'ONLINE', isSyncing: false, pending: 0, blocked: 0 });
-
     useEffect(() => {
         let interval: number;
 
@@ -99,33 +203,38 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             if (!user) return;
             try {
                 const res = await api.get('/sync/check');
-                // Phase 0: new status API support
                 if (res.data.state) {
                     setSyncStatus(res.data);
-                    setIsGlobalSyncing(res.data.isSyncing);
+                    if (initialSyncState === 'ready') {
+                        if (res.data.isSyncing !== isGlobalSyncing) {
+                            setIsGlobalSyncing(res.data.isSyncing);
+                            if (!res.data.isSyncing && isGlobalSyncing) {
+                                window.dispatchEvent(new Event('ag:sync-completed'));
+                            }
+                        }
+                    }
                 } else {
-                    // Legacy fallback
-                    if (res.data.syncing === false) {
-                        setIsGlobalSyncing(false);
+                    if (res.data.syncing === false && initialSyncState === 'ready') {
+                        if (isGlobalSyncing) {
+                            setIsGlobalSyncing(false);
+                            window.dispatchEvent(new Event('ag:sync-completed'));
+                        }
                     }
                 }
             } catch (err) {
                 setSyncStatus((prev: any) => ({ ...prev, state: 'BACKEND_UNREACHABLE' }));
-                console.error('Failed to check sync', err);
             }
         };
 
-        if (user) {
-            // Poll more frequently during initial sync, then back off to every 5 seconds
+        if (user && initialSyncState === 'ready') {
             interval = window.setInterval(checkSync, isGlobalSyncing ? 2000 : 5000);
         }
 
         return () => {
             if (interval) window.clearInterval(interval);
         };
-    }, [user, isGlobalSyncing]);
+    }, [user, isGlobalSyncing, initialSyncState]);
 
-    // Compute Operator Name
     const operatorName = React.useMemo(() => {
         if (!user) return 'Sistema';
         if (user.role === 'OWNER') return user.full_name || 'Owner';
@@ -134,7 +243,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }, [user]);
 
     return (
-        <AuthContext.Provider value={{ user, login, logout, isAuthenticated: !!user, isLoading, isGlobalSyncing, syncStatus, operatorName }}>
+        <AuthContext.Provider value={{ 
+            user, login, logout, isAuthenticated: !!user, isLoading, isGlobalSyncing, syncStatus, operatorName,
+            initialSyncState, retryInitialSync, continueOffline
+        }}>
             {children}
         </AuthContext.Provider>
     );

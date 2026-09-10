@@ -63,6 +63,10 @@ export class NeDBVehicleRepository {
         return await db.vehicles.find(query) as Vehicle[];
     }
 
+    async findAll(): Promise<Vehicle[]> {
+        return await db.vehicles.find({}) as Vehicle[];
+    }
+
     async reset(): Promise<void> {
         await db.vehicles.remove({}, { multi: true });
     }
@@ -77,5 +81,6 @@ export class VehicleRepository {
     async findById(id: string): Promise<Vehicle | null> { return this.impl.findById(id); }
     async findByPlate(plate: string, garageId?: string): Promise<Vehicle | null> { return this.impl.findByPlate(plate, garageId); }
     async findByCustomerId(customerId: string, garageId?: string): Promise<Vehicle[]> { return this.impl.findByCustomerId(customerId, garageId); }
+    async findAll(): Promise<Vehicle[]> { return this.impl.findAll(); }
     async reset(): Promise<void> { return this.impl.reset(); }
 }
