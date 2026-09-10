@@ -95,6 +95,101 @@ const getPartialCloseReference = (
     };
 };
 
+const getMovementDetail = (m: Movement): string => {
+    if (m.type !== 'CobroAbono') {
+        return m.plate || '---';
+    }
+
+    const notes = m.notes?.trim();
+    if (!notes || notes.toUpperCase() === 'N/A') {
+        if (m.plate && m.plate.toUpperCase() !== 'N/A' && m.plate !== '---') {
+            return m.plate;
+        }
+        return '---';
+    }
+
+    try {
+        // C) Cobro Abono Múltiples Meses
+        const multiplesMesesMatch = notes.match(/^Cobro Abono \((Múltiples Meses:.*?)\)(.*)$/i);
+        if (multiplesMesesMatch) {
+            const monthsStr = multiplesMesesMatch[1];
+            const rest = multiplesMesesMatch[2];
+            
+            const prefixMatch = monthsStr.match(/^(Múltiples Meses:\s*)/i);
+            if (prefixMatch) {
+                const prefix = prefixMatch[1];
+                const datesPart = monthsStr.substring(prefix.length);
+                const dates = datesPart.split(',').map(d => d.trim());
+                const monthMap: Record<string, string> = {
+                    '01': 'Ene', '02': 'Feb', '03': 'Mar', '04': 'Abr', '05': 'May', '06': 'Jun',
+                    '07': 'Jul', '08': 'Ago', '09': 'Sept', '10': 'Oct', '11': 'Nov', '12': 'Dic'
+                };
+                
+                const parsedMonths: string[] = [];
+                let hasError = false;
+                for (const d of dates) {
+                    const parts = d.split('-');
+                    if (parts.length === 2 && monthMap[parts[1]]) {
+                        const mName = monthMap[parts[1]];
+                        if (!parsedMonths.includes(mName)) {
+                            parsedMonths.push(mName);
+                        }
+                    } else {
+                        hasError = true;
+                        break;
+                    }
+                }
+                if (!hasError && parsedMonths.length > 0) {
+                    return `${prefix.trim()} ${parsedMonths.join(', ')}${rest}`;
+                }
+            }
+        }
+
+        // D) Renovación Abono Anticipada
+        const renovacionRegex = /^(.*?- Hasta\s+)\d{1,2}\/(\d{2})\/\d{4}(.*)$/i;
+        const matchRenovacion = notes.match(renovacionRegex);
+        if (matchRenovacion) {
+            const prefix = matchRenovacion[1];
+            const month = matchRenovacion[2];
+            const suffix = matchRenovacion[3];
+            const fullMonthMap: Record<string, string> = {
+                '01': 'Enero', '02': 'Febrero', '03': 'Marzo', '04': 'Abril', '05': 'Mayo', '06': 'Junio',
+                '07': 'Julio', '08': 'Agosto', '09': 'Septiembre', '10': 'Octubre', '11': 'Noviembre', '12': 'Diciembre'
+            };
+            if (fullMonthMap[month]) {
+                return `${prefix}${fullMonthMap[month]}${suffix}`;
+            }
+        }
+
+        // E) Pago Parcial por Renovación
+        if (notes.toLowerCase().startsWith('pago parcial por renovación')) {
+            const saldoIndex = notes.toLowerCase().indexOf('saldo restante:');
+            if (saldoIndex !== -1) {
+                return notes.substring(0, saldoIndex).trim();
+            }
+        }
+    } catch (e) {
+        // Fallback to original notes on error
+    }
+
+    return notes;
+};
+
+const getAdvancePaymentDetail = (m: Movement): string | null => {
+    if (m.type !== 'CobroEstadia') return null;
+    const notes = m.notes?.trim();
+    if (!notes) return null;
+
+    const match = notes.match(/^Pago Anticipado\s*-\s*(.+)$/i);
+    if (match) {
+        const detail = match[1].trim();
+        if (detail) {
+            return detail;
+        }
+    }
+    return null;
+};
+
 const CajaPage: React.FC = () => {
     const { user, operatorName, logout } = useAuth();
     const [unifiedRows, setUnifiedRows] = useState<UnifiedRow[]>([]);
@@ -634,19 +729,19 @@ const CajaPage: React.FC = () => {
                 <div className="overflow-auto flex-1 app-scrollbar">
                     <table className="w-full table-fixed text-left border-collapse">
                         <colgroup>
-                            <col className="w-[15%]" />
-                            <col className="w-[20%]" />
-                            <col className="w-[25%]" />
-                            <col className="w-[25%]" />
-                            <col className="w-[15%]" />
+                            <col className="w-[10%]" />
+                            <col className="w-[14%]" />
+                            <col className="w-[46%]" />
+                            <col className="w-[14%]" />
+                            <col className="w-[16%]" />
                         </colgroup>
                         <thead className="bg-slate-950 text-slate-400 uppercase text-xs font-bold sticky top-0 z-10">
                             <tr>
-                                <th className="p-4 border-b border-slate-800">Hora</th>
-                                <th className="p-4 border-b border-slate-800">Tipo</th>
-                                <th className="p-4 border-b border-slate-800">Patente</th>
-                                <th className="p-4 border-b border-slate-800">Pago</th>
-                                <th className="p-4 border-b border-slate-800 text-right">Monto</th>
+                                <th scope="col" className="p-4 border-b border-slate-800 text-center">Hora</th>
+                                <th scope="col" className="p-4 border-b border-slate-800 text-center">Tipo</th>
+                                <th scope="col" className="p-4 border-b border-slate-800 text-left">Detalle</th>
+                                <th scope="col" className="p-4 border-b border-slate-800 text-center">Pago</th>
+                                <th scope="col" className="p-4 border-b border-slate-800 text-right">Monto</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800">
@@ -662,49 +757,46 @@ const CajaPage: React.FC = () => {
 
                                         return (
                                             <tr key={`pc-${idx}`} className="hover:bg-slate-800/50 transition-colors bg-slate-900/30">
-                                                <td className="p-4 font-mono text-slate-400">
+                                                <td className="px-4 py-3 align-middle font-mono text-slate-400 text-center tabular-nums">
                                                     {new Date(row.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                                 </td>
-                                                <td className={`p-4 font-semibold ${isExpense ? 'text-sky-400' : 'text-amber-400'}`}>
-                                                    <div className="flex items-center gap-1.5">
+                                                <td className={`px-4 py-3 align-middle font-semibold ${isExpense ? 'text-sky-400' : 'text-amber-400'}`}>
+                                                    <div className="flex items-center justify-center gap-1.5">
                                                         <ArrowDownRight className="w-4 h-4" />
                                                         <span>{isExpense ? 'Egreso' : 'Cierre Parcial'}</span>
                                                     </div>
                                                 </td>
                                                 <td
-                                                    colSpan={2}
-                                                    className="p-4 align-middle min-w-0"
+                                                    className="px-4 py-3 align-middle text-left min-w-0"
                                                     aria-label={`Referencia del ${isExpense ? 'egreso' : 'retiro'}: ${reference.text}`}
                                                 >
-                                                    <div className="grid w-full min-w-0 grid-cols-2">
-                                                        <div className="col-start-1 min-w-0 flex justify-center">
-                                                            <div
-                                                                className={`max-w-full min-w-0 truncate text-center ${
-                                                                    reference.hasReference ? 'text-slate-300' : 'text-slate-600 italic'
-                                                                }`}
-                                                                title={reference.text}
-                                                            >
-                                                                {reference.recipient && reference.notes ? (
-                                                                    <>
-                                                                        <span className="font-semibold text-slate-200">
-                                                                            {reference.recipient}
-                                                                        </span>
-                                                                        <span className="text-slate-500">
-                                                                            {' - '}
-                                                                        </span>
-                                                                        <span className="text-slate-400">
-                                                                            {reference.notes}
-                                                                        </span>
-                                                                    </>
-                                                                ) : (
-                                                                    reference.text
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                        <div aria-hidden="true" />
+                                                    <div
+                                                        className={`min-w-0 whitespace-normal break-words leading-snug ${
+                                                            reference.hasReference ? 'text-slate-300' : 'text-slate-600 italic'
+                                                        }`}
+                                                        title={reference.text}
+                                                    >
+                                                        {reference.recipient && reference.notes ? (
+                                                            <>
+                                                                <span className="font-semibold text-slate-200">
+                                                                    {reference.recipient}
+                                                                </span>
+                                                                <span className="text-slate-500">
+                                                                    {' - '}
+                                                                </span>
+                                                                <span className="text-slate-400">
+                                                                    {reference.notes}
+                                                                </span>
+                                                            </>
+                                                        ) : (
+                                                            reference.text
+                                                        )}
                                                     </div>
                                                 </td>
-                                                <td className="p-4 font-mono font-bold text-slate-500 text-right">
+                                                <td className="px-4 py-3 align-middle text-center">
+                                                    <span className="text-slate-600">—</span>
+                                                </td>
+                                                <td className="px-4 py-3 align-middle font-mono font-bold text-slate-500 text-right tabular-nums">
                                                     -${Number(row.amount).toLocaleString()}
                                                 </td>
                                             </tr>
@@ -713,21 +805,43 @@ const CajaPage: React.FC = () => {
 
                                     // Movement row (existing behavior)
                                     const m = row as Movement & { _kind: 'movement' };
+                                    const detail = getMovementDetail(m);
+                                    const advanceDetail = getAdvancePaymentDetail(m);
+                                    
                                     return (
                                         <tr key={`mv-${idx}`} className="hover:bg-slate-800/50 transition-colors">
-                                            <td className="p-4 font-mono text-slate-400">
+                                            <td className="px-4 py-3 align-middle font-mono text-slate-400 text-center tabular-nums">
                                                 {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                             </td>
-                                            <td className="p-4 text-slate-300">
+                                            <td className="px-4 py-3 align-middle text-slate-300 text-center">
                                                 {m.type === 'CobroEstadia' ? 'Hora' : m.type === 'CobroAbono' ? 'Abono' : m.type}
                                             </td>
-                                            <td className="p-4 font-mono font-bold text-white">{m.plate || '---'}</td>
-                                            <td className="p-4">
-                                                <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-slate-800 border border-slate-700 text-slate-300">
-                                                    {m.paymentMethod}
-                                                </span>
+                                            <td className="px-4 py-3 align-middle text-left min-w-0">
+                                                {m.type === 'CobroAbono' ? (
+                                                    <div className="text-slate-200 font-medium text-sm leading-snug whitespace-normal break-words">
+                                                        {detail}
+                                                    </div>
+                                                ) : (
+                                                    <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                                                        <span className="inline-flex items-center font-mono font-bold text-white text-sm px-2 py-0.5 rounded-md bg-slate-800/50 border border-slate-700/60">
+                                                            {detail}
+                                                        </span>
+                                                        {advanceDetail && (
+                                                            <span className="text-[11px] font-light text-slate-500 leading-none whitespace-nowrap">
+                                                                (Pago Anticipado - {advanceDetail})
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                )}
                                             </td>
-                                            <td className="p-4 font-mono font-bold text-emerald-400 text-right">
+                                            <td className="px-4 py-3 align-middle text-center">
+                                                <div className="flex items-center justify-center">
+                                                    <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-slate-800 border border-slate-700 text-slate-300">
+                                                        {m.paymentMethod}
+                                                    </span>
+                                                </div>
+                                            </td>
+                                            <td className="px-4 py-3 align-middle font-mono font-bold text-emerald-400 text-right tabular-nums">
                                                 ${m.amount?.toLocaleString()}
                                             </td>
                                         </tr>
