@@ -361,15 +361,23 @@ export const startServer = async (port?: number) => {
         app.get('/api/terminal/config', async (req, res) => {
             try {
                 const { TerminalConfigManager } = require('../config/TerminalConfigManager.js');
+                const StorageEngine = require('../database/StorageEngine.js').StorageEngine;
                 let config = TerminalConfigManager.getConfig();
                 
                 if (config && config.garage_id) {
-                    const SQLiteManager = require('../database/sqlite/SQLiteManager.js').SQLiteManager;
-                    const dbSq = SQLiteManager.getInstance().getDatabase();
                     try {
-                        const row = dbSq.prepare(`SELECT json_data FROM garages WHERE id = ? OR json_extract(json_data, '$.id') = ? LIMIT 1`).get(config.garage_id, config.garage_id) as any;
-                        if (row) {
-                            const realGarage = JSON.parse(row.json_data);
+                        let realGarage: any = null;
+                        if (StorageEngine.getEngine() === 'SQLITE') {
+                            const SQLiteManager = require('../database/sqlite/SQLiteManager.js').SQLiteManager;
+                            const dbSq = SQLiteManager.getInstance().getDatabase();
+                            const row = dbSq.prepare(`SELECT json_data FROM garages WHERE id = ? OR json_extract(json_data, '$.id') = ? LIMIT 1`).get(config.garage_id, config.garage_id) as any;
+                            if (row) realGarage = JSON.parse(row.json_data);
+                        } else {
+                            const { db } = require('../database/datastore.js');
+                            realGarage = await db.garages.findOne({ $or: [{ id: config.garage_id }, { _id: config.garage_id }] });
+                        }
+
+                        if (realGarage) {
                             const expectedOwnerId = realGarage.owner_id || realGarage.ownerId;
                             if (
                                 config.owner_id !== expectedOwnerId ||
@@ -378,7 +386,7 @@ export const startServer = async (port?: number) => {
                             ) {
                                 console.log('[TerminalConfig] Repaired metadata from local garage');
                                 config = {
-                                    garage_id: realGarage.id,
+                                    garage_id: realGarage.id || realGarage._id,
                                     owner_id: expectedOwnerId,
                                     name: realGarage.name,
                                     address: realGarage.address
@@ -401,7 +409,7 @@ export const startServer = async (port?: number) => {
                             }
                         }
                     } catch (e) {
-                        // ignore DB errors if not ready
+                        console.error('[TerminalConfig] Error resolving local garage metadata:', e);
                     }
                 }
                 
@@ -414,22 +422,28 @@ export const startServer = async (port?: number) => {
         app.post('/api/terminal/config', express.json(), async (req, res) => {
             try {
                 const { TerminalConfigManager } = require('../config/TerminalConfigManager.js');
+                const StorageEngine = require('../database/StorageEngine.js').StorageEngine;
                 const requestedGarageId = req.body.garage_id || req.body.garageId;
                 
                 if (!requestedGarageId) {
                     return res.status(400).json({ error: 'garage_id is required' });
                 }
 
-                const SQLiteManager = require('../database/sqlite/SQLiteManager.js').SQLiteManager;
-                const dbSq = SQLiteManager.getInstance().getDatabase();
                 let realGarage: any = null;
 
                 try {
-                    const row = dbSq.prepare(`SELECT json_data FROM garages WHERE id = ? OR json_extract(json_data, '$.id') = ? LIMIT 1`).get(requestedGarageId, requestedGarageId) as any;
-                    if (row) {
-                        realGarage = JSON.parse(row.json_data);
+                    if (StorageEngine.getEngine() === 'SQLITE') {
+                        const SQLiteManager = require('../database/sqlite/SQLiteManager.js').SQLiteManager;
+                        const dbSq = SQLiteManager.getInstance().getDatabase();
+                        const row = dbSq.prepare(`SELECT json_data FROM garages WHERE id = ? OR json_extract(json_data, '$.id') = ? LIMIT 1`).get(requestedGarageId, requestedGarageId) as any;
+                        if (row) realGarage = JSON.parse(row.json_data);
+                    } else {
+                        const { db } = require('../database/datastore.js');
+                        realGarage = await db.garages.findOne({ $or: [{ id: requestedGarageId }, { _id: requestedGarageId }] });
                     }
-                } catch(e) {}
+                } catch(e) {
+                    console.error('[TerminalConfig] POST resolve local error:', e);
+                }
 
                 if (!realGarage) {
                     const { supabase } = require('../lib/supabase.js');
@@ -444,7 +458,7 @@ export const startServer = async (port?: number) => {
                 }
 
                 const finalConfig = {
-                    garage_id: realGarage.id,
+                    garage_id: realGarage.id || realGarage._id,
                     owner_id: realGarage.owner_id || realGarage.ownerId,
                     name: realGarage.name,
                     address: realGarage.address
@@ -470,15 +484,27 @@ export const startServer = async (port?: number) => {
         app.get('/api/garages/:id', async (req, res) => {
             try {
                 const garageId = req.params.id;
-                // Check SQLite first
-                const SQLiteManager = require('../database/sqlite/SQLiteManager.js').SQLiteManager;
-                const dbSq = SQLiteManager.getInstance().getDatabase();
+                const StorageEngine = require('../database/StorageEngine.js').StorageEngine;
+                
+                // Check local first
                 try {
-                    const row = dbSq.prepare(`SELECT json_data FROM garages WHERE id = ? OR json_extract(json_data, '$.id') = ? LIMIT 1`).get(garageId, garageId) as any;
-                    if (row) {
-                        return res.json(JSON.parse(row.json_data));
+                    if (StorageEngine.getEngine() === 'SQLITE') {
+                        const SQLiteManager = require('../database/sqlite/SQLiteManager.js').SQLiteManager;
+                        const dbSq = SQLiteManager.getInstance().getDatabase();
+                        const row = dbSq.prepare(`SELECT json_data FROM garages WHERE id = ? OR json_extract(json_data, '$.id') = ? LIMIT 1`).get(garageId, garageId) as any;
+                        if (row) {
+                            return res.json(JSON.parse(row.json_data));
+                        }
+                    } else {
+                        const { db } = require('../database/datastore.js');
+                        const realGarage = await db.garages.findOne({ $or: [{ id: garageId }, { _id: garageId }] });
+                        if (realGarage) {
+                            return res.json(realGarage);
+                        }
                     }
-                } catch(e) {}
+                } catch(e) {
+                    console.error('[TerminalConfig] GET garages/:id local error:', e);
+                }
                 
                 // Fallback to Supabase if not found locally
                 const { supabase } = require('../lib/supabase.js');
@@ -496,19 +522,31 @@ export const startServer = async (port?: number) => {
             try {
                 const SQLiteManager = require('../database/sqlite/SQLiteManager.js').SQLiteManager;
                 const StorageEngine = require('../database/StorageEngine.js').StorageEngine;
-                const dbSq = SQLiteManager.getInstance().getDatabase();
                 
                 let outboxTotal = { c: 0 };
                 let ackedCount = { c: 0 };
                 let pending = [];
                 let blocked = [];
+                let schemaVersion = 0;
+                let dbPath = 'Unknown';
 
-                try {
-                    outboxTotal = dbSq.prepare(`SELECT count(*) as c FROM sync_outbox`).get() as any;
-                    ackedCount = dbSq.prepare(`SELECT count(*) as c FROM sync_outbox WHERE status = 'ACKED'`).get() as any;
-                    pending = dbSq.prepare(`SELECT * FROM sync_outbox WHERE status = 'PENDING' ORDER BY sequence ASC`).all();
-                    blocked = dbSq.prepare(`SELECT * FROM sync_outbox WHERE status = 'BLOCKED' OR status = 'FAILED' ORDER BY sequence ASC`).all();
-                } catch(e) {}
+                if (StorageEngine.getEngine() === 'SQLITE') {
+                    try {
+                        const dbSq = SQLiteManager.getInstance().getDatabase();
+                        dbPath = SQLiteManager.getInstance().getDbPath();
+                        schemaVersion = dbSq.prepare('PRAGMA user_version').get().user_version;
+                        
+                        outboxTotal = dbSq.prepare(`SELECT count(*) as c FROM outbox_events`).get() as any;
+                        ackedCount = dbSq.prepare(`SELECT count(*) as c FROM outbox_events WHERE status = 'ACKED'`).get() as any;
+                        pending = dbSq.prepare(`SELECT * FROM outbox_events WHERE status = 'PENDING' OR status = 'RETRY' ORDER BY sequence ASC`).all();
+                        blocked = dbSq.prepare(`SELECT * FROM outbox_events WHERE status = 'BLOCKED' ORDER BY sequence ASC`).all();
+                    } catch(e: any) {
+                        console.error('[SyncDiagnostics] Failed to query outbox_events:', e);
+                        return res.status(500).json({ error: 'Failed to query diagnostics', details: e.message });
+                    }
+                } else {
+                    dbPath = 'Legacy NeDB (Outbox stats unavailable)';
+                }
                 
                 const mapEvt = (r: any) => ({
                      entityType: r.entity_type,
@@ -518,14 +556,14 @@ export const startServer = async (port?: number) => {
                      attempts: r.attempts,
                      createdAt: r.created_at,
                      lastAttemptAt: r.last_attempt_at,
-                     lastError: r.last_error
+                     lastError: r.last_error || r.last_error_code
                 });
                 
                 res.json({
                     database: {
                         storageEngine: StorageEngine.getEngine(),
-                        dbPath: SQLiteManager.getInstance().getDbPath(),
-                        schemaVersion: dbSq.prepare('PRAGMA user_version').get().user_version,
+                        dbPath: dbPath,
+                        schemaVersion: schemaVersion,
                         outboxTotal: outboxTotal.c,
                         ackedCount: ackedCount.c
                     },
@@ -846,7 +884,7 @@ export const startServer = async (port?: number) => {
         });
 
         // --- Start Server ---
-        const PORT = process.env.PORT || 3000;
+        const PORT = port || process.env.PORT || 3000;
 
         httpServer.on('error', (err: any) => {
             if (err.code === 'EADDRINUSE') {
