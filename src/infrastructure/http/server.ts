@@ -357,6 +357,186 @@ export const startServer = async (port?: number) => {
             res.status(404).send('Method not found');
         });
 
+        // --- 2.5 Terminal Config & Offline Sync ---
+        app.get('/api/terminal/config', async (req, res) => {
+            try {
+                const { TerminalConfigManager } = require('../config/TerminalConfigManager.js');
+                let config = TerminalConfigManager.getConfig();
+                
+                if (config && config.garage_id) {
+                    const SQLiteManager = require('../database/sqlite/SQLiteManager.js').SQLiteManager;
+                    const dbSq = SQLiteManager.getInstance().getDatabase();
+                    try {
+                        const row = dbSq.prepare(`SELECT json_data FROM garages WHERE id = ? OR json_extract(json_data, '$.id') = ? LIMIT 1`).get(config.garage_id, config.garage_id) as any;
+                        if (row) {
+                            const realGarage = JSON.parse(row.json_data);
+                            const expectedOwnerId = realGarage.owner_id || realGarage.ownerId;
+                            if (
+                                config.owner_id !== expectedOwnerId ||
+                                config.name !== realGarage.name ||
+                                config.address !== realGarage.address
+                            ) {
+                                console.log('[TerminalConfig] Repaired metadata from local garage');
+                                config = {
+                                    garage_id: realGarage.id,
+                                    owner_id: expectedOwnerId,
+                                    name: realGarage.name,
+                                    address: realGarage.address
+                                };
+                                TerminalConfigManager.setConfig(config);
+                            }
+                        } else {
+                            const { supabase } = require('../lib/supabase.js');
+                            const { data, error } = await supabase.from('garages').select('*').eq('id', config.garage_id).single();
+                            if (!error && data) {
+                                config = {
+                                    garage_id: data.id,
+                                    owner_id: data.owner_id,
+                                    name: data.name,
+                                    address: data.address
+                                };
+                                TerminalConfigManager.setConfig(config);
+                            } else {
+                                config = null;
+                            }
+                        }
+                    } catch (e) {
+                        // ignore DB errors if not ready
+                    }
+                }
+                
+                res.json(config || null);
+            } catch (err: any) {
+                res.status(500).json({ error: err.message });
+            }
+        });
+
+        app.post('/api/terminal/config', express.json(), async (req, res) => {
+            try {
+                const { TerminalConfigManager } = require('../config/TerminalConfigManager.js');
+                const requestedGarageId = req.body.garage_id || req.body.garageId;
+                
+                if (!requestedGarageId) {
+                    return res.status(400).json({ error: 'garage_id is required' });
+                }
+
+                const SQLiteManager = require('../database/sqlite/SQLiteManager.js').SQLiteManager;
+                const dbSq = SQLiteManager.getInstance().getDatabase();
+                let realGarage: any = null;
+
+                try {
+                    const row = dbSq.prepare(`SELECT json_data FROM garages WHERE id = ? OR json_extract(json_data, '$.id') = ? LIMIT 1`).get(requestedGarageId, requestedGarageId) as any;
+                    if (row) {
+                        realGarage = JSON.parse(row.json_data);
+                    }
+                } catch(e) {}
+
+                if (!realGarage) {
+                    const { supabase } = require('../lib/supabase.js');
+                    const { data, error } = await supabase.from('garages').select('*').eq('id', requestedGarageId).single();
+                    if (!error && data) {
+                        realGarage = data;
+                    }
+                }
+
+                if (!realGarage) {
+                     return res.status(404).json({ error: 'Garage not found or unreachable' });
+                }
+
+                const finalConfig = {
+                    garage_id: realGarage.id,
+                    owner_id: realGarage.owner_id || realGarage.ownerId,
+                    name: realGarage.name,
+                    address: realGarage.address
+                };
+
+                TerminalConfigManager.setConfig(finalConfig);
+                res.json({ success: true, config: finalConfig });
+            } catch (err: any) {
+                res.status(500).json({ error: err.message });
+            }
+        });
+
+        app.post('/api/terminal/clear-config', async (req, res) => {
+            try {
+                const { TerminalConfigManager } = require('../config/TerminalConfigManager.js');
+                TerminalConfigManager.clearConfig();
+                res.json({ success: true });
+            } catch (err: any) {
+                res.status(500).json({ error: err.message });
+            }
+        });
+
+        app.get('/api/garages/:id', async (req, res) => {
+            try {
+                const garageId = req.params.id;
+                // Check SQLite first
+                const SQLiteManager = require('../database/sqlite/SQLiteManager.js').SQLiteManager;
+                const dbSq = SQLiteManager.getInstance().getDatabase();
+                try {
+                    const row = dbSq.prepare(`SELECT json_data FROM garages WHERE id = ? OR json_extract(json_data, '$.id') = ? LIMIT 1`).get(garageId, garageId) as any;
+                    if (row) {
+                        return res.json(JSON.parse(row.json_data));
+                    }
+                } catch(e) {}
+                
+                // Fallback to Supabase if not found locally
+                const { supabase } = require('../lib/supabase.js');
+                const { data, error } = await supabase.from('garages').select('*').eq('id', garageId).single();
+                if (error || !data) {
+                    return res.status(404).json({ error: 'Garage not found or offline' });
+                }
+                res.json(data);
+            } catch (e: any) {
+                res.status(500).json({ error: e.message });
+            }
+        });
+
+        app.get('/api/sync/diagnostics', async (req, res) => {
+            try {
+                const SQLiteManager = require('../database/sqlite/SQLiteManager.js').SQLiteManager;
+                const StorageEngine = require('../database/StorageEngine.js').StorageEngine;
+                const dbSq = SQLiteManager.getInstance().getDatabase();
+                
+                let outboxTotal = { c: 0 };
+                let ackedCount = { c: 0 };
+                let pending = [];
+                let blocked = [];
+
+                try {
+                    outboxTotal = dbSq.prepare(`SELECT count(*) as c FROM sync_outbox`).get() as any;
+                    ackedCount = dbSq.prepare(`SELECT count(*) as c FROM sync_outbox WHERE status = 'ACKED'`).get() as any;
+                    pending = dbSq.prepare(`SELECT * FROM sync_outbox WHERE status = 'PENDING' ORDER BY sequence ASC`).all();
+                    blocked = dbSq.prepare(`SELECT * FROM sync_outbox WHERE status = 'BLOCKED' OR status = 'FAILED' ORDER BY sequence ASC`).all();
+                } catch(e) {}
+                
+                const mapEvt = (r: any) => ({
+                     entityType: r.entity_type,
+                     operation: r.operation,
+                     entityId: r.entity_id,
+                     status: r.status,
+                     attempts: r.attempts,
+                     createdAt: r.created_at,
+                     lastAttemptAt: r.last_attempt_at,
+                     lastError: r.last_error
+                });
+                
+                res.json({
+                    database: {
+                        storageEngine: StorageEngine.getEngine(),
+                        dbPath: SQLiteManager.getInstance().getDbPath(),
+                        schemaVersion: dbSq.prepare('PRAGMA user_version').get().user_version,
+                        outboxTotal: outboxTotal.c,
+                        ackedCount: ackedCount.c
+                    },
+                    pending: pending.map(mapEvt),
+                    blocked: blocked.map(mapEvt)
+                });
+            } catch (err: any) {
+                res.status(500).json({ error: err.message });
+            }
+        });
+
         // Sync Bootstrap Endpoint
         app.post('/api/sync/bootstrap', async (req, res) => {
             const { garageId } = req.body;
@@ -643,15 +823,46 @@ export const startServer = async (port?: number) => {
             });
         }
 
+        // --- Readiness Endpoint ---
+        app.get('/api/health', (req, res) => {
+            const StorageEngine = require('../database/StorageEngine.js').StorageEngine;
+            const SQLiteManager = require('../database/sqlite/SQLiteManager.js').SQLiteManager;
+            
+            let schemaVersion = 0;
+            try {
+                if (StorageEngine.getEngine() === 'SQLITE') {
+                    const db = SQLiteManager.getInstance().getDatabase();
+                    schemaVersion = db.prepare('PRAGMA user_version').get().user_version;
+                }
+            } catch (e) {
+                // Ignore if db is not ready yet
+            }
+
+            res.json({
+                status: 'ready',
+                storageEngine: StorageEngine.getEngine(),
+                schemaVersion: schemaVersion
+            });
+        });
+
         // --- Start Server ---
         const PORT = process.env.PORT || 3000;
 
+        httpServer.on('error', (err: any) => {
+            if (err.code === 'EADDRINUSE') {
+                console.error(`❌ [STARTUP:FATAL] El puerto ${PORT} ya está en uso (EADDRINUSE)`);
+                process.exit(1);
+            }
+            console.error('❌ [STARTUP:FATAL] HTTP Server error:', err);
+        });
+
         httpServer.listen(PORT, async () => {
+            console.log(`[STARTUP 09] backend listening on port ${PORT}`);
             console.log(`✅ Servidor GarageIA escuchando en http://localhost:${PORT}`);
-            console.log(`✅ Base de Datos Local: LISTA (Archivo ./.data/)`);
+            console.log(`✅ Base de Datos Local: LISTA`);
         });
     } catch (err) {
-        console.error('❌ Error fatal en startServer:', err);
+        console.error('❌ [STARTUP:FATAL] Error fatal en startServer:', err);
     }
 };
 
