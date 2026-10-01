@@ -38,8 +38,8 @@ export class SQLiteManager {
 
         // --- HARD SAFETY GUARD: NEVER OPEN PRODUCTION DB IN TEST ENVIRONMENT ---
         if (isTestEnv) {
-            const prodDbPath = path.resolve(DATA_DIR, 'garageia.sqlite').toLowerCase();
-            const shadowDbPath = path.resolve(DATA_DIR, 'garageia-shadow.sqlite').toLowerCase();
+            const prodDbPath = path.resolve(process.cwd(), '.data', 'garageia.sqlite').toLowerCase();
+            const shadowDbPath = path.resolve(process.cwd(), '.data', 'garageia-shadow.sqlite').toLowerCase();
             const resolvedPath = path.resolve(dbPath);
             const resolvedLower = resolvedPath.toLowerCase();
             if (resolvedLower === prodDbPath || resolvedLower === shadowDbPath) {
@@ -47,7 +47,7 @@ export class SQLiteManager {
             }
         }
 
-        console.log(`🗄️ SQLite: Inicializando en ${dbPath} (Engine: ${engine}, isTest: ${isTestEnv})`);
+        if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log(`🗄️ SQLite: Inicializando en ${dbPath} (Engine: ${engine}, isTest: ${isTestEnv})`);
         
         this.dbPath = dbPath;
         this.db = new DatabaseSync(dbPath);
@@ -59,8 +59,10 @@ export class SQLiteManager {
             this.db.exec('PRAGMA foreign_keys = ON;'); 
             this.db.exec('PRAGMA busy_timeout = 5000;'); 
             this.db.exec('PRAGMA wal_autocheckpoint = 1000;'); 
-
-            this.applyMigrations();
+        if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') {
+            console.log(`[DB:TRACE] SQLite initialized: ${dbPath}`);
+        }
+        this.applyMigrations();
         } catch (e) {
             this.db.close();
             throw e;
@@ -115,13 +117,18 @@ export class SQLiteManager {
     private applyMigrations() {
         const currentVersionResult = this.db.prepare('PRAGMA user_version;').get() as { user_version: number };
         const currentVersion = currentVersionResult.user_version;
-        const targetVersion = 4; // Phase 3 V4 Schema (last_error)
+        const targetVersion = 5; // Phase 3 V5 Schema (last_attempt_at + cleanup)
 
-        console.log(`🗄️ SQLite: Versión actual del Schema = ${currentVersion}, Esperado = ${targetVersion}`);
+        if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') {
+            console.log(`[DB:TRACE] SQLite schema current=${currentVersion} expected=${targetVersion}`);
+        }
 
-        if (currentVersion === targetVersion) return;
+        if (currentVersion === targetVersion) {
+            console.log(`[STARTUP][DB] schema=${currentVersion} expected=${targetVersion} status=OK`);
+            return;
+        }
 
-        console.log(`🗄️ SQLite: Ejecutando migraciones hacia la versión ${targetVersion}...`);
+        console.log(`[Database] SQLite: Ejecutando migraciones hacia la versión ${targetVersion}...`);
         this.db.exec('BEGIN IMMEDIATE;');
         try {
             if (currentVersion === 0) {
@@ -129,7 +136,7 @@ export class SQLiteManager {
                 const tablesInfo = this.db.prepare("SELECT count(*) as count FROM sqlite_master WHERE type='table' AND name='garages'").get() as any;
                 
                 if (tablesInfo.count === 0) {
-                    if (StorageEngine.getEngine() === 'SQLITE') {
+                    if (StorageEngine.getEngine() === 'SQLITE' && !StorageEngine.isFirstRunSession) {
                         if (process.env.VITEST && !process.env.TEST_DISASTER) {
                             console.warn('⚠️ [TEST] Bypassing Disaster Recovery Safety Stop in vitest.');
                         } else {
@@ -145,7 +152,10 @@ export class SQLiteManager {
                     this.db.exec(FRESH_SCHEMA);
                     this.db.exec(`PRAGMA user_version = ${targetVersion};`);
                     this.db.exec('COMMIT;');
-                    console.log('🗄️ SQLite: Fresh schema creado exitosamente.');
+                    if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') {
+                        console.log('[DB:TRACE] SQLite: Fresh schema created.');
+                    }
+                    console.log(`[STARTUP][DB] schema=${targetVersion} expected=${targetVersion} status=FRESH_INSTALL`);
                     return;
                 }
                 // If tables exist, it's a legacy V1 Shadow DB without user_version set. Fall through to upgrade.
@@ -164,13 +174,37 @@ export class SQLiteManager {
                 this.runMigration3to4();
             }
 
+            if (currentVersion < 5) {
+                this.runMigration4to5();
+            }
+
             this.db.exec(`PRAGMA user_version = ${targetVersion};`);
             this.db.exec('COMMIT;');
-            console.log(`🗄️ SQLite: Migración de schema exitosa a V${targetVersion} sin pérdida de datos.`);
+            console.log(`[STARTUP][DB] schema=${targetVersion} expected=${targetVersion} status=MIGRATED`);
         } catch (error) {
             this.db.exec('ROLLBACK;');
             console.error('❌ SQLite: Error ejecutando migraciones de schema:', error);
             throw error;
+        }
+    }
+
+    private runMigration4to5() {
+        console.log('⚙️ Ejecutando Migración V4 -> V5 (last_attempt_at y limpieza de test data)...');
+        try {
+            this.db.exec(`ALTER TABLE outbox_events ADD COLUMN last_attempt_at TEXT;`);
+        } catch (e: any) {
+            if (e.message && e.message.includes('duplicate column name')) {
+                // Ignore if it somehow already exists
+            } else {
+                throw e;
+            }
+        }
+
+        // Limpiar residuos de tests (Phase3 Tester) que poluyeron BD de producción
+        const testGarageId = '11111111-1111-4111-8111-111111111111';
+        const result = this.db.prepare(`DELETE FROM outbox_events WHERE payload LIKE ? AND status = 'PENDING' AND attempts = 0`).run(`%${testGarageId}%`);
+        if (result.changes > 0) {
+            console.log(`🧹 Migración V5 limpió ${result.changes} eventos legacy de test.`);
         }
     }
 

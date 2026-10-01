@@ -1,27 +1,32 @@
 import Datastore from 'nedb-promises';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
+
+export const isTest = Boolean(process.env.NODE_ENV === 'test' || process.env.VITEST);
 
 // Ensure data directory exists
 export let DATA_DIR: string;
 
-try {
-    const { app } = require('electron');
-    // Si estamos en Electron Y está empaquetado (PROD), usamos userData
-    if (app && app.isPackaged) {
-        DATA_DIR = path.join(app.getPath('userData'), 'database');
-    } else {
-        // En DEV (tsx watch o Electron des-empaquetado), usamos siempre .data/
+if (isTest) {
+    // HARD GUARD: NEVER use production data in tests
+    DATA_DIR = path.join(os.tmpdir(), `GarageIA_Test_Data_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
+} else {
+    try {
+        const { app } = require('electron');
+        if (app && app.isPackaged) {
+            DATA_DIR = path.join(app.getPath('userData'), 'database');
+        } else {
+            DATA_DIR = path.resolve(process.cwd(), '.data');
+        }
+    } catch (e) {
         DATA_DIR = path.resolve(process.cwd(), '.data');
     }
-} catch (e) {
-    // Si falla el require (backend tsx independiente), usamos .data/
-    DATA_DIR = path.resolve(process.cwd(), '.data');
 }
 
 if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-} else {
+} else if (!isTest) {
     // 6. Limpieza de Archivos Temporales (.db~) para evitar Database Locks (Zombies)
     try {
         const files = fs.readdirSync(DATA_DIR);
@@ -39,8 +44,6 @@ if (!fs.existsSync(DATA_DIR)) {
         console.error('❌ Local Datastore: Error limpiando archivos temporales:', err);
     }
 }
-
-const isTest = Boolean(process.env.NODE_ENV === 'test' || process.env.VITEST);
 
 const createStore = (name: string) => {
     if (isTest) {
@@ -88,4 +91,4 @@ export const db = {
     hardwareEvents: createStore('hardware_events'),
 };
 
-console.log('📦 Local Datastore (NeDB) Initialized in ./.data/');
+if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log(`📦 Local Datastore initialized in ${DATA_DIR}`);

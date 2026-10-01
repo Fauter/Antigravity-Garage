@@ -3,6 +3,15 @@ import { AccessManager } from './AccessManager';
 import { db } from '../../../infrastructure/database/datastore';
 import { v4 as uuidv4 } from 'uuid';
 
+vi.mock('../../Configuration/infra/ConfigRepository', () => ({
+    ConfigRepository: class {
+        async getPrices() { return []; }
+        async getVehicleTypes() { return []; }
+        async getTariffs() { return []; }
+        async getParams() { return { gracePeriodLimit: 15, currentStrategy: 'default' }; }
+    }
+}));
+
 describe('Flujo de Pago Anticipado', () => {
     beforeEach(() => {
         vi.useFakeTimers();

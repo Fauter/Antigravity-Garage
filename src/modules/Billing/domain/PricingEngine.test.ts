@@ -63,4 +63,97 @@ describe('PricingEngine', () => {
         // Should be 8800 without surcharge
         expect(price).toBe(8800);
     });
+
+    it('debe calcular tarifa optimizada (Camioneta, Transferencia, 24h)', async () => {
+        const tariffs = [
+            { id: 't1', name: 'Hora', type: 'hora', days: 0, hours: 1, minutes: 0 },
+            { id: 't2', name: 'Media Estadía', type: 'hora', days: 0, hours: 12, minutes: 0 },
+            { id: 't3', name: 'Estadía', type: 'hora', days: 1, hours: 0, minutes: 0 },
+            { id: 't4', name: '5 Minutos', type: 'hora', days: 0, hours: 0, minutes: 5 }
+        ];
+        
+        const electronicMatrix = {
+            'Camioneta': {
+                'Hora': 3300,
+                'Media Estadía': 13200,
+                'Estadía': 23100,
+                '5 Minutos': 290
+            },
+            'Auto': {
+                'Media Estadía': 8800
+            }
+        };
+
+        const tariffRepo = { getAll: async () => tariffs };
+        const paramRepo = { getParams: async () => ({ toleranciaInicial: 15, fraccionarDesde: 0 }) };
+        const priceRepo = { getPrices: async () => electronicMatrix };
+
+        const engine = new PricingEngine(tariffRepo as any, paramRepo as any, priceRepo as any);
+        
+        const entryTime = new Date('2026-09-01T00:00:00Z');
+        const exitTime = new Date(entryTime.getTime() + (24 * 60 * 60 * 1000));
+        
+        const feeResult = await engine.calculateParkingFee(
+            { entryTime, plate: 'FEO504', vehicleType: 'Camioneta' },
+            exitTime,
+            'Transferencia'
+        );
+        
+        // 2x Media estadía = 26400
+        // 1x Estadía = 23100
+        // Should choose 23100
+        expect(feeResult.price).toBe(23100);
+    });
+
+    it('debe calcular correctamente el caso complejo FEO504 (88589 min)', async () => {
+        const tariffs = [
+            { id: 't1', name: 'Hora', type: 'hora', days: 0, hours: 1, minutes: 0 },
+            { id: 't2', name: 'Media Estadía', type: 'hora', days: 0, hours: 12, minutes: 0 },
+            { id: 't3', name: 'Estadía', type: 'hora', days: 1, hours: 0, minutes: 0 },
+            { id: 't4', name: '5 Minutos', type: 'hora', days: 0, hours: 0, minutes: 5 }
+        ];
+
+        const standardMatrix = {
+            'Camioneta': {
+                'Hora': 3000,
+                'Media Estadía': 12000,
+                'Estadía': 21000,
+                '5 Minutos': 260
+            }
+        };
+
+        const electronicMatrix = {
+            'Camioneta': {
+                'Hora': 3300,
+                'Media Estadía': 13200,
+                'Estadía': 23100,
+                '5 Minutos': 290
+            }
+        };
+
+        const tariffRepo = { getAll: async () => tariffs };
+        const paramRepo = { getParams: async () => ({ toleranciaInicial: 15, fraccionarDesde: 0 }) };
+        const priceRepo = { getPrices: async (method: string) => method === 'EFECTIVO' ? standardMatrix : electronicMatrix };
+
+        const engine = new PricingEngine(tariffRepo as any, paramRepo as any, priceRepo as any);
+        
+        const entryTime = new Date('2026-09-01T00:00:00Z');
+        // 88589 minutes
+        const exitTime = new Date(entryTime.getTime() + (88589 * 60 * 1000));
+        
+        const standardResult = await engine.calculateParkingFee(
+            { entryTime, plate: 'FEO504', vehicleType: 'Camioneta' },
+            exitTime,
+            'Efectivo'
+        );
+
+        const electronicResult = await engine.calculateParkingFee(
+            { entryTime, plate: 'FEO504', vehicleType: 'Camioneta' },
+            exitTime,
+            'Transferencia'
+        );
+
+        expect(standardResult.price).toBe(1294560);
+        expect(electronicResult.price).toBe(1424040);
+    });
 });

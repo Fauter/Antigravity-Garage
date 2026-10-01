@@ -3,7 +3,8 @@ import { supabase } from '../../../infrastructure/lib/supabase';
 import { db } from '../../../infrastructure/database/datastore.js';
 import { syncService } from '../../Sync/application/SyncService.js';
 import { loadHardwareConfig } from '../../../hardware/config/hardware.config.js';
-
+import { StorageEngine } from '../../../infrastructure/database/StorageEngine.js';
+import { SQLiteManager } from '../../../infrastructure/database/sqlite/SQLiteManager.js';
 export class AuthController {
 
     login = async (req: Request, res: Response) => {
@@ -78,11 +79,9 @@ export class AuthController {
 
                     // B.2 Check Local Employees (SQLite or NeDB)
                     if (!authenticatedUser) {
-                        const StorageEngine = require('../../../infrastructure/database/StorageEngine.js').StorageEngine;
                         let localUser: any = null;
 
                         if (StorageEngine.getEngine() === 'SQLITE') {
-                            const SQLiteManager = require('../../../infrastructure/database/sqlite/SQLiteManager.js').SQLiteManager;
                             const dbSq = SQLiteManager.getInstance().getDatabase();
                             // json_data stores the employee row as pulled from supabase (e.g. username, password_hash)
                             // Supabase employee_accounts use 'password_hash' and 'username'
@@ -131,22 +130,49 @@ export class AuthController {
                     console.log(`🛡️ Validating Access to Garage ${garage_id}`);
 
                     try {
-                        const { data: garage, error: garageError } = await supabase
-                            .from('garages')
-                            .select('owner_id')
-                            .eq('id', garage_id)
-                            .single();
+                        let garageOwnerId: string | null = null;
+                        
+                        // 1. Check local SQLite first
+                        if (StorageEngine.getEngine() === 'SQLITE') {
+                            const dbSq = SQLiteManager.getInstance().getDatabase();
+                            const localGarage = dbSq.prepare("SELECT json_data FROM garages WHERE id = ?").get(garage_id) as any;
+                            if (localGarage) {
+                                const parsedGarage = JSON.parse(localGarage.json_data);
+                                garageOwnerId = parsedGarage.ownerId || parsedGarage.owner_id;
+                            }
+                        } else {
+                            const localGarage = await db.garages.findOne({ id: garage_id });
+                            if (localGarage) {
+                                garageOwnerId = (localGarage as any).ownerId || (localGarage as any).owner_id;
+                            }
+                        }
 
-                        if (garage) {
-                            if (authenticatedUser.owner_id !== garage.owner_id && authenticatedUser.owner_id !== 'UNKNOWN') {
+                        // 2. Fallback to Supabase if not found locally
+                        if (!garageOwnerId) {
+                            const { data: garage, error: garageError } = await supabase
+                                .from('garages')
+                                .select('owner_id')
+                                .eq('id', garage_id)
+                                .single();
+
+                            if (garage) {
+                                garageOwnerId = garage.owner_id;
+                            } else if (garageError) {
+                                console.warn('s? Could not verify Garage Owner online.');
+                            }
+                        }
+
+                        // 3. Validate
+                        if (garageOwnerId) {
+                            if (authenticatedUser.owner_id !== garageOwnerId && authenticatedUser.owner_id !== 'UNKNOWN') {
                                 console.warn(`>" Access Denied: Owner Mismatch.`);
                                 return res.status(403).json({ message: 'Personal no autorizado (Dueño Incorrecto).' });
                             }
-                        } else if (garageError) {
-                            console.warn('s? Could not verify Garage Owner online.');
+                        } else {
+                            console.warn('s? Garage owner validation failed - could not resolve owner locally or remotely');
                         }
                     } catch (gErr) {
-                        console.warn('s? Garage validation failed due to offline state');
+                        console.warn('s? Garage validation failed due to error', gErr);
                     }
 
                                         // --- 3. Removed Trigger Sync (Now handled by Frontend Initial Hydration Gate) ---

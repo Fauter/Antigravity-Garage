@@ -17,6 +17,7 @@ export interface Stay {
     isSubscriber?: boolean;
     subscriptionId?: string | null;
     ticket_code?: string;
+    ticketCode?: string;
     // Hardware Integration fields
     exit_authorized?: boolean;
     exit_authorized_at?: Date | null;
@@ -63,7 +64,7 @@ export class NeDBStayRepository {
             ...dataWithoutInternalId,
             id: id, // Ensure public ID is explicit
             garageId: stay.garageId, // Explicitly ensure it's here
-            ticket_code: stay.ticket_code, // Explicit inclusion for persistence
+            ticket_code: stay.ticket_code || stay.ticketCode, // Explicit inclusion for persistence
             // 🔓 HARDWARE: Explicitly preserve hardware fields to prevent spread overwrite
             exit_authorized: stay.exit_authorized ?? false,
             exit_authorized_at: stay.exit_authorized_at ?? null,
@@ -124,7 +125,7 @@ export class NeDBStayRepository {
             active: stay.active,
             isSubscriber: stay.isSubscriber,
             subscriptionId: stay.subscriptionId,
-            ticket_code: stay.ticket_code,
+            ticket_code: stay.ticket_code || stay.ticketCode,
             // Hardware fields — MUST be preserved through the pipeline
             exit_authorized: stay.exit_authorized ?? false,
             exit_authorized_at: stay.exit_authorized_at ?? null,

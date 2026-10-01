@@ -24,7 +24,7 @@ export class MockCameraDriver implements ICameraDriver {
     async connect(): Promise<void> {
         this._connected = true;
         this._connectedAt = new Date();
-        console.log('🎮 [MockCameraDriver] Connected (simulated)');
+        if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[HW:TRACE] MockCameraDriver connected');
     }
 
     async disconnect(): Promise<void> {

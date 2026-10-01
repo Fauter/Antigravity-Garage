@@ -25,7 +25,8 @@ async function runDebtSweepMock(sub: any, garageId: string, finalPrice: number, 
                 sub.customerId,
                 finalPrice,
                 billingPeriod,
-                dueDate
+                dueDate,
+                garageId
             );
             await repo.save(newDebt);
             processed++;
@@ -94,7 +95,7 @@ describe('Debt Sweep Idempotency & Canon Generation (FASE 3)', () => {
         const sub = { id: 'sub-3', customerId: 'cust-1', endDate: '2026-04-30T23:59:59Z' };
         
         // Manually create May as PAID
-        const mayDebt = CanonFactory.createCanonDebt(sub.id, sub.customerId, 1000, '2026-05', new Date('2026-05-01'));
+        const mayDebt = CanonFactory.createCanonDebt(sub.id, sub.customerId, 1000, '2026-05', new Date('2026-05-01'), 'garage-1');
         mayDebt.status = 'PAID';
         mayDebt.remaining_amount = 0;
         mayDebt.amount_paid = 1000;
@@ -115,16 +116,16 @@ describe('Debt Sweep Idempotency & Canon Generation (FASE 3)', () => {
         const sub = { id: 'sub-4', customerId: 'cust-1', endDate: '2026-04-30T23:59:59Z' };
         
         // May = PAID
-        const mayDebt = CanonFactory.createCanonDebt(sub.id, sub.customerId, 1000, '2026-05', new Date('2026-05-01'));
+        const mayDebt = CanonFactory.createCanonDebt(sub.id, sub.customerId, 1000, '2026-05', new Date('2026-05-01'), 'garage-1');
         mayDebt.status = 'PAID';
         await repo.save(mayDebt);
         
         // Jun = PENDING
-        const junDebt = CanonFactory.createCanonDebt(sub.id, sub.customerId, 1000, '2026-06', new Date('2026-06-01'));
+        const junDebt = CanonFactory.createCanonDebt(sub.id, sub.customerId, 1000, '2026-06', new Date('2026-06-01'), 'garage-1');
         await repo.save(junDebt);
         
         // Jul = PAID
-        const julDebt = CanonFactory.createCanonDebt(sub.id, sub.customerId, 1000, '2026-07', new Date('2026-07-01'));
+        const julDebt = CanonFactory.createCanonDebt(sub.id, sub.customerId, 1000, '2026-07', new Date('2026-07-01'), 'garage-1');
         julDebt.status = 'PAID';
         await repo.save(julDebt);
         
@@ -152,7 +153,7 @@ describe('Debt Sweep Idempotency & Canon Generation (FASE 3)', () => {
 
     it('SYNC-LIKE UPSERT: does not duplicate on save', async () => {
         const sub = { id: 'sub-sync', customerId: 'cust-1', endDate: '2026-04-30T23:59:59Z' };
-        const debt = CanonFactory.createCanonDebt(sub.id, sub.customerId, 1000, '2026-05', new Date());
+        const debt = CanonFactory.createCanonDebt(sub.id, sub.customerId, 1000, '2026-05', new Date(), 'garage-1');
         
         await repo.save(debt);
         // Simulate pulling from sync and overwriting

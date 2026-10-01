@@ -16,6 +16,9 @@ export interface Tariff {
     garageId?: string;
     type?: string;
     priority?: number;
+    days?: number;
+    hours?: number;
+    minutes?: number;
 }
 
 export interface Price {

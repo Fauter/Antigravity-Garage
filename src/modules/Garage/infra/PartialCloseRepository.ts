@@ -2,6 +2,7 @@ import { db } from '../../../infrastructure/database/datastore.js';
 import { QueueService } from '../../Sync/application/QueueService.js';
 import { StorageEngine } from '../../../infrastructure/database/StorageEngine.js';
 import { BaseSqliteRepository } from '../../../infrastructure/database/sqlite/BaseSqliteRepository.js';
+import { SQLiteManager } from '../../../infrastructure/database/sqlite/SQLiteManager.js';
 
 export class NeDBPartialCloseRepository {
     private queue = new QueueService();
@@ -10,6 +11,10 @@ export class NeDBPartialCloseRepository {
         await db.partialCloses.insert(partialClose);
         await this.queue.enqueue('PartialClose', 'CREATE', partialClose);
         return partialClose;
+    }
+
+    async findAll(): Promise<any[]> {
+        return await db.partialCloses.find({}).sort({ timestamp: -1 }) as any[];
     }
 }
 
@@ -23,7 +28,7 @@ export class SqlitePartialCloseRepository extends BaseSqliteRepository<any> {
     }
     
     async findAll(): Promise<any[]> {
-        const db = require('../../../infrastructure/database/sqlite/SQLiteManager').SQLiteManager.getInstance().getDatabase();
+        const db = SQLiteManager.getInstance().getDatabase();
         return db.prepare('SELECT json_data FROM partial_closes').all().map((r: any) => JSON.parse(r.json_data));
     }
 }

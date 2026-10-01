@@ -148,6 +148,7 @@ export const StaySchema = z.object({
   isSubscriber: z.boolean().default(false),
   subscriptionId: UuidSchema.optional().nullable(),
   ticket_code: z.string().optional(),
+  ticketCode: z.string().optional(),
   // --- Hardware Integration Fields ---
   exit_authorized: z.boolean().default(false),
   exit_authorized_at: TimestampSchema.optional().nullable(),
@@ -329,6 +330,9 @@ export const TariffSchema = z.object({
   name: z.string(),
   type: z.string(),
   priority: z.number().default(0),
+  days: z.number().optional(),
+  hours: z.number().optional(),
+  minutes: z.number().optional(),
 });
 export type Tariff = z.infer<typeof TariffSchema>;
 

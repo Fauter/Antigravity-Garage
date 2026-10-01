@@ -93,7 +93,7 @@ export class MockBarrierDriver implements IBarrierDriver {
     async connect(): Promise<void> {
         this._connected = true;
         this._connectedAt = new Date();
-        console.log('🎮 [MockBarrierDriver] Connected (simulated)');
+        if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[HW:TRACE] MockBarrierDriver connected');
     }
 
     async disconnect(): Promise<void> {

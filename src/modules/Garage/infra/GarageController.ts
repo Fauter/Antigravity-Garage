@@ -13,7 +13,7 @@ import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
 import { db } from '../../../infrastructure/database/datastore.js';
 import { PricingEngine } from '../../Billing/domain/PricingEngine.js';
 import { QueueService } from '../../Sync/application/QueueService.js';
-import { CorrelativeGenerator } from '../../../shared/CorrelativeGenerator';
+import { CorrelativeService } from '../../../shared/CorrelativeService';
 import { getLastTwoDaysEligibility } from '../../../shared/utils/dateEligibility.js';
 
 // Debt types eligible for automatic cancellation during cochera release
@@ -457,9 +457,15 @@ export class GarageController {
             let finalNewPrice = 0;
             let finalUpgradeAmount = 0;
 
-            await TransactionHelper.runAsync(async (tx) => {
-                // 1. Resolve or Create Vehicle
-                let vehicleEntity = await this.vehicleRepo.findByPlate(vehicleData.plate);
+            let __success = false;
+            let __attempts = 0;
+            while (!__success && __attempts < 3) {
+                __attempts++;
+                try {
+                    await CorrelativeService.ensureMovementLeaseAvailable(garageId);
+                    await TransactionHelper.runAsync(async (tx) => {
+                        // 1. Resolve or Create Vehicle
+                        let vehicleEntity = await this.vehicleRepo.findByPlate(vehicleData.plate);
                 if (vehicleEntity) {
                     vehicleEntity = {
                         ...vehicleEntity,
@@ -539,7 +545,7 @@ export class GarageController {
 
                         // Generate Movement for upgrade
                         if (proratedCharge > 0) {
-                            receiptNumber = CorrelativeGenerator.allocateMovementTicketCode(garageId, tx);
+                            receiptNumber = CorrelativeService.consumeMovementTicketLocal(garageId, tx);
                             const movement = {
                                 id: uuidv4(),
                                 type: 'CobroAbono',
@@ -562,6 +568,12 @@ export class GarageController {
                     }
                 }
             });
+                    __success = true;
+                } catch (err: any) {
+                    if (err.message?.includes('LOCAL_LEASE_EXHAUSTED') && __attempts < 3) continue;
+                    throw err;
+                }
+            }
 
             const refreshedCochera = await cocherasDB.getById(id);
             res.json({ 
@@ -1102,11 +1114,17 @@ export class GarageController {
             // Pattern identical to renewSubscription (~line 1429).
             // sqliteDb = DatabaseSync (node:sqlite). Supports .prepare().
             let savedSub: any;
-            await TransactionHelper.runAsync(async (sqliteDb: any) => {
-                // A. Customer (new only)
-                if (isNewCustomer) {
-                    await this.customerRepo.save(customerEntity, sqliteDb);
-                }
+            let __success = false;
+            let __attempts = 0;
+            while (!__success && __attempts < 3) {
+                __attempts++;
+                try {
+                    await CorrelativeService.ensureMovementLeaseAvailable(garageId);
+                    await TransactionHelper.runAsync(async (sqliteDb: any) => {
+                        // A. Customer (new only)
+                        if (isNewCustomer) {
+                            await this.customerRepo.save(customerEntity, sqliteDb);
+                        }
 
                 // B. Vehicle (new or updated)
                 await this.vehicleRepo.save(vehicleEntity, sqliteDb);
@@ -1124,7 +1142,7 @@ export class GarageController {
 
                 // E. Movement (only if not exempted)
                 if (!validatedExemption) {
-                    receiptNumber = CorrelativeGenerator.allocateMovementTicketCode(garageId, sqliteDb);
+                    receiptNumber = CorrelativeService.consumeMovementTicketLocal(garageId, sqliteDb);
                     await this.movementRepo.save({
                         id: uuidv4(),
                         type: 'CobroAbono',
@@ -1165,6 +1183,12 @@ export class GarageController {
                     console.log(`📋 [Abonos] Deuda creada por diferencia: $${diferencia}`);
                 }
             });
+                    __success = true;
+                } catch (err: any) {
+                    if (err.message?.includes('LOCAL_LEASE_EXHAUSTED') && __attempts < 3) continue;
+                    throw err;
+                }
+            }
             // ── END ATOMIC TRANSACTION ───────────────────────────────────────────────
 
             // Photo processing: side effect AFTER commit (never blocks the transaction)
@@ -1396,7 +1420,8 @@ export class GarageController {
                                 subClientId,
                                 finalPrice,
                                 billingPeriod,
-                                dueDate
+                                dueDate,
+                                garageId
                             );
 
                             await this.debtRepo.save(newDebt as any);
@@ -1466,15 +1491,40 @@ export class GarageController {
                 }
             }
 
-            const debtsWithDynamicSurcharge = debts
-                .filter(debt => typeof debt.id === 'string' && debt.id.length === 36 && debt.id.includes('-')) // UI SANEAMIENTO: Strict UUID Filtrattion
-                .map(debt => {
-                    const dynamicSurcharge = PricingEngine.calculateSurcharge(debt.amount, garageSettings);
-                    return {
-                        ...debt,
-                        surchargeApplied: dynamicSurcharge
-                    };
+            let debtsWithDynamicSurcharge = [];
+            let subCache: Record<string, any> = {};
+            const getSub = async (sid: string) => {
+                if (!subCache[sid]) subCache[sid] = await this.subscriptionRepo.findById(sid);
+                return subCache[sid];
+            }
+            const { DebtSelector } = require('../../Billing/domain/DebtSelector');
+
+            const validDebts = debts.filter(debt => typeof debt.id === 'string' && debt.id.length === 36 && debt.id.includes('-'));
+            for (const debt of validDebts) {
+                const debtAmount = debt.amount ?? 0;
+                let remainingAmount = debt.remaining_amount ?? (debt as any).remainingAmount ?? debtAmount;
+                
+                let resolvedVehicleTypeId = null;
+                if (debt.subscriptionId) {
+                    const sub = await getSub(debt.subscriptionId);
+                    if (sub) {
+                        resolvedVehicleTypeId = await this.resolveVehicleTypeId(sub, garageId);
+                    }
+                }
+                const period = DebtSelector.getBillingPeriodKey(debt);
+                const surchargeRes = PricingEngine.calculateDebtSurcharge({
+                    baseAmount: remainingAmount,
+                    billingPeriod: period,
+                    now: new Date(),
+                    config: garageSettings,
+                    vehicleTypeId: resolvedVehicleTypeId
                 });
+                
+                debtsWithDynamicSurcharge.push({
+                    ...debt,
+                    surchargeApplied: surchargeRes.amount
+                });
+            }
 
             res.json(debtsWithDynamicSurcharge);
         } catch (error: any) {
@@ -1557,10 +1607,9 @@ export class GarageController {
     
     previewMultiMonthDebt = async (req: Request, res: Response) => {
         try {
-            const { subId, targetDebtIds, paymentMethod = 'Efectivo' } = req.body;
+            const { subId, customerId, isGlobalDebt, targetDebtIds, paymentMethod = 'Efectivo' } = req.body;
             const garageId = req.headers['x-garage-id'] as string;
 
-            if (!subId) return res.status(400).json({ error: 'subId is required.' });
             if (!targetDebtIds || !Array.isArray(targetDebtIds) || targetDebtIds.length === 0) {
                 return res.status(400).json({ error: 'targetDebtIds must be a non-empty array.' });
             }
@@ -1575,28 +1624,134 @@ export class GarageController {
                 }
             }
 
-            const subscription = await this.subscriptionRepo.findById(subId);
-            if (!subscription) return res.status(404).json({ error: 'Subscription not found' });
-            
-            const basePrice = await this.resolveSubscriptionMonthlyPrice(subscription, paymentMethod, garageId);
+            if (isGlobalDebt) {
+                const allDebts = customerId ? await this.debtRepo.findByCustomerId(String(customerId)) : [];
+                const pendingDebts = allDebts.filter(d => d.status === 'PENDING' && (d as any).garageId === garageId);
+                const debtsToPreview = pendingDebts.filter(d => targetDebtIds.includes(d.id));
 
-            const allDebts = await this.debtRepo.findBySubscriptionId(subId);
-            const pendingCanon = allDebts.filter(d => d.status === 'PENDING' && d.type === 'CANON' && ((d as any).remaining_amount ?? d.amount) > 0);
+                let subCache: Record<string, any> = {};
+                const getSub = async (sid: string) => {
+                    if (!subCache[sid]) subCache[sid] = await this.subscriptionRepo.findById(sid);
+                    return subCache[sid];
+                }
 
-            const { DebtPaymentService } = require('../../Billing/application/DebtPaymentService');
-            const previewReq = { subId, targetDebtIds, now: new Date(), config: garageSettings, basePrice };
-            const previewRes = DebtPaymentService.preview(previewReq, pendingCanon);
-            
-            if (!previewRes.isValid) {
-                return res.status(400).json({ error: previewRes.error });
+                const { PricingEngine } = require('../../Billing/domain/PricingEngine');
+                const { DebtSelector } = require('../../Billing/domain/DebtSelector');
+
+                const breakdown = [];
+                let principalTotal = 0;
+                let surchargeTotal = 0;
+                let grandTotal = 0;
+                const now = new Date();
+
+                for (const debt of debtsToPreview) {
+                    const debtAmount = debt.amount ?? 0;
+                    let remainingAmount = debt.remaining_amount ?? (debt as any).remainingAmount ?? debtAmount;
+                    if (remainingAmount <= 0) continue;
+
+                    let resolvedVehicleTypeId = null;
+                    if (debt.subscriptionId) {
+                        const sub = await getSub(debt.subscriptionId);
+                        if (sub) {
+                            resolvedVehicleTypeId = await this.resolveVehicleTypeId(sub, garageId);
+                        }
+                    }
+
+                    const period = DebtSelector.getBillingPeriodKey(debt);
+                    const surchargeRes = PricingEngine.calculateDebtSurcharge({
+                        baseAmount: remainingAmount,
+                        billingPeriod: period,
+                        now,
+                        config: garageSettings,
+                        vehicleTypeId: resolvedVehicleTypeId
+                    });
+
+                    const total = remainingAmount + surchargeRes.amount;
+                    breakdown.push({
+                        debtId: debt.id,
+                        billingPeriod: period,
+                        principal: remainingAmount,
+                        surchargePercentage: surchargeRes.percentage,
+                        appliedFromDay: surchargeRes.appliedStep?.day,
+                        surchargeAmount: surchargeRes.amount,
+                        total,
+                        statusBefore: debt.status
+                    });
+
+                    principalTotal += remainingAmount;
+                    surchargeTotal += surchargeRes.amount;
+                    grandTotal += total;
+                }
+
+                return res.status(200).json({
+                    isValid: true,
+                    principalTotal,
+                    surchargeTotal,
+                    grandTotal,
+                    breakdown,
+                    debtsToPay: debtsToPreview
+                });
+            } else {
+                if (!subId) return res.status(400).json({ error: 'subId is required for non-global debt.' });
+                const subscription = await this.subscriptionRepo.findById(subId);
+                if (!subscription) return res.status(404).json({ error: 'Subscription not found' });
+                
+                const basePrice = await this.resolveSubscriptionMonthlyPrice(subscription, paymentMethod, garageId);
+
+                const allDebts = await this.debtRepo.findBySubscriptionId(subId);
+                const pendingCanon = allDebts.filter(d => d.status === 'PENDING' && d.type === 'CANON' && ((d as any).remaining_amount ?? d.amount) > 0);
+
+                const { DebtPaymentService } = require('../../Billing/application/DebtPaymentService');
+                const vehicleTypeId = await this.resolveVehicleTypeId(subscription, garageId);
+                const previewReq = { subId, targetDebtIds, now: new Date(), config: garageSettings, basePrice, vehicleTypeId };
+                const previewRes = DebtPaymentService.preview(previewReq, pendingCanon);
+                
+                if (!previewRes.isValid) {
+                    return res.status(400).json({ error: previewRes.error });
+                }
+                
+                return res.status(200).json(previewRes);
             }
-            
-            return res.status(200).json(previewRes);
         } catch (error: any) {
             console.error('Error en previewMultiMonthDebt:', error);
             return res.status(500).json({ error: error.message });
         }
     };
+
+    
+    private resolveVehicleTypeId = async (sub: any, garageId: string): Promise<string | null> => {
+        try {
+            const vehicleId = sub.vehicleId || sub.vehicle_id;
+            let subPlate = sub.plate || sub.vehicleData?.plate;
+            let vTypeString = sub.vehicleData?.type;
+
+            if (vehicleId && !vTypeString) {
+                const v = await (this.vehicleRepo as any).findById(vehicleId);
+                if (v) {
+                    vTypeString = v.type;
+                    if (!subPlate) subPlate = v.plate;
+                }
+            } else if (subPlate && !vTypeString) {
+                const v = await this.vehicleRepo.findByPlate(subPlate);
+                if (v) vTypeString = v.type;
+            }
+
+            if (!vTypeString) return null;
+            
+            const vKey = String(vTypeString).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+            const vehicleTypes = await (new (require('../../Configuration/infra/SqliteConfigRepository').ConfigRepository)()).getVehicleTypes(garageId);
+            
+            const matchedVt = vehicleTypes.find((vt: any) => 
+                String(vt.name).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim() === vKey
+            );
+            
+            return matchedVt ? matchedVt.id : null;
+        } catch (err) {
+            console.error("Error resolving vehicleTypeId:", err);
+            return null;
+        }
+    };
+
 
     renewSubscription = async (req: Request, res: Response) => {
         try {
@@ -1619,7 +1774,14 @@ export class GarageController {
             }
 
             // WE NOW WRAP EVERYTHING IN A TRANSACTION
-            const resultPayload = await TransactionHelper.runAsync(async (db: any) => {
+            let __success = false;
+            let __attempts = 0;
+            let resultPayload: any;
+            while (!__success && __attempts < 3) {
+                __attempts++;
+                try {
+                    await CorrelativeService.ensureMovementLeaseAvailable(garageId);
+                    resultPayload = await TransactionHelper.runAsync(async (db: any) => {
                 
                 // --- RAMA EXPLÍCITA: RENOVACIÓN ANTICIPADA ---
                 if (renewalMode === 'ADVANCE') {
@@ -1680,7 +1842,7 @@ export class GarageController {
 
                     const cocheraSuffix = req.body.spotNumber ? ` - Cochera #${req.body.spotNumber}` : ' - Cochera Móvil';
                     const movementNotes = `Renovación Abono Anticipada${cocheraSuffix} - Hasta ${nextEndDate.toLocaleDateString('es-AR')}`;
-                    const receiptNumber = CorrelativeGenerator.allocateMovementTicketCode(garageId, db);
+                    const receiptNumber = CorrelativeService.consumeMovementTicketLocal(garageId, db);
 
                     await this.movementRepo.save({
                         id: uuidv4(),
@@ -1733,12 +1895,14 @@ export class GarageController {
                     
                     const basePrice = await this.resolveSubscriptionMonthlyPrice(subToRenew, paymentMethod, garageId);
                     
+                    const vehicleTypeId = await this.resolveVehicleTypeId(subToRenew, garageId);
                     const previewReq = {
                         subId,
                         targetDebtIds,
                         now: new Date(),
                         config: garageSettings,
-                        basePrice
+                        basePrice,
+                        vehicleTypeId
                     };
                     
                     const previewRes = DebtPaymentService.preview(previewReq, pendingCanon);
@@ -1751,7 +1915,7 @@ export class GarageController {
                         throw new Error(`El total cobrado no coincide con el cálculo backend. Esperado: $${previewRes.grandTotal}, Recibido: ${amountToPay}`);
                     }
                     
-                    const receiptNumber = CorrelativeGenerator.allocateMovementTicketCode(garageId, db);
+                    const receiptNumber = CorrelativeService.consumeMovementTicketLocal(garageId, db);
                     const cocheraSuffix = req.body.spotNumber ? ` - Cochera #${req.body.spotNumber}` : ' - Cochera Móvil';
                     
                     // Update debts
@@ -1884,6 +2048,13 @@ export class GarageController {
 
                 debtsToPay.sort((a: any, b: any) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
 
+                let subCache: Record<string, any> = {};
+                const getSub = async (sid: string) => {
+                    if (!subCache[sid]) subCache[sid] = await this.subscriptionRepo.findById(sid);
+                    return subCache[sid];
+                }
+                const { DebtSelector } = require('../../Billing/domain/DebtSelector');
+
                 for (const debt of debtsToPay) {
                     if (remainingPayment <= 0) {
                         allDebtsFullyPaid = false;
@@ -1891,7 +2062,23 @@ export class GarageController {
                     }
                     const debtRemaining = (typeof (debt as any).remaining_amount === 'number' && (debt as any).remaining_amount !== null) ? (debt as any).remaining_amount : debt.amount;
                     const debtAmountPaid = (typeof (debt as any).amount_paid === 'number' && (debt as any).amount_paid !== null) ? (debt as any).amount_paid : 0;
-                    const surchargeForDebt = PricingEngine.calculateSurcharge(debtRemaining, garageSettings);
+                    
+                    let resolvedVehicleTypeId = null;
+                    if (debt.subscriptionId) {
+                        const sub = await getSub(debt.subscriptionId);
+                        if (sub) {
+                            resolvedVehicleTypeId = await this.resolveVehicleTypeId(sub, garageId);
+                        }
+                    }
+                    const period = DebtSelector.getBillingPeriodKey(debt);
+                    const surchargeRes = PricingEngine.calculateDebtSurcharge({
+                        baseAmount: debtRemaining,
+                        billingPeriod: period,
+                        now: new Date(),
+                        config: garageSettings,
+                        vehicleTypeId: resolvedVehicleTypeId
+                    });
+                    const surchargeForDebt = surchargeRes.amount;
                     const totalOwedThisDebt = debtRemaining + surchargeForDebt;
 
                     if (remainingPayment >= totalOwedThisDebt) {
@@ -1979,7 +2166,7 @@ export class GarageController {
                 }
 
                 const plateForMovement = isGlobalDebt ? 'Multiples' : (subToFetch?.plate || 'N/A');
-                const receiptNumber = CorrelativeGenerator.allocateMovementTicketCode(garageId, db);
+                const receiptNumber = CorrelativeService.consumeMovementTicketLocal(garageId, db);
 
                 await this.movementRepo.save({
                     id: uuidv4(),
@@ -2029,6 +2216,12 @@ export class GarageController {
                     subscriptions: isGlobalDebt ? renewedSubs : (renewedSubs.length > 0 ? renewedSubs : undefined)
                 };
             });
+                    __success = true;
+                } catch (err: any) {
+                    if (err.message?.includes('LOCAL_LEASE_EXHAUSTED') && __attempts < 3) continue;
+                    throw err;
+                }
+            }
 
             res.json(resultPayload);
         } catch (error: any) {
@@ -2229,7 +2422,8 @@ export class GarageController {
 
     getFinancialConfig = async (req: Request, res: Response) => {
         try {
-            const configs = await [(await (new ConfigRepository()).getParams())];
+            const garageId = (req.query.garageId as string) || (req.headers['x-garage-id'] as string);
+            const configs = await [(await (new ConfigRepository()).getParams(garageId))];
             if (configs && configs.length > 0) {
                 return res.json(configs[0]);
             }

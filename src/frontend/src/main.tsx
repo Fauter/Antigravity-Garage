@@ -10,16 +10,7 @@ installGlobalFrontendDiagnostics();
 
 const queryClient = new QueryClient()
 
-if (import.meta.env.DEV) {
-    console.log('[FRONTEND] main.tsx loaded');
-    console.log('[FRONTEND] creating React root');
-}
-
 const root = ReactDOM.createRoot(document.getElementById('root')!);
-
-if (import.meta.env.DEV) {
-    console.log('[FRONTEND] React root mounted');
-}
 
 root.render(
     <React.StrictMode>

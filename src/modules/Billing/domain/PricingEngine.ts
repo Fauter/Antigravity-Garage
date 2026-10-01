@@ -303,16 +303,43 @@ export class PricingEngine {
 
     // --- Surcharge / Debt Logic (Mora Flexible y Canónica) ---
 
+    
+    public static resolveSurchargeRule(
+        config: any,
+        vehicleTypeId: string | null | undefined
+    ): { steps: any[] } | null {
+        const surchargeConfig = config?.surchargeConfig ?? config?.surcharge_config;
+        if (!surchargeConfig) return null;
+        
+        const vtOverrides = surchargeConfig.vehicle_type_overrides ?? {};
+        const globalDefault = surchargeConfig.globalDefault ?? surchargeConfig.global_default;
+        
+        if (vehicleTypeId) {
+            const vtScope = vtOverrides[vehicleTypeId];
+            if (vtScope && vtScope.default_rule && Array.isArray(vtScope.default_rule.steps)) {
+                return vtScope.default_rule;
+            }
+        }
+        
+        if (globalDefault && Array.isArray(globalDefault.steps)) {
+            return globalDefault;
+        }
+        
+        return null;
+    }
+
     public static calculateDebtSurcharge({
         baseAmount,
         billingPeriod,
         now,
-        config
+        config,
+        vehicleTypeId
     }: {
         baseAmount: number;
         billingPeriod: string;
         now: Date;
         config: any;
+        vehicleTypeId?: string | null;
     }): {
         percentage: number;
         amount: number;
@@ -328,15 +355,13 @@ export class PricingEngine {
             }
 
             // 2. Resolve steps for the given billing period
-            const monthStr = billingPeriod.split('-')[1];
-            const monthIdx = String(parseInt(monthStr, 10) - 1); // 0-11
+            let rawSteps: any[] = [];
+            const resolvedRule = this.resolveSurchargeRule(config, vehicleTypeId);
             
-            let rawSteps = config?.surchargeConfig?.monthly_overrides?.[monthIdx]?.steps;
-            if (!rawSteps || !Array.isArray(rawSteps) || rawSteps.length === 0) {
-                rawSteps = config?.surchargeConfig?.global_default?.steps;
-            }
-            if (!rawSteps || !Array.isArray(rawSteps) || rawSteps.length === 0) {
-                // Try legacy fallback
+            if (resolvedRule && Array.isArray(resolvedRule.steps) && resolvedRule.steps.length > 0) {
+                rawSteps = resolvedRule.steps;
+            } else {
+                // Try legacy fallback (apartirdia11)
                 const rate11 = config?.apartirdia11 != null ? Number(config.apartirdia11) : 0;
                 const rate22 = config?.apartirdia22 != null ? Number(config.apartirdia22) : 0;
                 
@@ -363,14 +388,14 @@ export class PricingEngine {
                 return { percentage: 0, amount: 0, reason: 'NO_CONFIG' };
             }
 
-            // 3. Historical Debt -> MAX applicable percentage (not necessarily the last one, just the highest value)
+            // 3. Historical Debt -> Last chronological step (highest day, which is steps[0] since they are sorted descending)
             if (billingPeriod < currentPeriod) {
-                const maxPercentage = Math.max(...steps.map((s: {day: number, percentage: number}) => s.percentage));
+                const lastChronologicalStep = steps[0];
                 return {
-                    percentage: maxPercentage,
-                    amount: Math.floor(baseAmount * (maxPercentage / 100)),
+                    percentage: lastChronologicalStep.percentage,
+                    amount: Math.floor(baseAmount * (lastChronologicalStep.percentage / 100)),
                     reason: 'HISTORICAL_MAX',
-                    appliedStep: steps.find((s: {day: number, percentage: number}) => s.percentage === maxPercentage)
+                    appliedStep: lastChronologicalStep
                 };
             }
 

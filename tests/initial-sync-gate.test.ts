@@ -1,3 +1,4 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 // tests/initial-sync-gate.test.ts
 
 /**

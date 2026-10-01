@@ -1,5 +1,6 @@
 import { PricingEngine } from '../domain/PricingEngine';
 import { BillingPeriodHelper } from '../domain/BillingPeriodHelper';
+import { DebtSelector } from '../domain/DebtSelector';
 
 export interface MultiMonthDebtPreviewRequest {
     subId: string;
@@ -7,6 +8,7 @@ export interface MultiMonthDebtPreviewRequest {
     now: Date;
     config: any;
     basePrice?: number;
+    vehicleTypeId?: string;
 }
 
 export interface DebtBreakdown {
@@ -14,6 +16,7 @@ export interface DebtBreakdown {
     billingPeriod: string;
     principal: number;
     surchargePercentage: number;
+    appliedFromDay?: number;
     surchargeAmount: number;
     total: number;
     statusBefore: string;
@@ -39,13 +42,7 @@ export interface MultiMonthDebtExecuteRequest extends MultiMonthDebtPreviewReque
 
 export class DebtPaymentService {
     private static getPeriod(debt: any): string {
-        if (debt.billingPeriod) return debt.billingPeriod;
-        try {
-            debt.billingPeriod = BillingPeriodHelper.getLegacyBillingPeriod(debt);
-            return debt.billingPeriod;
-        } catch (e) {
-            return '';
-        }
+        return DebtSelector.getBillingPeriodKey(debt);
     }
 
     /**
@@ -79,7 +76,7 @@ export class DebtPaymentService {
         request: MultiMonthDebtPreviewRequest,
         canonicalPendingDebts: any[]
     ): MultiMonthDebtPreviewResponse {
-        const { targetDebtIds, now, config, basePrice } = request;
+        const { targetDebtIds, now, config, basePrice, vehicleTypeId } = request;
 
         try {
             const sortedPending = [...canonicalPendingDebts].sort((a, b) => this.getPeriod(a).localeCompare(this.getPeriod(b)));
@@ -115,7 +112,8 @@ export class DebtPaymentService {
                     baseAmount: principal,
                     billingPeriod: period,
                     now,
-                    config
+                    config,
+                    vehicleTypeId
                 });
 
                 const total = principal + surchargeRes.amount;
@@ -125,6 +123,7 @@ export class DebtPaymentService {
                     billingPeriod: period,
                     principal,
                     surchargePercentage: surchargeRes.percentage,
+                    appliedFromDay: surchargeRes.appliedStep?.day,
                     surchargeAmount: surchargeRes.amount,
                     total,
                     statusBefore: debt.status

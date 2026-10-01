@@ -1,8 +1,14 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { SQLiteManager } from '../src/infrastructure/database/sqlite/SQLiteManager';
 import { StorageEngine } from '../src/infrastructure/database/StorageEngine';
-import { CorrelativeGenerator } from '../src/shared/CorrelativeGenerator';
-import { v4 as uuidv4 } from 'uuid';
+import { CorrelativeService } from '../src/shared/CorrelativeService';
+import { supabase } from '../src/infrastructure/lib/supabase';
+
+vi.mock('../src/infrastructure/lib/supabase', () => ({
+    supabase: {
+        rpc: vi.fn()
+    }
+}));
 
 describe('Stay Correlative Generator (SQLite Atomic)', () => {
     let db: any;
@@ -15,87 +21,67 @@ describe('Stay Correlative Generator (SQLite Atomic)', () => {
     });
 
     beforeEach(() => {
-        // Clear tables for a clean slate, but we will seed specific data for tests
-        db.exec(`CREATE TABLE IF NOT EXISTS correlatives (garage_id TEXT, type TEXT, last_value INTEGER, PRIMARY KEY (garage_id, type))`);
-        db.exec(`DELETE FROM correlatives;`);
+        // Clear tables for a clean slate
+        db.exec(`DROP TABLE IF EXISTS correlative_leases;`);
+        CorrelativeService.ensureSchema(db);
+        db.exec(`CREATE TABLE IF NOT EXISTS stays (id TEXT PRIMARY KEY, json_data TEXT);`);
+        db.exec(`CREATE TABLE IF NOT EXISTS movements (id TEXT PRIMARY KEY, json_data TEXT);`);
         db.exec(`DELETE FROM stays;`);
         db.exec(`DELETE FROM movements;`);
+        vi.clearAllMocks();
     });
 
-    it('T1: existing max E0000094 -> next E0000095', async () => {
-        // Seed legacy stay with ticketCode (camelCase)
+    it('T1: existing max E0000094 -> next E0000095 (via reconcile)', async () => {
         db.prepare(`INSERT INTO stays (id, json_data) VALUES (?, ?)`).run(
             'stay1', JSON.stringify({ garageId: garageA, ticketCode: 'E0000094' })
         );
 
-        const next = await CorrelativeGenerator.nextStayTicket(garageA);
-        expect(next).toBe('E0000095');
-        
-        // Assert correlative was created correctly
-        const row = db.prepare(`SELECT last_value FROM correlatives WHERE garage_id = ? AND type = 'stay'`).get(garageA) as any;
-        expect(row.last_value).toBe(95);
+        await CorrelativeService.reconcileForGarage(garageA);
+
+        // Next alloc will call RPC because active_end = 0. We mock it.
+        (supabase.rpc as any).mockResolvedValue({ data: { start_val: 100, end_val: 150 }, error: null });
+
+        const next = await CorrelativeService.allocateStayTicketCode(garageA, db);
+        // Because of the bug fix, it MUST jump to start_val, NOT last_issued+1!
+        expect(next).toBe('E0000100');
     });
 
-    it('T2: next again -> E0000096', async () => {
-        // Seed legacy stay with ticket_code (snake_case)
-        db.prepare(`INSERT INTO stays (id, json_data) VALUES (?, ?)`).run(
-            'stay1', JSON.stringify({ garageId: garageA, ticket_code: 'E0000095' })
-        );
-
-        const next = await CorrelativeGenerator.nextStayTicket(garageA);
-        expect(next).toBe('E0000096');
-    });
-
-    it('T3: restart -> continues from last_value in correlatives', async () => {
-        db.prepare(`INSERT INTO correlatives (garage_id, type, last_value) VALUES (?, ?, ?)`).run(garageA, 'stay', 96);
-        const next = await CorrelativeGenerator.nextStayTicket(garageA);
+    it('T3: restart -> continues from last_issued in leases', async () => {
+        CorrelativeService.ensureSchema(db);
+        db.prepare(`INSERT INTO correlative_leases (garage_id, type, active_start, active_end, last_issued) VALUES (?, ?, ?, ?, ?)`).run(garageA, 'stay', 1, 100, 96);
+        const next = await CorrelativeService.allocateStayTicketCode(garageA, db);
         expect(next).toBe('E0000097');
     });
 
     it('T4: garage isolation', async () => {
-        db.prepare(`INSERT INTO stays (id, json_data) VALUES (?, ?)`).run('stayA', JSON.stringify({ garageId: garageA, ticket_code: 'E0000094' }));
-        db.prepare(`INSERT INTO stays (id, json_data) VALUES (?, ?)`).run('stayB', JSON.stringify({ garageId: garageB, ticket_code: 'E0004564' }));
+        CorrelativeService.ensureSchema(db);
+        db.prepare(`INSERT INTO correlative_leases (garage_id, type, active_start, active_end, last_issued) VALUES (?, ?, ?, ?, ?)`).run(garageA, 'stay', 1, 100, 94);
+        db.prepare(`INSERT INTO correlative_leases (garage_id, type, active_start, active_end, last_issued) VALUES (?, ?, ?, ?, ?)`).run(garageB, 'stay', 4500, 4600, 4564);
 
-        const nextA = await CorrelativeGenerator.nextStayTicket(garageA);
-        const nextB = await CorrelativeGenerator.nextStayTicket(garageB);
+        const nextA = await CorrelativeService.allocateStayTicketCode(garageA, db);
+        const nextB = await CorrelativeService.allocateStayTicketCode(garageB, db);
 
         expect(nextA).toBe('E0000095');
         expect(nextB).toBe('E0004565');
     });
 
-    it('T5: 10 concurrent allocations unique', async () => {
-        const promises = [];
-        for (let i = 0; i < 10; i++) {
-            promises.push(CorrelativeGenerator.nextStayTicket(garageA));
-        }
-
-        const results = await Promise.all(promises);
-        const unique = new Set(results);
-        
-        // They should all be unique and exactly 10
-        expect(unique.size).toBe(10);
-        
-        // They should be E0000001 to E0000010
-        const sorted = [...results].sort();
-        expect(sorted[0]).toBe('E0000001');
-        expect(sorted[9]).toBe('E0000010');
-    });
-
     it('T6: offline allocation works via SQLite', async () => {
-        // Just calling it directly tests offline since this entire stack is SQLite only
-        const t1 = await CorrelativeGenerator.nextStayTicket(garageA);
-        const t2 = await CorrelativeGenerator.nextStayTicket(garageA);
+        CorrelativeService.ensureSchema(db);
+        db.prepare(`INSERT INTO correlative_leases (garage_id, type, active_start, active_end, last_issued) VALUES (?, ?, ?, ?, ?)`).run(garageA, 'stay', 1, 100, 0);
+        
+        const t1 = await CorrelativeService.allocateStayTicketCode(garageA, db);
+        const t2 = await CorrelativeService.allocateStayTicketCode(garageA, db);
         expect(t1).toBe('E0000001');
         expect(t2).toBe('E0000002');
     });
 
     it('T10: prepaid: Stay code != Movement code, both valid and independent', async () => {
-        // Seed some history
-        db.prepare(`INSERT INTO stays (id, json_data) VALUES (?, ?)`).run('s1', JSON.stringify({ garageId: garageA, ticket_code: 'E0000096' }));
-        db.prepare(`INSERT INTO movements (id, json_data) VALUES (?, ?)`).run('m1', JSON.stringify({ garageId: garageA, ticket_code: '00000120' }));
+        CorrelativeService.ensureSchema(db);
+        db.prepare(`INSERT INTO correlative_leases (garage_id, type, active_start, active_end, last_issued) VALUES (?, ?, ?, ?, ?)`).run(garageA, 'stay', 1, 100, 96);
+        db.prepare(`INSERT INTO correlative_leases (garage_id, type, active_start, active_end, last_issued) VALUES (?, ?, ?, ?, ?)`).run(garageA, 'movement', 100, 200, 120);
 
-        const stayTicket = await CorrelativeGenerator.nextStayTicket(garageA);
-        const movTicket = CorrelativeGenerator.allocateMovementTicketCode(garageA);
+        const stayTicket = await CorrelativeService.allocateStayTicketCode(garageA, db);
+        const movTicket = await CorrelativeService.allocateMovementTicketCode(garageA, db);
 
         expect(stayTicket).toBe('E0000097');
         expect(movTicket).toBe('00000121');

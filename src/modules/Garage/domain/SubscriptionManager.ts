@@ -5,7 +5,8 @@ import {
     Vehicle,
     SubscriptionType
 } from '../../../shared/schemas';
-import { PricingEngine, type TarifasConfig } from '../../Billing/domain/PricingEngine';
+import { TarifasConfig, PricingEngine } from '../../Billing/domain/PricingEngine.js';
+import { CanonFactory } from './CanonFactory.js';
 
 export class SubscriptionManager {
     /**
@@ -42,7 +43,7 @@ export class SubscriptionManager {
         // 2. Calcular Precio Inicial (Prorrateo si aplica)
         const year = startDate.getFullYear();
         const month = startDate.getMonth();
-        const endDate = new Date(year, month + 1, 0, 23, 59, 59, 999); // Fin de mes local al ultimo segundo
+        const endDate = CanonFactory.getCanonDueDate(year, month + 1); // Fin de mes local al ultimo segundo
 
         const price = PricingEngine.calculateSubscriptionFee(
             type,
@@ -69,6 +70,24 @@ export class SubscriptionManager {
         return SubscriptionSchema.parse(subscription);
     }
 
+
+    static calculateRenewalEndDate(renewalDate: Date): Date {
+        // Calculamos precio mes completo
+        const year = renewalDate.getFullYear();
+        const month = renewalDate.getMonth();
+        // Último segundo del último día del mes actual
+        const endOfMonth = CanonFactory.getCanonDueDate(year, month + 1);
+
+        // Si la renovación es antes del fin del mes en curso,
+        // la cobertura extiende HASTA el fin del mes en curso (mes que paga).
+        // Si ya está expirada o es el mismo día de fin de mes, extiende 1 mes completo más.
+        if (renewalDate.getTime() < endOfMonth.getTime()) {
+            return endOfMonth;
+        } else {
+            return CanonFactory.getCanonDueDate(year, month + 2);
+        }
+    }
+
     static renewSubscription(
         subscription: Subscription,
         renewalDate: Date,
@@ -80,11 +99,7 @@ export class SubscriptionManager {
             throw new Error('No se puede renovar una suscripción inactiva.');
         }
 
-        // Calculamos precio mes completo
-        const year = renewalDate.getFullYear();
-        const month = renewalDate.getMonth();
-        // Último segundo del último día del mes actual
-        const endOfMonth = new Date(year, month + 1, 0, 23, 59, 59, 999);
+        const endOfMonth = this.calculateRenewalEndDate(renewalDate);
 
         const price = PricingEngine.calculateSubscriptionFee(
             subscription.type,
@@ -107,12 +122,12 @@ export class SubscriptionManager {
      * Helper temporal para calcular de forma segura el último milisegundo del MES SIGUIENTE
      * al mes del endDate actual, manejando años bisiestos y longitudes de meses dispares.
      */
-    static getNextCoverageEnd(currentEndDate: Date): Date {
-        const d = new Date(currentEndDate.getTime());
+    public static getNextCoverageEnd(currentCoverageEnd: Date | string): Date {
+        const d = new Date(currentCoverageEnd);
         const year = d.getFullYear();
         const month = d.getMonth();
         // El día 0 del mes "month + 2" es el último día del mes "month + 1"
-        return new Date(year, month + 2, 0, 23, 59, 59, 999);
+        return CanonFactory.getCanonDueDate(year, month + 2);
     }
 
     /**

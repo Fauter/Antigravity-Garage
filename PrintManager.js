@@ -219,7 +219,9 @@ function enqueuePrint(htmlContent, printerConfig = {}) {
  * Inicializa los handlers IPC del PrintManager.
  */
 function initPrintManager() {
-    console.log('🖨️ [PrintManager] Inicializando módulo de impresión silenciosa...');
+    if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') {
+        console.log('[PRINT:TRACE] Inicializando módulo de impresión silenciosa...');
+    }
 
     ipcMain.handle('print:silent', async (_event, htmlContent, printerConfig) => {
         if (!htmlContent || typeof htmlContent !== 'string') {
@@ -244,7 +246,9 @@ function initPrintManager() {
         }
     });
 
-    console.log('✅ [PrintManager] Handlers IPC registrados.');
+    if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') {
+        console.log('[PRINT:TRACE] Handlers IPC registrados.');
+    }
 }
 
 module.exports = { initPrintManager };

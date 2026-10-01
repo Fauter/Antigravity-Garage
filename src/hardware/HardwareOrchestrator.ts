@@ -250,7 +250,7 @@ export class HardwareOrchestrator {
                 this.handleAutomatedEntryFlow(type);
             });
 
-            console.log('[HW-DEBUG] ✅ Barrier bidirectional events wired (incl. button press)');
+            if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[HW:TRACE] ✅ Barrier bidirectional events wired (incl. button press)');
         } catch (err: any) {
             console.warn(`[HW-DEBUG] wireBarrierEvents failed: ${err.message}`);
         }
@@ -281,25 +281,26 @@ export class HardwareOrchestrator {
      * Initialize the hardware layer. Called from main.js (via the shim).
      */
     async initialize(mainWindow: BrowserWindow, isDev: boolean): Promise<void> {
-        console.log('[HW-DEBUG] Orchestrator Initializing...');
         this.mainWindow = mainWindow;
         this.isDev = isDev;
+
+        // ── Step 1: Load persistent config (synchronous, never throws) ──
+        this.config = loadHardwareConfig();
+        console.log(`[STARTUP][HW] barrier=${this.config.barrier.driver} | camera=${this.config.camera.driver} | ALPR=starting`);
 
         // Start ALPR Service
         this.alprManager = new AlprServiceManager();
         this.alprManager.start().catch(err => {
-            console.error(`[HW-DEBUG] ❌ Failed to start ALPR service:`, err);
+            console.error(`❌ [HW] Failed to start ALPR service:`, err);
         });
-
-        // ── Step 1: Load persistent config (synchronous, never throws) ──
-        this.config = loadHardwareConfig();
-        console.log(`[HW-DEBUG] Config loaded: barrier=${this.config.barrier.driver}, camera=${this.config.camera.driver}`);
 
         // ── Step 2: Register IPC handlers IMMEDIATELY (synchronous) ──
         if (!this._ipcRegistered) {
             this.registerIPCHandlers();
             this._ipcRegistered = true;
-            console.log('[HW-DEBUG] IPC handlers registered (before driver init)');
+            if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') {
+                console.log('[HW:TRACE] IPC handlers registered (before driver init)');
+            }
         }
 
         // ── Step 3: Register keyboard shortcut (synchronous) ──
@@ -319,12 +320,15 @@ export class HardwareOrchestrator {
             this.wireBarrierEvents();
 
             const status = this.registry.getStatus();
-            console.log(`[HW-DEBUG] Drivers initialized. Driver: ${status.driverType}. Ctrl+Shift+D → Simulator`);
-        } catch (err: any) {
-            console.error(`[HW-DEBUG] ❌ Driver initialization failed (system continues in degraded mode): ${err.message}`);
+            if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') {
+                console.log(`[HW:TRACE] Drivers initialized. Driver: ${status.driverType}. Ctrl+Shift+D -> Simulator`);
+            }
+        } catch (error: any) {
+            console.error('❌ [HW] Error initializing drivers:', error);
+            // Optionally, handle graceful degradation
         }
 
-        console.log('[HW-DEBUG] ✅ Orchestrator initialization complete');
+        console.log('[STARTUP][HW] orchestrator=READY');
     }
 
     // ── IPC Handlers ─────────────────────────────────────────────────
@@ -761,10 +765,10 @@ export class HardwareOrchestrator {
     // ── Simulator Window ─────────────────────────────────────────────
 
     private openSimulatorWindow(): void {
-        console.log('[HW-DEBUG] openSimulatorWindow() called');
+        if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[HW:TRACE] openSimulatorWindow() called');
 
         if (this.simulatorWindow && !this.simulatorWindow.isDestroyed()) {
-            console.log('[HW-DEBUG] Simulator already open, focusing');
+            if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[HW:TRACE] Simulator already open, focusing');
             this.simulatorWindow.focus();
             return;
         }
@@ -784,9 +788,9 @@ export class HardwareOrchestrator {
         const simulatorPath = path.join(rootDir, 'simulator.html');
         const preloadPath = path.join(rootDir, 'SimulatorPreload.js');
 
-        console.log('[HW-DEBUG] Simulator paths:', { rootDir, simulatorPath, preloadPath });
-        console.log('[HW-DEBUG] simulator.html exists:', fs.existsSync(simulatorPath));
-        console.log('[HW-DEBUG] SimulatorPreload.js exists:', fs.existsSync(preloadPath));
+        if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[HW:TRACE] Simulator paths:', { rootDir, simulatorPath, preloadPath });
+        if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[HW:TRACE] simulator.html exists:', fs.existsSync(simulatorPath));
+        if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[HW:TRACE] SimulatorPreload.js exists:', fs.existsSync(preloadPath));
 
         if (!fs.existsSync(simulatorPath)) {
             console.error('[HW-DEBUG] ❌ simulator.html not found at:', simulatorPath);
@@ -813,14 +817,14 @@ export class HardwareOrchestrator {
             this.simulatorWindow = null;
         });
 
-        console.log('[HW-DEBUG] 🎮 Simulator window opened successfully');
+        if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[HW:TRACE] 🎮 Simulator window opened successfully');
     }
 
     // ── Keyboard Shortcut ────────────────────────────────────────────
 
     private registerSimulatorShortcut(): void {
         if (this._shortcutRegistered) {
-            console.log('[HW-DEBUG] Shortcut already registered, skipping');
+            if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[HW:TRACE] Shortcut already registered, skipping');
             return;
         }
 
@@ -831,16 +835,16 @@ export class HardwareOrchestrator {
 
         const accelerator = 'CommandOrControl+Shift+D';
         const registered = globalShortcut.register(accelerator, () => {
-            console.log('[HW-DEBUG] 🎹 Ctrl+Shift+D pressed (globalShortcut fired)');
+            if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[HW:TRACE] 🎹 Ctrl+Shift+D pressed (globalShortcut fired)');
 
             if (this.mainWindow && !this.mainWindow.isDestroyed() && this.mainWindow.isFocused()) {
-                console.log('[HW-DEBUG] mainWindow is focused — opening simulator');
+                if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[HW:TRACE] mainWindow is focused — opening simulator');
                 this.openSimulatorWindow();
             } else if (this.simulatorWindow && !this.simulatorWindow.isDestroyed() && this.simulatorWindow.isFocused()) {
-                console.log('[HW-DEBUG] simulatorWindow is focused — focusing simulator');
+                if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[HW:TRACE] simulatorWindow is focused — focusing simulator');
                 this.simulatorWindow.focus();
             } else {
-                console.log('[HW-DEBUG] App not focused — ignoring shortcut');
+                if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[HW:TRACE] App not focused — ignoring shortcut');
             }
         });
 
@@ -852,7 +856,7 @@ export class HardwareOrchestrator {
         }
 
         this.mainWindow.on('closed', () => {
-            console.log('[HW-DEBUG] mainWindow closed — unregistering globalShortcut');
+            if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[HW:TRACE] mainWindow closed — unregistering globalShortcut');
             globalShortcut.unregister(accelerator);
             this._shortcutRegistered = false;
         });

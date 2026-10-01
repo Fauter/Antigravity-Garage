@@ -417,10 +417,19 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                     >
                         {/* @ts-ignore */}
                         {(syncStatus?.state === 'BACKEND_UNREACHABLE' || syncStatus?.state === 'OFFLINE') ? (
-                            <div className="flex items-center gap-1.5 px-2 py-0.5 bg-gray-900/60 border border-gray-700/50 rounded text-gray-400 font-mono shadow-sm cursor-pointer" title="Terminal offline">
-                                <WifiOff className="w-3.5 h-3.5" />
-                                <span className="text-[10px] uppercase tracking-widest pt-0.5 font-bold">SIN CONEXIÓN</span>
-                            </div>
+                            // @ts-ignore
+                            syncStatus?.pending > 0 ? (
+                                <div className="flex items-center gap-1.5 px-2 py-0.5 bg-amber-900/30 border border-amber-700/50 rounded text-amber-500 font-mono shadow-sm cursor-pointer" title={`${syncStatus?.pending} pendientes - Terminal offline`}>
+                                    <WifiOff className="w-3.5 h-3.5" />
+                                    {/* @ts-ignore */}
+                                    <span className="text-[10px] uppercase tracking-widest pt-0.5 font-bold">OFFLINE · {syncStatus?.pending} PEND.</span>
+                                </div>
+                            ) : (
+                                <div className="flex items-center gap-1.5 px-2 py-0.5 bg-emerald-900/30 border border-emerald-700/50 rounded text-emerald-600 font-mono shadow-sm cursor-pointer" title="Terminal offline - Modo Local Operativo">
+                                    <WifiOff className="w-3.5 h-3.5" />
+                                    <span className="text-[10px] uppercase tracking-widest pt-0.5 font-bold">SIN INTERNET · LOCAL OK</span>
+                                </div>
+                            )
                         // @ts-ignore
                         ) : syncStatus?.state === 'HAS_BLOCKED_MUTATIONS' || (syncStatus?.blocked > 0) ? (
                             <div className="flex items-center gap-1.5 px-2 py-0.5 bg-amber-900/20 border border-amber-500/30 rounded text-amber-500 font-mono shadow-sm cursor-pointer" title={`${syncStatus?.blocked ?? 0} cambios de sincronización requieren atención`}>

@@ -53,7 +53,7 @@ export class DriverRegistry {
         // Start connection monitors for non-mock drivers
         this.startMonitors(config, onStateChange);
 
-        console.log('✅ [DriverRegistry] All drivers initialized');
+        if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[HW:TRACE] All drivers initialized');
     }
 
     /**

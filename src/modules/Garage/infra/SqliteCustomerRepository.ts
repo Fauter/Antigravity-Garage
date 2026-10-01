@@ -7,9 +7,17 @@ export class SqliteCustomerRepository extends BaseSqliteRepository<Customer> {
         super('customers', 'Customer');
     }
 
-    async findByDni(dni: string): Promise<Customer | null> {
+    async findByDni(dni: string, garageId?: string): Promise<Customer | null> {
         const db = SQLiteManager.getInstance().getDatabase();
-        const row = db.prepare(`SELECT json_data FROM customers WHERE json_extract(json_data, '$.dni') = ?`).get(dni) as any;
+        let query = `SELECT json_data FROM customers WHERE json_extract(json_data, '$.dni') = ?`;
+        const params: any[] = [dni];
+        
+        if (garageId) {
+            query += ` AND json_extract(json_data, '$.garageId') = ?`;
+            params.push(garageId);
+        }
+        
+        const row = db.prepare(query).get(...params) as any;
         if (!row) return null;
         return JSON.parse(row.json_data);
     }

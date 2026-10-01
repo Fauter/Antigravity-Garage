@@ -6,6 +6,7 @@ export type EngineState = 'NEDB' | 'CUTOVER_PREPARED' | 'SQLITE';
 
 export class StorageEngine {
     private static inMemoryEngine: EngineState | null = null;
+    public static isFirstRunSession: boolean = false;
 
     private static getMarkerPath(): string {
         const isTestEnv = Boolean(process.env.NODE_ENV === 'test' || process.env.VITEST);
@@ -17,38 +18,81 @@ export class StorageEngine {
         return path.join(DATA_DIR, 'storage-engine.json');
     }
 
+    private static lastLogHash: string | null = null;
+
     public static getEngine(): EngineState {
         const isTestEnv = Boolean(process.env.NODE_ENV === 'test' || process.env.VITEST);
         if (isTestEnv && this.inMemoryEngine) {
             return this.inMemoryEngine;
         }
+
         const markerPath = this.getMarkerPath();
-        if (fs.existsSync(markerPath)) {
+        const markerExists = fs.existsSync(markerPath);
+        
+        let markerEngine: EngineState | null = null;
+        let hasValidMarker = false;
+        if (markerExists) {
             try {
                 const data = fs.readFileSync(markerPath, 'utf-8');
                 const parsed = JSON.parse(data);
                 if (['NEDB', 'CUTOVER_PREPARED', 'SQLITE'].includes(parsed.engine)) {
-                    return parsed.engine as EngineState;
+                    markerEngine = parsed.engine as EngineState;
+                    hasValidMarker = true;
                 }
             } catch (e) {
-                console.error('Error reading storage-engine.json:', e);
+                console.error('[STORAGE] Error reading storage-engine.json:', e);
             }
         }
         
-        // Post-cutover policy: If marker is missing but garageia.sqlite exists, we are in SQLITE mode.
-        // We NEVER silently fallback to NEDB if the SQLite DB is already active.
         const sqliteDbPath = path.join(DATA_DIR, 'garageia.sqlite');
-        if (fs.existsSync(sqliteDbPath)) {
-            console.warn('⚠️ [StorageEngine] Marker file missing but garageia.sqlite exists. Auto-recovering marker to SQLITE.');
-            this.setEngine('SQLITE');
-            return 'SQLITE';
+        const sqliteExists = fs.existsSync(sqliteDbPath);
+        
+        const legacyPath = path.join(DATA_DIR, 'customers.db');
+        const legacyExists = fs.existsSync(legacyPath);
+        
+        let resolvedEngine: EngineState | null = null;
+        let resolutionReason = '';
+
+        if (hasValidMarker && markerEngine) {
+            resolvedEngine = markerEngine;
+            resolutionReason = 'USE_MARKER';
+        } else if (!hasValidMarker && sqliteExists) {
+            resolvedEngine = 'SQLITE';
+            resolutionReason = 'RECOVER_SQLITE';
+        } else if (!hasValidMarker && !sqliteExists && !legacyExists) {
+            resolvedEngine = 'SQLITE';
+            resolutionReason = 'FIRST_RUN_SQLITE';
+            this.isFirstRunSession = true;
+        } else if (!hasValidMarker && !sqliteExists && legacyExists) {
+            resolvedEngine = 'NEDB';
+            resolutionReason = 'RECOVER_NEDB_LEGACY';
+        } else if (process.env.ALLOW_LEGACY_NEDB === 'true') {
+            resolvedEngine = 'NEDB';
+            resolutionReason = 'ALLOW_LEGACY_NEDB_OVERRIDE';
         }
 
-        if (process.env.ALLOW_LEGACY_NEDB === 'true') {
-            return 'NEDB';
+        if (!resolvedEngine) {
+            console.error('[STORAGE:FATAL] Cannot determine safe storage engine. Ambiguous state.');
+            throw new Error('FATAL: Storage marker missing, no clear state detected (First Run vs Legacy vs SQLite). Cannot determine active engine safely.');
         }
-        
-        throw new Error('FATAL: Storage marker missing and ALLOW_LEGACY_NEDB is not true. Cannot determine active engine.');
+
+        const currentLogHash = `${resolvedEngine}|${sqliteExists}|${legacyExists}|${markerEngine}|${resolutionReason}`;
+        if (this.lastLogHash !== currentLogHash) {
+            this.lastLogHash = currentLogHash;
+            if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') {
+                console.log(`[STORAGE:TRACE] markerPath=${markerPath}`);
+                console.log(`[STORAGE:TRACE] markerExists=${markerExists}`);
+                console.log(`[STORAGE:TRACE] sqliteExists=${sqliteExists}`);
+                console.log(`[STORAGE:TRACE] legacyExists=${legacyExists}`);
+            }
+            console.log(`[STORAGE] engine=${resolvedEngine} | sqlite=${sqliteExists ? 'present' : 'missing'} | legacy=${legacyExists ? 'present' : 'missing'} | marker=${markerEngine || 'missing'} | reason=${resolutionReason}`);
+        }
+
+        if (resolutionReason !== 'USE_MARKER' && resolutionReason !== 'ALLOW_LEGACY_NEDB_OVERRIDE') {
+            this.setEngine(resolvedEngine);
+        }
+
+        return resolvedEngine;
     }
 
     public static setEngine(engine: EngineState): void {
@@ -61,23 +105,25 @@ export class StorageEngine {
         const payload = JSON.stringify({ engine, timestamp: new Date().toISOString() });
         
         try {
-            // Escribir temp
+            // Write temp
             fs.writeFileSync(tmpPath, payload, 'utf-8');
             
-            // Sincronizar archivo al disco
+            // Sync to disk
             try {
                 const fd = fs.openSync(tmpPath, 'r+');
                 fs.fsyncSync(fd);
                 fs.closeSync(fd);
             } catch {}
             
-            // Rename atómico
+            // Atomic rename
             fs.renameSync(tmpPath, markerPath);
         } catch (err) {
             // Fallback direct write if rename was locked by concurrent worker
             fs.writeFileSync(markerPath, payload, 'utf-8');
             try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch {}
         }
-        console.log(`[StorageEngine] Marker actualizado a: ${engine}`);
+        if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') {
+            console.log(`[STORAGE:TRACE] Marker updated to: ${engine}`);
+        }
     }
 }

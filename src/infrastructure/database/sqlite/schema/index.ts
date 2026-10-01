@@ -2,6 +2,20 @@ export const FRESH_SCHEMA = `
 -- MIGRATION 002: Production Schema (V2)
 
 -- Domain tables
+
+CREATE TABLE IF NOT EXISTS correlative_leases (
+    garage_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    active_start INTEGER NOT NULL DEFAULT 0,
+    active_end INTEGER NOT NULL DEFAULT 0,
+    last_issued INTEGER NOT NULL DEFAULT 0,
+    reserve_start INTEGER NOT NULL DEFAULT 0,
+    reserve_end INTEGER NOT NULL DEFAULT 0,
+    active_request_id TEXT,
+    reserve_request_id TEXT,
+    pending_request_id TEXT,
+    PRIMARY KEY (garage_id, type)
+);
 CREATE TABLE IF NOT EXISTS garages (id TEXT PRIMARY KEY, json_data TEXT);
 CREATE TABLE IF NOT EXISTS financial_configs (id TEXT PRIMARY KEY, json_data TEXT);
 CREATE TABLE IF NOT EXISTS vehicle_types (id TEXT PRIMARY KEY, json_data TEXT);

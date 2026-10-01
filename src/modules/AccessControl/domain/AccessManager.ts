@@ -81,15 +81,14 @@ export class AccessManager {
         if (!finalGarageId) console.warn('ÔÜá´©Å AccessManager: Stay missing garageId, pricing might fail.');
 
         // Direct DB Access for Pricing (Unified Logic with routes.ts)
-        // We bypass ConfigRepo to ensure we read exactly what is in the local NeDB
+        const configRepoModule = await import('../../Configuration/infra/ConfigRepository');
+        const configRepo = new configRepoModule.ConfigRepository();
+
         const priceRepo = {
             getPrices: async (method: string) => {
-                const listFilter = (method === 'EFECTIVO') ? 'standard' : 'electronic';
-
-                // Fetch from Local DB
-                const prices: any[] = await db.prices.find({ garageId: finalGarageId, priceList: listFilter });
-                const schemas: any[] = await db.vehicleTypes.find({ garageId: finalGarageId });
-                const tariffs: any[] = await db.tariffs.find({ garageId: finalGarageId });
+                const prices: any[] = await configRepo.getPrices(finalGarageId, method);
+                const schemas: any[] = await configRepo.getVehicleTypes(finalGarageId);
+                const tariffs: any[] = await configRepo.getTariffs(finalGarageId);
 
                 const matrix: any = {};
                 const vMap = new Map(schemas.map((v: any) => [v.id, v.name]));
@@ -100,19 +99,16 @@ export class AccessManager {
                     const tId = p.tariffId || p.tariff_id;
                     const vName = vMap.get(vId);
                     const tName = tMap.get(tId);
-
                     if (vName && tName) {
                         if (!matrix[vName]) matrix[vName] = {};
                         matrix[vName][tName] = Number(p.amount);
                     }
                 });
-                console.log("Matriz Generada para Engine (Direct DB):", JSON.stringify(matrix));
+                console.log("Matriz Generada para Engine (ConfigRepo):", JSON.stringify(matrix));
                 return matrix;
             }
         };
 
-        // Mock Repos (Engine only needs getAll/getParams)
-        const configRepo = new (require('../../Configuration/infra/ConfigRepository').ConfigRepository)();
         const tariffRepo = { getAll: () => configRepo.getTariffs(finalGarageId) };
         const paramRepo = { getParams: () => configRepo.getParams(finalGarageId) };
 
@@ -272,12 +268,14 @@ export class AccessManager {
         }
 
         // Direct DB Access (identical to processExit)
+        const configRepoModule = await import('../../Configuration/infra/ConfigRepository');
+        const configRepo = new configRepoModule.ConfigRepository();
+
         const priceRepo = {
             getPrices: async (method: string) => {
-                const listFilter = (method === 'EFECTIVO') ? 'standard' : 'electronic';
-                const prices: any[] = await db.prices.find({ garageId: finalGarageId, priceList: listFilter });
-                const schemas: any[] = await db.vehicleTypes.find({ garageId: finalGarageId });
-                const tariffs: any[] = await db.tariffs.find({ garageId: finalGarageId });
+                const prices: any[] = await configRepo.getPrices(finalGarageId, method);
+                const schemas: any[] = await configRepo.getVehicleTypes(finalGarageId);
+                const tariffs: any[] = await configRepo.getTariffs(finalGarageId);
 
                 const matrix: any = {};
                 const vMap = new Map(schemas.map((v: any) => [v.id, v.name]));
@@ -297,7 +295,6 @@ export class AccessManager {
             }
         };
 
-        const configRepo = new (require('../../Configuration/infra/ConfigRepository').ConfigRepository)();
         const tariffRepo = { getAll: () => configRepo.getTariffs(finalGarageId) };
         const paramRepo = { getParams: () => configRepo.getParams(finalGarageId) };
 

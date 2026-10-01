@@ -9,12 +9,19 @@ import { StorageEngine } from '../../../infrastructure/database/StorageEngine';
 
 const MARKER_PATH = path.join(process.cwd(), '.data', 'storage-engine.json');
 
+import { CorrelativeService } from '../../../shared/CorrelativeService';
+vi.spyOn(CorrelativeService, 'ensureMovementLeaseAvailable').mockResolvedValue();
+vi.spyOn(CorrelativeService, 'ensureStayLeaseAvailable').mockResolvedValue();
+vi.spyOn(CorrelativeService, 'consumeStayTicketLocal').mockReturnValue('E0000001');
+vi.spyOn(CorrelativeService, 'consumeMovementTicketLocal').mockReturnValue('00000001');
+
 describe('AccessController - Prepaid Validation', () => {
     let controller: AccessController;
     let req: any;
     let res: any;
 
     beforeEach(() => {
+
         // Force NEDB to avoid SQLite Singleton persistence issues between tests
         if (fs.existsSync(MARKER_PATH)) {
             fs.unlinkSync(MARKER_PATH);

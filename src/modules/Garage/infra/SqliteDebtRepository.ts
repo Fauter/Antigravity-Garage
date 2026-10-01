@@ -5,6 +5,7 @@ import { CanonicalEntityHelper } from '../../../infrastructure/database/sqlite/C
 
 import { CanonFactory } from '../domain/CanonFactory';
 import { BillingPeriodHelper } from '../../Billing/domain/BillingPeriodHelper';
+import { DebtSelector } from '../../Billing/domain/DebtSelector';
 
 export class SqliteDebtRepository extends BaseSqliteRepository<Debt> {
     constructor() {
@@ -59,6 +60,20 @@ export class SqliteDebtRepository extends BaseSqliteRepository<Debt> {
                 return false;
             }
         }) || null;
+    }
+
+    async findCanonBySubscriptionGarageAndPeriod(subscriptionId: string, garageId: string, billingPeriod: string): Promise<Debt | null> {
+        const allDebts = await this.findBySubscriptionId(subscriptionId);
+        const matched = allDebts.filter(d => 
+            ((d as any).garageId === garageId || (d as any).garage_id === garageId) &&
+            d.type === 'CANON' &&
+            DebtSelector.getBillingPeriodKey(d) === billingPeriod
+        );
+
+        if (matched.length > 0) {
+            return matched[0];
+        }
+        return null;
     }
 
     async save(debt: Debt, arg2?: any, arg3?: any): Promise<Debt> {

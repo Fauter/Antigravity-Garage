@@ -3,6 +3,7 @@ import { db } from '../../../infrastructure/database/datastore.js';
 import { QueueService } from '../../Sync/application/QueueService.js';
 import { StorageEngine } from '../../../infrastructure/database/StorageEngine.js';
 import { SqliteDebtRepository } from './SqliteDebtRepository.js';
+import { DebtSelector } from '../../Billing/domain/DebtSelector.js';
 
 import { CanonFactory } from '../domain/CanonFactory';
 
@@ -53,6 +54,20 @@ export class NeDBDebtRepository {
         return debt || null;
     }
 
+    async findCanonBySubscriptionGarageAndPeriod(subscriptionId: string, garageId: string, billingPeriod: string): Promise<Debt | null> {
+        const allDebts = await this.findBySubscriptionId(subscriptionId);
+        const matched = allDebts.filter(d => 
+            ((d as any).garageId === garageId || (d as any).garage_id === garageId) &&
+            d.type === 'CANON' &&
+            DebtSelector.getBillingPeriodKey(d) === billingPeriod
+        );
+
+        if (matched.length > 0) {
+            return matched[0];
+        }
+        return null;
+    }
+
     async findAll(): Promise<Debt[]> {
         return await db.debts.find({}) as Debt[];
     }
@@ -69,5 +84,6 @@ export class DebtRepository {
     async findByCustomerId(customerId: string): Promise<Debt[]> { return this.impl.findByCustomerId(customerId); }
     async findBySubscriptionId(subscriptionId: string): Promise<Debt[]> { return this.impl.findBySubscriptionId(subscriptionId); }
     async findCanonBySubscriptionAndPeriod(subscriptionId: string, billingPeriod: string): Promise<Debt | null> { return this.impl.findCanonBySubscriptionAndPeriod(subscriptionId, billingPeriod); }
+    async findCanonBySubscriptionGarageAndPeriod(subscriptionId: string, garageId: string, billingPeriod: string): Promise<Debt | null> { return this.impl.findCanonBySubscriptionGarageAndPeriod(subscriptionId, garageId, billingPeriod); }
     async findAll(): Promise<Debt[]> { return this.impl.findAll(); }
 }

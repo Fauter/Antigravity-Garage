@@ -75,9 +75,9 @@ export class AlprServiceManager {
             return false; // Evitamos el spawn y el fatal error.
         }
 
-        console.log(`🚀 [AlprServiceManager] Iniciando servicio FastALPR...`);
-        console.log(`[AlprServiceManager] CMD: ${cmd}`);
-        console.log(`[AlprServiceManager] CWD: ${cwd}`);
+        if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') {
+            console.log(`[ALPR:TRACE] Starting FastALPR service... CMD: ${cmd} | CWD: ${cwd}`);
+        }
         
         try {
             this.process = spawn(cmd, args, { 
@@ -141,7 +141,7 @@ export class AlprServiceManager {
                 if (res.ok) {
                     const data = await res.json() as any;
                     if (data.status === 'ready') {
-                        console.log(`✅ [AlprServiceManager] El servicio está READY.`);
+                        console.log(`[STARTUP][HW] ALPR=READY`);
                         this.restartAttempts = 0;
                         return true;
                     }

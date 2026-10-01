@@ -50,7 +50,7 @@ const CometSpinner = () => (
 );
 
 export const InitialSyncScreen: React.FC = () => {
-    const { initialSyncState, retryInitialSync, continueOffline } = useAuth();
+    const { initialSyncState, retryInitialSync, continueWithLocalData } = useAuth();
 
     return (
         <>
@@ -72,7 +72,7 @@ export const InitialSyncScreen: React.FC = () => {
                             Sin conexión
                         </p>
                         <button 
-                            onClick={continueOffline}
+                            onClick={continueWithLocalData}
                             className="px-6 py-2 bg-gray-800/80 hover:bg-gray-700 text-white font-medium text-sm rounded-lg backdrop-blur-md border border-gray-600 transition-colors"
                         >
                             Continuar
@@ -81,9 +81,9 @@ export const InitialSyncScreen: React.FC = () => {
                 ) : (
                     <div className="flex flex-col items-center max-w-sm text-center animate-in fade-in zoom-in duration-300">
                         <AlertTriangle className="w-12 h-12 text-amber-500 mb-4" />
-                        <h2 className="text-xl font-semibold text-amber-400 mb-2 font-sans">Demora en conexión</h2>
+                        <h2 className="text-xl font-semibold text-amber-400 mb-2 font-sans">La sincronización está tardando más de lo esperado</h2>
                         <p className="text-gray-200 text-sm mb-8 font-sans">
-                            La operación está tardando más de lo esperado.
+                            La descarga inicial de datos continúa en progreso.
                         </p>
                         <div className="flex w-full gap-4 justify-center">
                             <button 
@@ -93,10 +93,10 @@ export const InitialSyncScreen: React.FC = () => {
                                 Reintentar
                             </button>
                             <button 
-                                onClick={continueOffline}
+                                onClick={continueWithLocalData}
                                 className="px-6 py-2 bg-gray-800/80 hover:bg-gray-700 text-white font-medium text-sm rounded-lg backdrop-blur-md border border-gray-600 transition-colors"
                             >
-                                Continuar offline
+                                Continuar con datos locales
                             </button>
                         </div>
                     </div>

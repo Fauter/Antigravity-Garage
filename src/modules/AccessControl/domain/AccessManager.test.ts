@@ -1,7 +1,16 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { v4 as uuidv4 } from 'uuid';
 import { AccessManager, AccessConfig } from './AccessManager';
 import { Stay, Movement } from '../../../shared/schemas';
+
+vi.mock('../../Configuration/infra/ConfigRepository', () => ({
+    ConfigRepository: class {
+        async getPrices() { return []; }
+        async getVehicleTypes() { return []; }
+        async getTariffs() { return []; }
+        async getParams() { return { gracePeriodLimit: 15, currentStrategy: 'default' }; }
+    }
+}));
 
 describe('AccessManager', () => {
     const mockConfig: AccessConfig = {

@@ -220,6 +220,9 @@ const CajaPage: React.FC = () => {
     const [reprintLoading, setReprintLoading] = useState(false);
     const [reprintSearch, setReprintSearch] = useState('');
     const [reprintingId, setReprintingId] = useState<string | null>(null);
+    const [reprintOffset, setReprintOffset] = useState(0);
+    const [hasMoreReprint, setHasMoreReprint] = useState(true);
+    const REPRINT_LIMIT = 50;
 
     // Keep raw movements for reprint cross-reference
     const [rawMovements, setRawMovements] = useState<Movement[]>([]);
@@ -311,90 +314,48 @@ const CajaPage: React.FC = () => {
         }
     };
 
-    // Fetch recent stays for Reprint Center
+    // Load reprint data when modal opens or offset changes
     useEffect(() => {
         if (isReprintModalOpen) {
-            loadReprintData();
+            loadReprintData(reprintOffset === 0);
         }
-    }, [isReprintModalOpen]);
+    }, [isReprintModalOpen, reprintOffset]);
 
-    const loadReprintData = async () => {
+    // Handle Search debounce
+    useEffect(() => {
+        if (!isReprintModalOpen) return;
+        const delayDebounceFn = setTimeout(() => {
+            setReprintOffset(0);
+            loadReprintData(true);
+        }, 500);
+        return () => clearTimeout(delayDebounceFn);
+    }, [reprintSearch]);
+
+    const loadReprintData = async (reset = false) => {
         setReprintLoading(true);
         try {
-            const staysRes = await api.get('/estadias/recientes');
-            setRecentStays(staysRes.data || []);
+            const currentOffset = reset ? 0 : reprintOffset;
+            const res = await api.get(`/reimpresion/buscar?limit=${REPRINT_LIMIT}&offset=${currentOffset}&search=${encodeURIComponent(reprintSearch)}`);
+            const data = res.data || [];
+            
+            // Backend already unified and sorted them!
+            if (reset) {
+                setReprintItems(data);
+            } else {
+                setReprintItems(prev => {
+                    const existingIds = new Set(prev.map(i => i.id));
+                    const newItems = data.filter((i: any) => !existingIds.has(i.id));
+                    return [...prev, ...newItems];
+                });
+            }
+            setHasMoreReprint(data.length === REPRINT_LIMIT);
         } catch (error) {
-            console.error('Error loading recent stays for reprint:', error);
-            toast.error('Error al cargar estadías recientes');
+            console.error('Error loading reprint items:', error);
+            toast.error('Error al cargar tickets');
         } finally {
             setReprintLoading(false);
         }
     };
-
-    // Build unified reprint list from stays + movements
-    useEffect(() => {
-        const items: ReprintItem[] = [];
-        const seenIds = new Set<string>();
-
-        // 1. Add Entry tickets from recent stays (entries that have NO corresponding CobroEstadia movement)
-        for (const stay of recentStays) {
-            const stayId = stay.id || stay._id || '';
-            if (!stayId || seenIds.has(`entry-${stayId}`)) continue;
-
-            // Every stay is a potential Entry ticket reprint
-            items.push({
-                id: `entry-${stayId}`,
-                type: 'Entrada',
-                plate: stay.plate,
-                timestamp: stay.entryTime,
-                _stay: stay,
-            });
-            seenIds.add(`entry-${stayId}`);
-        }
-
-        // 2. Add Exit/Abono/Upgrade tickets from movements
-        for (const mov of rawMovements) {
-            const movId = mov.id || '';
-            if (!movId) continue;
-
-            if (mov.type === 'CobroEstadia') {
-                if (seenIds.has(`exit-${movId}`)) continue;
-                items.push({
-                    id: `exit-${movId}`,
-                    type: 'CobroEstadia',
-                    plate: mov.plate,
-                    timestamp: mov.timestamp,
-                    amount: mov.amount,
-                    paymentMethod: mov.paymentMethod || mov.payment_method,
-                    operator: mov.operator,
-                    notes: mov.notes,
-                    _movement: mov,
-                });
-                seenIds.add(`exit-${movId}`);
-            } else if (mov.type === 'CobroAbono') {
-                // Distinguish Upgrade vs regular Abono based on notes
-                const isUpgrade = mov.notes && mov.notes.toLowerCase().includes('upgrade');
-                if (seenIds.has(`abono-${movId}`)) continue;
-                items.push({
-                    id: isUpgrade ? `upgrade-${movId}` : `abono-${movId}`,
-                    type: isUpgrade ? 'Upgrade' : 'CobroAbono',
-                    plate: mov.plate,
-                    timestamp: mov.timestamp,
-                    amount: mov.amount,
-                    paymentMethod: mov.paymentMethod || mov.payment_method,
-                    operator: mov.operator,
-                    notes: mov.notes,
-                    _movement: mov,
-                });
-                seenIds.add(isUpgrade ? `upgrade-${movId}` : `abono-${movId}`);
-            }
-        }
-
-        // Sort by timestamp descending
-        items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-        setReprintItems(items);
-    }, [recentStays, rawMovements]);
 
     // --- Reprint Handlers ---
 
@@ -431,15 +392,14 @@ const CajaPage: React.FC = () => {
             return;
         }
 
-        PrinterService.printEntryTicket({
-            id: stay.id || stay._id,
-            plate: stay.plate,
-            entryTime: stay.entryTime,
-            entry_time: stay.entryTime,
-            vehicleType: stay.vehicleType || 'Auto',
-            ticket_code: stay.ticket_code,
-        });
-        toast.success(`Reimprimiendo Ticket Entrada: ${stay.plate}`);
+        if (stay.is_prepaid || stay.isPrepaid) {
+            const mov = item._movement || {};
+            PrinterService.printPrepaidEntryTicket(stay, mov, 'Pago Anticipado');
+            toast.success(`Reimprimiendo Ticket Anticipado: ${stay.plate}`);
+        } else {
+            PrinterService.printEntryTicket(stay);
+            toast.success(`Reimprimiendo Ticket Entrada: ${stay.plate}`);
+        }
     };
 
     const handleReprintExit = (item: ReprintItem) => {
@@ -449,23 +409,11 @@ const CajaPage: React.FC = () => {
             return;
         }
 
-        // Find matching stay for this exit movement (by plate, closest timestamp)
-        const matchingStay = recentStays.find(s =>
-            s.plate === mov.plate && s.exitTime
-        ) || recentStays.find(s => s.plate === mov.plate);
-
-        // Reconstruct the stay object for printExitTicket
-        const stayForPrint: any = {
-            id: matchingStay?.id || matchingStay?._id || 'UNKNOWN',
-            plate: mov.plate,
-            entryTime: matchingStay?.entryTime || mov.timestamp,
-            entry_time: matchingStay?.entryTime || mov.timestamp,
-            exitTime: matchingStay?.exitTime || mov.timestamp,
-            exit_time: matchingStay?.exitTime || mov.timestamp,
-            isSubscriber: matchingStay?.isSubscriber || matchingStay?.is_subscriber || false,
-            is_subscriber: matchingStay?.isSubscriber || matchingStay?.is_subscriber || false,
-            ticket_code: matchingStay?.ticket_code,
-        };
+        const matchingStay = item._stay;
+        if (!matchingStay) {
+            toast.error('No se encontraron los datos originales necesarios para reimprimir este ticket.');
+            return;
+        }
 
         // Parse duration from notes if contains "Por Xhs" pattern
         let durationNote = mov.notes || 'N/A';
@@ -483,7 +431,7 @@ const CajaPage: React.FC = () => {
             receipt_number: mov.receipt_number || mov.ticket_code,
         };
 
-        PrinterService.printExitTicket(stayForPrint, movementForPrint);
+        PrinterService.printExitTicket(matchingStay, movementForPrint);
         toast.success(`Reimprimiendo Ticket Salida: ${mov.plate}`);
     };
 
@@ -543,12 +491,8 @@ const CajaPage: React.FC = () => {
         toast.success(`Reimprimiendo Ticket Upgrade: ${mov.plate}`);
     };
 
-    // Filtered reprint items by search
-    const filteredReprintItems = reprintSearch.trim()
-        ? reprintItems.filter(item =>
-            item.plate?.toLowerCase().includes(reprintSearch.toLowerCase().trim())
-        )
-        : reprintItems;
+    // Filtered reprint items by search (handled by backend now)
+    const filteredReprintItems = reprintItems;
 
     const handleShiftClose = async () => {
         try {
@@ -1198,7 +1142,7 @@ const CajaPage: React.FC = () => {
                                     {filteredReprintItems.length} ticket{filteredReprintItems.length !== 1 ? 's' : ''} disponible{filteredReprintItems.length !== 1 ? 's' : ''}
                                 </p>
                                 <button
-                                    onClick={loadReprintData}
+                                    onClick={() => { setReprintOffset(0); loadReprintData(true); }}
                                     disabled={reprintLoading}
                                     className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-sky-400 transition-colors disabled:opacity-50"
                                 >
@@ -1284,6 +1228,18 @@ const CajaPage: React.FC = () => {
                                             </button>
                                         </div>
                                     ))}
+                                    {hasMoreReprint && (
+                                        <div className="pt-4 pb-2 flex justify-center">
+                                            <button
+                                                onClick={() => setReprintOffset(prev => prev + REPRINT_LIMIT)}
+                                                disabled={reprintLoading}
+                                                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-lg transition-colors border border-slate-700 hover:text-white flex items-center gap-2"
+                                            >
+                                                {reprintLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                                                Mostrar anteriores
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>

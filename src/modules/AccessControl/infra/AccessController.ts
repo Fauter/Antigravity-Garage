@@ -10,7 +10,8 @@ import { AttachmentService } from '../../Sync/application/AttachmentService';
 import { JsonDB } from '../../../infrastructure/database/json-db';
 // NeDB datastore removed
 import { v4 as uuidv4 } from 'uuid';
-import { CorrelativeGenerator } from '../../../shared/CorrelativeGenerator';
+import { CorrelativeService } from '../../../shared/CorrelativeService';
+import { SQLiteManager } from '../../../infrastructure/database/sqlite/SQLiteManager';
 import { TransactionHelper } from '../../../infrastructure/database/sqlite/TransactionHelper';
 
 interface VehicleTypeData {
@@ -32,7 +33,7 @@ export class AccessController {
     private getGarageOwnerId(garageId: string): string | undefined {
         if (!garageId) return undefined;
         try {
-            const SQLiteManager = require('../../../infrastructure/database/sqlite/SQLiteManager').SQLiteManager;
+            
             const sqliteDb = SQLiteManager.getInstance().getDatabase();
             const row = sqliteDb.prepare('SELECT json_data FROM garages WHERE id = ?').get(garageId) as any;
             if (row && row.json_data) {
@@ -274,16 +275,23 @@ export class AccessController {
             // 6. Persist with atomic transaction
             let savedStay: any = entry;
             try {
-                await TransactionHelper.runAsync(async (tx) => {
+                let __success = false;
+            let __attempts = 0;
+            while (!__success && __attempts < 3) {
+                __attempts++;
+                try {
+                    await CorrelativeService.ensureStayLeaseAvailable(garageId);
+                    if (prepaidMovement) await CorrelativeService.ensureMovementLeaseAvailable(garageId);
+                    await TransactionHelper.runAsync(async (tx) => {
                     // Generate atomic Stay ticket code
-                    const finalTicketCode = await CorrelativeGenerator.nextStayTicket(garageId, tx);
+                    const finalTicketCode = CorrelativeService.consumeStayTicketLocal(garageId, tx);
                     (entry as any).ticket_code = finalTicketCode;
                     (entry as any).ticketCode = finalTicketCode;
                     
                     savedStay = await this.stayRepository.save(entry as any, 'CREATE', tx);
                     
                     if (prepaidMovement) {
-                        const nextCode = CorrelativeGenerator.allocateMovementTicketCode(garageId, tx);
+                        const nextCode = CorrelativeService.consumeMovementTicketLocal(garageId, tx);
                         prepaidMovement.ticket_code = nextCode;
                         prepaidMovement.receipt_number = nextCode;
                         await this.movementRepository.save(prepaidMovement as any, 'CREATE', tx);
@@ -296,6 +304,12 @@ export class AccessController {
                         console.log(`🚗 Entry: Vehicle ${vehicleId} saved/updated for ${plate}`);
                     }
                 });
+                    __success = true;
+                } catch (err: any) {
+                    if (err.message?.includes('LOCAL_LEASE_EXHAUSTED') && __attempts < 3) continue;
+                    throw err;
+                }
+            }
             } catch (persistError) {
                 console.error(`❌ Entry: Persistence error for ${plate}:`, persistError);
                 return res.status(500).json({ error: 'Ocurrió un error al guardar la entrada en la base de datos.' });
@@ -381,17 +395,29 @@ export class AccessController {
             });
             console.log(`🔓 Exit: Barrier authorized for ${closedStay.plate} (ticket: ${(closedStay as any).ticket_code})`);
 
-            await TransactionHelper.runAsync(async (tx) => {
-                await this.stayRepository.save(closedStay as any, 'UPDATE', tx);
+            let __success2 = false;
+            let __attempts2 = 0;
+            while (!__success2 && __attempts2 < 3) {
+                __attempts2++;
+                try {
+                    if (exitMovement) await CorrelativeService.ensureMovementLeaseAvailable(garageId);
+                    await TransactionHelper.runAsync(async (tx) => {
+                        await this.stayRepository.save(closedStay as any, 'UPDATE', tx);
 
-                if (exitMovement) {
-                    // Inject correlative receipt_number and ticket_code atomically
-                    const nextCode = CorrelativeGenerator.allocateMovementTicketCode(garageId, tx);
-                    (exitMovement as any).receipt_number = nextCode;
-                    (exitMovement as any).ticket_code = nextCode;
-                    await this.movementRepository.save(exitMovement, 'CREATE', tx);
+                        if (exitMovement) {
+                            // Inject correlative receipt_number and ticket_code atomically
+                            const nextCode = CorrelativeService.consumeMovementTicketLocal(garageId, tx);
+                            (exitMovement as any).receipt_number = nextCode;
+                            (exitMovement as any).ticket_code = nextCode;
+                            await this.movementRepository.save(exitMovement, 'CREATE', tx);
+                        }
+                    });
+                    __success2 = true;
+                } catch (err: any) {
+                    if (err.message?.includes('LOCAL_LEASE_EXHAUSTED') && __attempts2 < 3) continue;
+                    throw err;
                 }
-            });
+            }
 
             // 🧟 ZOMBIE CLEANUP: Close any other open stays for this plate
             // This ensures the HardwareService finds the SAME stay the cashier authorized
@@ -538,7 +564,7 @@ export class AccessController {
 
             let vehicles: any[] = [];
             if (query.$or.length > 0) {
-                const SQLiteManager = require('../../../infrastructure/database/sqlite/SQLiteManager').SQLiteManager;
+                
                 const sqliteDb = SQLiteManager.getInstance().getDatabase();
                 
                 // Get by IDs

@@ -16,19 +16,19 @@ const { contextBridge, ipcRenderer } = require('electron');
 // (como viejas sesiones de ag_user o supabase que hayan quedado de versiones previas)
 // excepto la configuración física del garaje, vital para la identidad del terminal.
 try {
-    const keysToPreserve = ['ag_terminal_config', 'selected_printer_name', 'printer_paper_width'];
-    // Iterar el localStorage para limpiar
-    // Usamos un array de llaves a borrar para evitar problemas mutando la colección mientras iteramos
-    const keysToRemove = [];
-    for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && !keysToPreserve.includes(key)) {
-            keysToRemove.push(key);
+    // PROTECCIÓN DE SEGURIDAD: Solo limpiar si el documento cargó en el origin correcto
+    if (window.location.origin.includes('localhost')) {
+        const keysToPreserve = ['ag_terminal_config', 'selected_printer_name', 'printer_paper_width'];
+        const keysToRemove = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && !keysToPreserve.includes(key)) {
+                keysToRemove.push(key);
+            }
         }
+        keysToRemove.forEach(key => localStorage.removeItem(key));
+        sessionStorage.clear();
     }
-    keysToRemove.forEach(key => localStorage.removeItem(key));
-    // Opcional: limpiar también sessionStorage si queremos asegurar inicio fresco
-    sessionStorage.clear();
 } catch (e) {
     console.warn('⚠️ Error durante la limpieza quirúrgica pre-carga:', e);
 }

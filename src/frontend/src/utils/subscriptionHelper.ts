@@ -20,6 +20,7 @@ export function resolveSubscriptionForCochera(cochera: any, subscriptions: any[]
 
     const candidates = [];
 
+    // Evaluate all candidates for their best match level
     for (const s of activeSubs) {
         const subClientId = s.customerId || s.customer_id || s.clientId;
         const subVehicleId = String(s.vehicleId || s.vehicle_id);
@@ -31,39 +32,63 @@ export function resolveSubscriptionForCochera(cochera: any, subscriptions: any[]
 
         // 0. Strict COCHERA ID match (Canonical Identity)
         if (subCocheraId && String(subCocheraId) === String(cochera.id)) {
-            return { subscription: s, matchType: 'COCHERA_ID', isSafeForFinancialOperation: true };
+            candidates.push({ sub: s, level: 0 });
+            continue;
         }
 
         // 1. Strict SPOT + Client match
         if (subSpotNumber && cocheraNumero && String(subSpotNumber) === String(cocheraNumero) && subClientId === cocheraClientId) {
-            return { subscription: s, matchType: 'SPOT', isSafeForFinancialOperation: true };
+            candidates.push({ sub: s, level: 1 });
+            continue;
         }
 
         // 2. Strict Vehicle ID match
         if (subVehicleId && subVehicleId !== 'undefined' && cocheraVehicleIds.includes(subVehicleId)) {
-            return { subscription: s, matchType: 'VEHICLE_ID', isSafeForFinancialOperation: true };
+            candidates.push({ sub: s, level: 2 });
+            continue;
         }
 
         // 3. Strict Plate match
         if (subPlate && cleanCocheraPlates.includes(subPlate)) {
-            return { subscription: s, matchType: 'PLATE', isSafeForFinancialOperation: true };
+            candidates.push({ sub: s, level: 3 });
+            continue;
         }
 
-        // 4. Fallback Type match (Collect as candidates)
+        // 4. Fallback Type match
         if (subClientId === cocheraClientId && normSubType === cocheraTipo) {
-            candidates.push(s);
+            candidates.push({ sub: s, level: 4 });
         }
     }
 
-    if (candidates.length === 1) {
-        return { subscription: candidates[0], matchType: 'UNIQUE_FALLBACK', isSafeForFinancialOperation: true };
+    if (candidates.length === 0) {
+        return { subscription: null, matchType: 'NONE', isSafeForFinancialOperation: false };
     }
 
-    if (candidates.length > 1) {
-        return { subscription: null, matchType: 'AMBIGUOUS', isSafeForFinancialOperation: false };
+    // Sort candidates by match level (0 is highest priority)
+    candidates.sort((a, b) => a.level - b.level);
+    
+    const bestLevel = candidates[0].level;
+    const bestCandidates = candidates.filter(c => c.level === bestLevel);
+
+    // Map level back to matchType
+    const levelToType: Record<number, MatchResult['matchType']> = {
+        0: 'COCHERA_ID',
+        1: 'SPOT',
+        2: 'VEHICLE_ID',
+        3: 'PLATE',
+        4: 'UNIQUE_FALLBACK'
+    };
+
+    if (bestCandidates.length === 1) {
+        return { 
+            subscription: bestCandidates[0].sub, 
+            matchType: levelToType[bestLevel] || 'UNIQUE_FALLBACK', 
+            isSafeForFinancialOperation: true 
+        };
     }
 
-    return { subscription: null, matchType: 'NONE', isSafeForFinancialOperation: false };
+    // If there are multiple candidates AT THE BEST LEVEL, it is ambiguous
+    return { subscription: null, matchType: 'AMBIGUOUS', isSafeForFinancialOperation: false };
 }
 
 export interface EligibilityResult {
@@ -151,4 +176,162 @@ export function getAdvanceEligibility(
         currentEndDateStr: formatDateStr(endDate),
         nextEndDateStr: formatDateStr(nextEndDate)
     };
+}
+
+export type SubscriptionVisualState = 'CURRENT' | 'DEBT_PENDING' | 'ADVANCE_ELIGIBLE' | 'INCONSISTENT' | 'EXPIRED';
+
+export function resolveSubscriptionVisualState(
+    subscription: any,
+    pendingDebtsForGarage: any[], // MUST be filtered by garage_id and CANON
+    currentDate: Date = new Date()
+): SubscriptionVisualState {
+    if (!subscription || !subscription.active || !subscription.endDate) {
+        return 'EXPIRED'; // Or inactive
+    }
+
+    const subId = String(subscription.id || subscription._id);
+    const subDebts = pendingDebtsForGarage.filter(d => 
+        String(d.subscriptionId) === subId || String(d.subscription_id) === subId
+    );
+
+    const hasPendingCanon = subDebts.some(d => d.type === 'CANON' && d.status === 'PENDING' && (d.remaining_amount ?? d.amount ?? 0) > 0);
+
+    const endDate = new Date(subscription.endDate);
+    const isExpired = endDate.getTime() < currentDate.getTime();
+
+    if (hasPendingCanon) {
+        return 'DEBT_PENDING';
+    }
+
+    if (isExpired && !hasPendingCanon) {
+        // This is the ghost debt symptom (or an un-synced movement)
+        return 'INCONSISTENT';
+    }
+
+    const advanceEval = getAdvanceEligibility(subscription, pendingDebtsForGarage, true, currentDate);
+    if (advanceEval.eligible) {
+        return 'ADVANCE_ELIGIBLE';
+    }
+
+    return 'CURRENT';
+}
+
+export const CANON_MONTH_NAMES = [
+    'Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun',
+    'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'
+] as const;
+
+export interface CanonPeriodInfo {
+    label: string;
+    time: number;
+    period: string; // 'YYYY-MM'
+}
+
+/**
+ * Normalizes and derives the canonical period label (e.g. 'Jul', 'Ago', 'Sep')
+ * for a CANON debt.
+ *
+ * Priority rules:
+ * 1. If explicit billingPeriod / billing_period is provided (e.g. '2026-09'),
+ *    parse it directly -> 'Sep'. Has priority over dueDate.
+ * 2. If billingPeriod is missing, derive it from dueDate / due_date:
+ *    dueDate represents the last millisecond of the PREVIOUS covered period
+ *    (e.g., 2026-09-01T02:59:59.999Z = 31/08/2026 23:59:59.999 in America/Argentina/Buenos_Aires).
+ *    Adding +1 ms advances into the owed period (01/09/2026 00:00:00.000 in ART),
+ *    evaluated strictly in 'America/Argentina/Buenos_Aires'.
+ */
+export function getDebtBillingPeriod(debtOrDue: any): CanonPeriodInfo {
+    if (!debtOrDue) {
+        return { label: '', time: 0, period: '' };
+    }
+
+    // Direct YYYY-MM string input (e.g. '2026-09')
+    if (typeof debtOrDue === 'string') {
+        const trimmed = debtOrDue.trim();
+        const match = trimmed.match(/^(\d{4})-(\d{1,2})$/);
+        if (match) {
+            const year = parseInt(match[1], 10);
+            const month = parseInt(match[2], 10);
+            const monthIndex = month - 1;
+            if (monthIndex >= 0 && monthIndex < 12) {
+                return {
+                    label: CANON_MONTH_NAMES[monthIndex],
+                    time: Date.UTC(year, monthIndex, 1),
+                    period: `${year}-${String(month).padStart(2, '0')}`
+                };
+            }
+        }
+    }
+
+    // Priority 1: Check for explicit billingPeriod / billing_period on object
+    if (typeof debtOrDue === 'object') {
+        const rawBp = debtOrDue.billingPeriod || debtOrDue.billing_period;
+        if (typeof rawBp === 'string') {
+            const match = rawBp.trim().match(/^(\d{4})-(\d{1,2})$/);
+            if (match) {
+                const year = parseInt(match[1], 10);
+                const month = parseInt(match[2], 10);
+                const monthIndex = month - 1;
+                if (monthIndex >= 0 && monthIndex < 12) {
+                    return {
+                        label: CANON_MONTH_NAMES[monthIndex],
+                        time: Date.UTC(year, monthIndex, 1),
+                        period: `${year}-${String(month).padStart(2, '0')}`
+                    };
+                }
+            }
+        }
+    }
+
+    // Priority 2: Fallback to dueDate / due_date
+    let rawDue: any = undefined;
+    if (typeof debtOrDue === 'object' && !(debtOrDue instanceof Date)) {
+        rawDue = debtOrDue.dueDate || debtOrDue.due_date;
+    } else {
+        rawDue = debtOrDue;
+    }
+
+    if (rawDue) {
+        const due = new Date(rawDue);
+        if (!isNaN(due.getTime())) {
+            // Advance 1 ms from the end of the previous period to enter the owed period
+            const billingInstant = new Date(due.getTime() + 1);
+            const parts = new Intl.DateTimeFormat('en-US', {
+                timeZone: 'America/Argentina/Buenos_Aires',
+                year: 'numeric',
+                month: 'numeric',
+            }).formatToParts(billingInstant);
+
+            const yearStr = parts.find(p => p.type === 'year')?.value;
+            const monthStr = parts.find(p => p.type === 'month')?.value;
+            if (yearStr && monthStr) {
+                const year = parseInt(yearStr, 10);
+                const month = parseInt(monthStr, 10);
+                const monthIndex = month - 1;
+                if (monthIndex >= 0 && monthIndex < 12) {
+                    return {
+                        label: CANON_MONTH_NAMES[monthIndex],
+                        time: Date.UTC(year, monthIndex, 1),
+                        period: `${year}-${String(month).padStart(2, '0')}`
+                    };
+                }
+            }
+        }
+    }
+
+    return { label: '', time: 0, period: '' };
+}
+
+export function getCanonPeriodLabel(debtOrDue: any): string {
+    return getDebtBillingPeriod(debtOrDue).label;
+}
+
+export function formatCanonDebtLabels(debts: any[]): string {
+    if (!Array.isArray(debts) || debts.length === 0) return '';
+    return debts
+        .map(d => getDebtBillingPeriod(d))
+        .filter(info => info.label.length > 0)
+        .sort((a, b) => a.time - b.time)
+        .map(info => info.label)
+        .join('-');
 }

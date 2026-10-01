@@ -19,6 +19,8 @@ interface ExitStay {
     prepaidUntil?: string | null;
     isGracePeriod: boolean;
     price?: number | null;
+    ticket_code?: string;
+    entry_photo_path?: string;
 }
 
 type ExitMode = 'SUBSCRIBER' | 'PREPAID_COVERED' | 'GRACE_PERIOD' | 'PREPAID_EXCEEDED' | 'NORMAL';
@@ -30,6 +32,17 @@ const getExitMode = (stay: ExitStay | null, currentPrice: number | null): ExitMo
     if (stay.isGracePeriod) return 'GRACE_PERIOD';
     if (stay.isPrepaid && !stay.isPrepaidCovered && currentPrice !== null && currentPrice > 0) return 'PREPAID_EXCEEDED';
     return 'NORMAL';
+};
+
+const getExitModeLabel = (mode: ExitMode): string => {
+    switch (mode) {
+        case 'SUBSCRIBER': return 'ABONADO';
+        case 'PREPAID_COVERED': return 'PAGO ANTICIPADO';
+        case 'PREPAID_EXCEEDED': return 'ANTICIPADO EXCEDIDO';
+        case 'GRACE_PERIOD': return 'TIEMPO DE GRACIA';
+        case 'NORMAL': return 'NORMAL';
+        default: return mode;
+    }
 };
 
 const useExitLogic = () => {
@@ -130,6 +143,50 @@ const PanelSalida: React.FC = () => {
     const [isCalculating, setIsCalculating] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [processedExitMode, setProcessedExitMode] = useState<ExitMode | null>(null);
+
+    const [now, setNow] = useState<Date>(new Date());
+    
+    useEffect(() => {
+        if (!stay) return;
+        setNow(new Date());
+        const interval = setInterval(() => setNow(new Date()), 30000);
+        return () => clearInterval(interval);
+    }, [stay]);
+
+    const formatStayDate = (timeValue: string | Date) => {
+        try {
+            const date = new Date(timeValue);
+            if (isNaN(date.getTime())) return { dateStr: '—', timeStr: '—' };
+            
+            const dateStr = date.toLocaleDateString('es-AR', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit'
+            });
+            const timeStr = date.toLocaleTimeString('es-AR', {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+            });
+            return { dateStr, timeStr };
+        } catch (e) {
+            return { dateStr: '—', timeStr: '—' };
+        }
+    };
+
+    const calculateDuration = (entryTime: string, currentNow: Date) => {
+        try {
+            const start = new Date(entryTime);
+            if (isNaN(start.getTime())) return '—';
+            const diffMs = currentNow.getTime() - start.getTime();
+            if (diffMs < 0) return '0h 0m';
+            const diffHrs = Math.floor(diffMs / (1000 * 60 * 60));
+            const diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+            return `${diffHrs}h ${diffMins}m`;
+        } catch (e) {
+            return '—';
+        }
+    };
 
     // ── Anti-Crush Sensor State + Barrier LED ──
     const [sensorState, setSensorState] = useState<'OCCUPIED' | 'CLEAR' | 'UNKNOWN'>('UNKNOWN');
@@ -372,22 +429,52 @@ const PanelSalida: React.FC = () => {
                 {/* Data Panel (Right) */}
                 <div className="w-1/2 p-4 flex flex-col relative bg-gray-900/50">
                     {stay ? (
-                        <div className="flex flex-col h-full justify-center space-y-2">
+                        <div className="flex flex-col h-full justify-between py-1">
+                            {/* VEHÍCULO */}
+                            <div>
+                                <span className="text-gray-500 text-[9px] font-bold uppercase tracking-widest block mb-0.5">Vehículo</span>
+                                <div className="text-xl font-mono text-white font-bold leading-tight flex items-baseline gap-2">
+                                    {stay.plate}
+                                    <span className="text-sm text-gray-400 font-sans font-medium">{stay.vehicleType || 'Auto'}</span>
+                                </div>
+                            </div>
 
-                            {/* Time Data */}
-                            <div className="space-y-2">
+                            {/* ESTADÍA ACTUAL */}
+                            <div>
+                                <span className="text-gray-500 text-[9px] font-bold uppercase tracking-widest block mb-0.5">Estadía Actual</span>
+                                <div className="text-2xl font-mono text-white font-black">{calculateDuration(stay.entryTime, now)}</div>
+                            </div>
+
+                            {/* INGRESO Y SALIDA GRID */}
+                            <div className="grid grid-cols-2 gap-4">
+                                {/* INGRESO */}
                                 <div>
-                                    <span className="text-gray-500 text-[9px] font-bold uppercase tracking-widest block mb-0.5">Vehículo</span>
-                                    <span className="text-xl font-mono text-white font-bold">{stay.plate} - {stay.vehicleType || 'Auto'}</span>
+                                    <span className="text-gray-500 text-[9px] font-bold uppercase tracking-widest block mb-0.5">Ingreso</span>
+                                    <div className="font-mono text-emerald-400 leading-tight">
+                                        <div className="text-sm">{formatStayDate(stay.entryTime).dateStr}</div>
+                                        <div className="text-lg font-bold">{formatStayDate(stay.entryTime).timeStr}</div>
+                                    </div>
                                 </div>
-                                <div className="flex justify-between text-sm border-b border-gray-800 pb-1">
-                                    <span className="text-gray-500">Entrada</span>
-                                    <span className="font-mono text-emerald-400">{new Date(stay.entryTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                {/* SALIDA / AHORA */}
+                                <div>
+                                    <span className="text-gray-500 text-[9px] font-bold uppercase tracking-widest block mb-0.5">Salida (Ahora)</span>
+                                    <div className="font-mono text-blue-400 leading-tight">
+                                        <div className="text-sm">{formatStayDate(now).dateStr}</div>
+                                        <div className="text-lg font-bold">{formatStayDate(now).timeStr}</div>
+                                    </div>
                                 </div>
-                                <div className="flex justify-between text-sm border-b border-gray-800 pb-1">
-                                    <span className="text-gray-500">Salida</span>
-                                    <span className="font-mono text-blue-400">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                </div>
+                            </div>
+
+                            {/* METADATA SECUNDARIA */}
+                            <div className="flex flex-wrap items-center gap-2 mt-auto pt-2 border-t border-gray-800">
+                                <span className="px-2 py-1 rounded text-[9px] font-bold uppercase bg-gray-800 border border-gray-700 text-gray-300">
+                                    {getExitModeLabel(exitMode)}
+                                </span>
+                                {stay.ticket_code && (
+                                    <span className="text-[10px] text-gray-500 font-mono flex items-center gap-1 ml-auto">
+                                        Ticket {stay.ticket_code}
+                                    </span>
+                                )}
                             </div>
                         </div>
                     ) : (

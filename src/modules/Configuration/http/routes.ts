@@ -25,8 +25,7 @@ router.get('/tarifas', async (req, res) => {
         if (!garageId) {
             return res.json([]);
         }
-        // Direct DB Access (Source of Truth: Local Sync)
-        const tariffs = await db.tariffs.find({ garageId });
+        const tariffs = await configRepo.getTariffs(garageId);
         res.json(tariffs);
     } catch (e) {
         res.status(500).json({ error: e });
@@ -39,8 +38,7 @@ router.get('/tipos-vehiculo', async (req, res) => {
         const garageId = (req.query.garageId as string) || (req.headers['x-garage-id'] as string);
         if (!garageId) return res.json([]);
 
-        // Direct DB Access (Source of Truth: Local Sync)
-        const types: any[] = await db.vehicleTypes.find({ garageId });
+        const types = await configRepo.getVehicleTypes(garageId);
         // Filter active only (safe default for frontend)
         const activeTypes = types.filter(t => t.active !== false);
         res.json(activeTypes);
@@ -55,11 +53,11 @@ router.get('/precios', async (req, res) => {
         const garageId = (req.query.garageId as string) || (req.headers['x-garage-id'] as string);
         if (!garageId) return res.json({ standard: {}, electronic: {} });
 
-        const [pricesStandard, pricesElectronic, vehicleTypes, tariffs] = await Promise.all([
-            configRepo.getPrices(garageId, 'standard'),
-            configRepo.getPrices(garageId, 'electronic'),
+        const [types, tariffs, pricesStandard, pricesElectronic] = await Promise.all([
             configRepo.getVehicleTypes(garageId),
-            configRepo.getTariffs(garageId)
+            configRepo.getTariffs(garageId),
+            configRepo.getPrices(garageId, 'standard'),
+            configRepo.getPrices(garageId, 'electronic')
         ]);
 
         const standardMatrix: Record<string, Record<string, number>> = {};
@@ -68,8 +66,8 @@ router.get('/precios', async (req, res) => {
         const byIdStandard: Record<string, Record<string, number>> = {};
         const byIdElectronic: Record<string, Record<string, number>> = {};
 
-        const vTypeMap = new Map(vehicleTypes.map((v: any) => [v.id.trim(), v.name]));
-        const tariffMap = new Map(tariffs.map((t: any) => [t.id.trim(), t.name]));
+        const vTypeMap = new Map(types.map(t => [t.id, t.name]));
+        const tariffMap = new Map(tariffs.map(t => [t.id, t.name]));
 
         pricesStandard.forEach((p: any) => {
             const vIdRaw = (p.vehicleTypeId || p.vehicle_type_id || '').trim();
@@ -170,12 +168,14 @@ router.get('/validacion-precios', async (req, res) => {
         // Normalize helper (accent + case insensitive)
         const normalize = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 
-        // 1. Fetch all required data in parallel
-        const [allPrices, vehicleTypes, tariffs] = await Promise.all([
-            db.prices.find({ garageId }),
-            db.vehicleTypes.find({ garageId }),
-            db.tariffs.find({ garageId })
+        // 1. Fetch all required data in parallel via ConfigRepository
+        const [allPricesStandard, allPricesElectronic, vehicleTypes, tariffs] = await Promise.all([
+            configRepo.getPrices(garageId, 'standard'),
+            configRepo.getPrices(garageId, 'electronic'),
+            configRepo.getVehicleTypes(garageId),
+            configRepo.getTariffs(garageId)
         ]);
+        const allPrices = [...allPricesStandard, ...allPricesElectronic];
 
         // 2. Filter tariffs by type (normalized comparison)
         const contextTariffs = tariffs.filter((t: any) => normalize(t.type || '') === normalize(tariffType));

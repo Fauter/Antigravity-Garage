@@ -3,8 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { KeyRound, Loader2, ShieldCheck, Settings, Save, MapPin, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
-// IMPORT CORRECTO: Desde Infraestructura (Shared) con Fallbacks
-import { supabase } from '../../../infrastructure/lib/supabase';
+import { api } from '../services/api';
 
 interface TerminalConfig {
     garage_id: string;
@@ -33,15 +32,35 @@ const LoginPage: React.FC = () => {
 
     // Load Config on Mount
     useEffect(() => {
-        const stored = localStorage.getItem('ag_terminal_config');
-        if (stored) {
+        const loadConfig = async () => {
             try {
-                setConfig(JSON.parse(stored));
+                // 1. Try to load from backend canonical source
+                const res = await api.get('/terminal/config');
+                if (res.data && res.data.garage_id) {
+                    setConfig(res.data);
+                    // Mirror to localStorage for api interceptor
+                    localStorage.setItem('ag_terminal_config', JSON.stringify(res.data));
+                    return;
+                }
+
+                // 2. Migration: If not in backend, check localStorage
+                const stored = localStorage.getItem('ag_terminal_config');
+                if (stored) {
+                    const parsed = JSON.parse(stored);
+                    if (parsed.garage_id) {
+                        // Migrate to backend sending ONLY garage_id
+                        const postRes = await api.post('/terminal/config', { garage_id: parsed.garage_id });
+                        if (postRes.data && postRes.data.config) {
+                            setConfig(postRes.data.config);
+                            localStorage.setItem('ag_terminal_config', JSON.stringify(postRes.data.config));
+                        }
+                    }
+                }
             } catch (e) {
-                console.error('Config parsing error', e);
-                localStorage.removeItem('ag_terminal_config');
+                console.error('Config loading/migration error', e);
             }
-        }
+        };
+        loadConfig();
     }, []);
 
     const handleLogin = async (e: React.FormEvent) => {
@@ -78,37 +97,36 @@ const LoginPage: React.FC = () => {
 
         setVerifying(true);
         try {
-            // Fetch Garage details using the unified client
-            const { data, error } = await supabase
-                .from('garages')
-                .select('*')
-                .eq('id', configInputId)
-                .single();
-
-            if (error || !data) {
-                throw new Error('Garaje no encontrado');
+            // Save canonical via backend - It will validate and return real metadata
+            const postRes = await api.post('/terminal/config', { garage_id: configInputId });
+            
+            if (postRes.data && postRes.data.config) {
+                const validatedConfig = postRes.data.config;
+                // Mirror to localStorage for frontend interceptors
+                localStorage.setItem('ag_terminal_config', JSON.stringify(validatedConfig));
+                
+                setConfig(validatedConfig);
+                setShowConfigModal(false);
+                toast.success('Terminal Configurada Exitosamente');
+            } else {
+                throw new Error('Configuración inválida recibida del backend');
             }
 
-            const newConfig: TerminalConfig = {
-                garage_id: data.id,
-                owner_id: data.owner_id,
-                name: data.name,
-                address: data.address
-            };
-
-            localStorage.setItem('ag_terminal_config', JSON.stringify(newConfig));
-            setConfig(newConfig);
-            setShowConfigModal(false);
-            toast.success('Terminal Configurada Exitosamente');
-
         } catch (err: any) {
-            toast.error('Error: ' + err.message);
+            if (!navigator.onLine && !err.response) {
+                toast.error('Se requiere conexión para configurar esta terminal por primera vez.');
+            } else {
+                toast.error('Error: ' + (err.response?.data?.error || err.message));
+            }
         } finally {
             setVerifying(false);
         }
     };
 
-    const clearConfig = () => {
+    const clearConfig = async () => {
+        try {
+            await api.post('/terminal/clear-config');
+        } catch (e) { }
         localStorage.removeItem('ag_terminal_config');
         setConfig(null);
         setUsername('');

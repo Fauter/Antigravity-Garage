@@ -24,10 +24,14 @@ vi.mock('../src/infrastructure/database/StorageEngine', () => ({
     }
 }));
 
+import { CorrelativeService } from '../src/shared/CorrelativeService';
+vi.spyOn(CorrelativeService, 'ensureMovementLeaseAvailable').mockResolvedValue();
+vi.spyOn(CorrelativeService, 'ensureStayLeaseAvailable').mockResolvedValue();
+
 describe('Access Exit Flow Regression & Hardening', () => {
     let controller: AccessController;
     let sqliteDb: any;
-    const garageId = '1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02'; // Valid UUID
+    const garageId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'; // Valid UUID
     const ownerId = '36242d42-5fa8-4c93-ae14-23a8f6884377';  // Valid UUID
 
     beforeAll(() => {
@@ -35,6 +39,9 @@ describe('Access Exit Flow Regression & Hardening', () => {
         SQLiteManager.getInstance().getDatabase();
         sqliteDb = SQLiteManager.getInstance().getDatabase();
         controller = new AccessController();
+        sqliteDb.exec("INSERT OR REPLACE INTO correlative_leases (id, garage_id, type, active_start, active_end, last_issued) VALUES ('l1', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'stay', 1, 100, 0);");
+        sqliteDb.exec("INSERT OR REPLACE INTO correlative_leases (id, garage_id, type, active_start, active_end, last_issued) VALUES ('l2', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'movement', 1, 100, 0);");
+
 
         // Seed Garage Config in NeDB mock (used by db.garages)
         db.garages.findOne = vi.fn().mockResolvedValue({ id: garageId, owner_id: ownerId });

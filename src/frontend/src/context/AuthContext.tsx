@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { api } from '../services/api';
 import { useQueryClient } from '@tanstack/react-query';
@@ -30,7 +30,7 @@ interface AuthContextType {
     // Initial Hydration Gate variables
     initialSyncState: InitialSyncState;
     retryInitialSync: () => void;
-    continueOffline: () => void;
+    continueWithLocalData: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -43,10 +43,35 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     
     const [initialSyncState, setInitialSyncState] = useState<InitialSyncState>('idle');
     const [syncStatus, setSyncStatus] = useState<any>({ state: 'ONLINE', isSyncing: false, pending: 0, blocked: 0 });
+    
+    const abortControllerRef = useRef<AbortController | null>(null);
 
     const triggerInitialSync = async (garageId: string) => {
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+        }
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
+        const signal = controller.signal;
+
         setInitialSyncState('syncing');
         setIsGlobalSyncing(true);
+        
+        try {
+            const hasDataRes = await api.get(`/sync/has-local-data/${garageId}`, { signal });
+            if (hasDataRes.data?.hasLocalData) {
+                console.log('Local data is usable. Starting UI immediately, syncing in background.');
+                setInitialSyncState('ready');
+                setIsGlobalSyncing(false);
+                api.post('/sync/bootstrap', { garageId, background: true }, { signal }).catch(e => {
+                    if (e.name !== 'CanceledError') console.error('Background sync failed:', e);
+                });
+                return;
+            }
+        } catch (err: any) {
+            if (err.name === 'CanceledError') return;
+            console.warn('has-local-data check failed, proceeding to full bootstrap');
+        }
         
         let isResolved = false;
         
@@ -60,13 +85,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }, 30000);
 
         try {
-            await api.post('/sync/bootstrap', { garageId });
+            await api.post('/sync/bootstrap', { garageId }, { signal });
+            if (signal.aborted) return;
             
             if (!isResolved) {
                 // Trigger LOCAL CRITICAL WARMUP
                 setInitialSyncState('warmup');
                 try {
-                    await api.post('/abonos/evaluar-deudas');
                     await queryClient.prefetchQuery({
                         queryKey: ['abonos-hydration', garageId],
                         queryFn: async () => {
@@ -85,13 +110,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 setIsGlobalSyncing(false);
             }
         } catch (error: any) {
+            if (signal.aborted) return;
             if (!isResolved) {
                 // If it's a network error or 5xx, we might be offline
                 if (!error.response || error.response.status >= 500 || error.message.includes('Network')) {
                     // Try to warmup from local SQLite anyway
                     setInitialSyncState('warmup');
                     try {
-                        await api.post('/abonos/evaluar-deudas');
                         await queryClient.prefetchQuery({
                             queryKey: ['abonos-hydration', garageId],
                             queryFn: async () => {
@@ -126,15 +151,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
     };
 
-    const continueOffline = () => {
+    const continueWithLocalData = () => {
         setInitialSyncState('ready');
     };
 
-    useEffect(() => {
-        if (import.meta.env.DEV) {
-            console.log('[FRONTEND] Auth state changed:', !!user);
-        }
-    }, [user]);
+    // Removed Auth state changed dev log
 
     // Restore persisted session
     useEffect(() => {
@@ -245,7 +266,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return (
         <AuthContext.Provider value={{ 
             user, login, logout, isAuthenticated: !!user, isLoading, isGlobalSyncing, syncStatus, operatorName,
-            initialSyncState, retryInitialSync, continueOffline
+            initialSyncState, retryInitialSync, continueWithLocalData
         }}>
             {children}
         </AuthContext.Provider>

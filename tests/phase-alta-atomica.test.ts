@@ -154,6 +154,10 @@ function makeReqRes(body: any) {
     return { req, res };
 }
 
+import { CorrelativeService } from '../src/shared/CorrelativeService';
+vi.spyOn(CorrelativeService, 'ensureMovementLeaseAvailable').mockResolvedValue();
+vi.spyOn(CorrelativeService, 'ensureStayLeaseAvailable').mockResolvedValue();
+
 describe('ALTA-ATOMICA: createSubscription atomic transaction', () => {
     let controller: GarageController;
 
@@ -172,6 +176,9 @@ describe('ALTA-ATOMICA: createSubscription atomic transaction', () => {
         const db = SQLiteManager.getInstance().getDatabase();
         db.exec('DELETE FROM customers; DELETE FROM vehicles; DELETE FROM cocheras; DELETE FROM subscriptions; DELETE FROM movements; DELETE FROM debts; DELETE FROM outbox_events;');
         seedPricingData();
+        db.exec("INSERT OR REPLACE INTO correlative_leases (id, garage_id, type, active_start, active_end, last_issued) VALUES ('l1', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'stay', 1, 100, 0);");
+        db.exec("INSERT OR REPLACE INTO correlative_leases (id, garage_id, type, active_start, active_end, last_issued) VALUES ('l2', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'movement', 1, 100, 0);");
+
     });
 
     // ─── T1: Full payment (Atomic Success) ──────────────────────────────────
