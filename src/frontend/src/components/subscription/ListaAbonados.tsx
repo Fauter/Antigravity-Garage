@@ -3,6 +3,8 @@ import { Search, Plus, ArrowUp, ArrowDown, AlertCircle, RefreshCw, User as UserI
 import { api } from '../../services/api';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../context/AuthContext';
+import { resolveSubscriptionForCochera } from '../../utils/subscriptionHelper';
+import { getDebtRemaining } from '../../utils/parseDebtAmount';
 
 // --- TypeScript Interfaces ---
 
@@ -113,7 +115,7 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
 
             if (!map.has(customerId)) {
                 // Read from real Customer object, not from raw subscription fallback
-                const name = realCustomer?.firstName || realCustomer?.name || sub.nombreApellido || 'Cliente Desconocido';
+                const name = realCustomer?.name || realCustomer?.firstName || sub.nombreApellido || 'Cliente Desconocido';
                 const rawDni = realCustomer?.dni || sub.dni || '';
                 const email = realCustomer?.email || sub.email || '';
                 const phone = realCustomer?.phone || sub.phone || '';
@@ -134,39 +136,14 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                 // --- REGLA ABSOLUTA DE NEGOCIO (Espejo de DetailView) ---
                 const now = new Date();
                 const expiredClientSubIds = new Set<string>();
+                let hasAnyExpiredSubscription = false;
 
                 clientCocheras.forEach(cochera => {
                     const cleanCocheraPlates = (cochera.vehiculos || []).map((v: any) => typeof v === 'string' ? v.trim() : v.plate?.trim());
                     const cocheraVehicles = realVehicles.filter(v => v.plate && cleanCocheraPlates.includes(v.plate.trim()));
                     const cocheraVehicleIds = cocheraVehicles.map(v => v.id);
 
-                    const associatedSub = subscriptions.find(s => {
-                        if (s.active === false && s.status !== 'active') return false;
-                        const subClientId = s.customerId || s.customer_id || s.clientId;
-                        const cocheraClienteId = cochera.clienteId || cochera.cliente_id;
-                        
-                        // Priority 1: Exact Cochera ID match (modern model)
-                        if (s.cocheraId && cochera.id && s.cocheraId === cochera.id) return true;
-                        
-                        // Priority 2: Spot Number Match
-                        if (s.spotNumber && cochera.numero && String(s.spotNumber) === String(cochera.numero)) {
-                            if (subClientId === cocheraClienteId) return true;
-                        }
-                        
-                        // Priority 3: Vehicle Match
-                        const subVehicleId = s.vehicleId || s.vehicle_id;
-                        const subPlate = s.vehicleData?.plate || s.plate;
-                        
-                        if (subVehicleId && cocheraVehicleIds.includes(subVehicleId)) return true;
-                        if (subPlate && cleanCocheraPlates.includes(subPlate.trim())) return true;
-                        
-                        // Fallback relajado: Si coinciden cliente y tipo, lo tomamos como válido
-                        if (subClientId === cocheraClienteId) {
-                            const norm = (t: string) => t ? t.toLowerCase().replace(/fija/g, 'fija').replace(/movil/g, 'movil').replace(/exclusiva/g, 'exclusiva') : '';
-                            if (norm(s.type || s.subscriptionType) === norm(cochera.tipo)) return true;
-                        }
-                        return false;
-                    });
+                    const { subscription: associatedSub } = resolveSubscriptionForCochera(cochera, subscriptions, realVehicles);
 
                     if (associatedSub) {
                         let isExpired = false;
@@ -183,7 +160,26 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                         
                         if (isExpired) {
                             expiredClientSubIds.add(associatedSub.id || associatedSub._id);
+                            hasAnyExpiredSubscription = true;
                         }
+                    }
+                });
+
+                // Also check if the current subscription being iterated (if any) is expired. 
+                // Wait, it's better to just check all subscriptions for this customer.
+                subscriptions.filter((s: any) => s.customerId === customerId || (s as any).customer_id === customerId).forEach((s: any) => {
+                    let isExpired = false;
+                    const rawEndDate = s.endDate || s.end_date;
+                    const rawStartDate = s.startDate || s.start_date;
+                    if (rawEndDate) {
+                        isExpired = now > new Date(rawEndDate);
+                    } else if (rawStartDate) {
+                        const sDate = new Date(rawStartDate);
+                        isExpired = now > new Date(sDate.getFullYear(), sDate.getMonth() + 1, 0, 23, 59, 59, 999);
+                    }
+                    if (isExpired) {
+                        expiredClientSubIds.add(s.id || s._id);
+                        hasAnyExpiredSubscription = true;
                     }
                 });
 
@@ -192,31 +188,22 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                 const allCustomerDebts = debts.filter((d: any) => {
                     const isClientMatch = (d.customerId === customerId || d.customer_id === customerId);
                     if (!isClientMatch || d.status !== 'PENDING') return false;
-
-                    if (d.type === 'CANON') {
-                        const subId = d.subscriptionId || d.subscription_id;
-                        return subId && expiredClientSubIds.has(subId);
-                    }
-                    return true; // MANUAL_MIGRATION pasa siempre
+                    
+                    // REGLA AUTORITATIVA DE DEUDA: PENDING debt persistida = deuda existente.
+                    // NO filtramos CANON por expiredClientSubIds.
+                    return true;
                 });
 
-                const visibleDebts = isEmptyClient 
-                    ? allCustomerDebts.filter((d: any) => d.type !== 'CANON') 
-                    : allCustomerDebts;
-
-                const balance = visibleDebts.reduce((sum, d) => {
-                    const remRaw = d.remaining_amount;
-                    const debtValue = (remRaw !== undefined && remRaw !== null && !isNaN(Number(remRaw))) 
-                        ? Number(remRaw) 
-                        : Number(d.amount || 0);
-                    return sum + debtValue;
-                }, 0);
+                const visibleDebts = allCustomerDebts; // NO ocultar CANON de clientes vacíos
+                
+                const balance = visibleDebts.reduce((sum, d) => sum + getDebtRemaining(d), 0);
 
                 // --- Status Resolutivo Exacto ---
+                // Si Activo/Inactivo significa "cliente con cochera asignada", lo conservamos tal cual,
+                // como indicó el prompt si era históricamente así.
                 let isClientActive = false;
                 if (!isEmptyClient) {
                     isClientActive = true;
-                    // Opcionalmente se puede cruzar con if the customer has an active subscription
                 }
 
                 map.set(customerId, {
@@ -234,12 +221,14 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                         balance,
                         plates,
                         email,
-                        phone
+                        phone,
+                        hasAnyExpiredSubscription // Nuevo flag para la interfaz
                     }
                 });
             } else {
                 const existing = map.get(customerId)!;
                 if (sub.status === 'active' || sub.active === true) {
+                    // Mantener el comportamiento del flag isActive = cochera asignada/sub activa
                     existing.aggregatedValues.isActive = true;
                 }
             }
@@ -474,6 +463,10 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                                             {balance > 0 ? (
                                                 <span className="text-red-400 font-semibold font-mono">
                                                     ${balance.toLocaleString('es-AR')}
+                                                </span>
+                                            ) : sub.aggregatedValues.hasAnyExpiredSubscription ? (
+                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20">
+                                                    VENCIDO
                                                 </span>
                                             ) : hasNoVehicles ? (
                                                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-800/40 text-gray-500 border border-gray-700/40">

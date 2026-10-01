@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
     ArrowLeft,
     Car,
@@ -27,7 +28,8 @@ import { compressPhotos } from '../../utils/imageCompression';
 import { AdvancePaymentModal } from './AdvancePaymentModal';
 import { ModalPortal } from '../common/ModalPortal';
 import { useBodyScrollLock } from '../../hooks/useBodyScrollLock';
-import { resolveSubscriptionForCochera, getAdvanceEligibility } from '../../utils/subscriptionHelper';
+import { resolveSubscriptionForCochera, getAdvanceEligibility, formatCanonDebtLabels } from '../../utils/subscriptionHelper';
+import { getDebtRemaining } from '../../utils/parseDebtAmount';
 
 interface CustomerDetailViewProps {
     subscriber: any;
@@ -67,7 +69,60 @@ export const isSubscriptionExpired = (sub: any): boolean => {
 };
 
 const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onBack }) => {
-    const { operatorName } = useAuth();
+    const queryClient = useQueryClient();
+    const { operatorName, user } = useAuth();
+    
+    const [currentSubscriber, setCurrentSubscriber] = useState<any>(subscriber);
+
+    const hydrationGarageId = user?.garage_id || (user as any)?.garageId || 'test';
+
+    useEffect(() => {
+        setCurrentSubscriber((prev: any) => {
+            if (!prev) return subscriber;
+
+            const prevCustomerId =
+                prev.customerData?.id ||
+                prev.clientId ||
+                prev.customerId;
+
+            const incomingCustomerId =
+                subscriber.customerData?.id ||
+                subscriber.clientId ||
+                subscriber.customerId;
+
+            if (
+                prevCustomerId &&
+                incomingCustomerId &&
+                prevCustomerId !== incomingCustomerId
+            ) {
+                return subscriber;
+            }
+
+            const prevTs =
+                new Date(
+                    prev.customerData?.updatedAt ||
+                    prev.customerData?.updated_at ||
+                    0
+                ).getTime();
+
+            const incomingTs =
+                new Date(
+                    subscriber.customerData?.updatedAt ||
+                    subscriber.customerData?.updated_at ||
+                    0
+                ).getTime();
+
+            if (
+                prevTs > 0 &&
+                incomingTs > 0 &&
+                incomingTs < prevTs
+            ) {
+                return prev;
+            }
+
+            return subscriber;
+        });
+    }, [subscriber]);
 
     // Price integrity validation + smart sorting for 'abono' tariffs
     const { getSortedVehicleTypes } = useVehiclePriceValidation('abono');
@@ -219,13 +274,27 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     });
     const [isEditSaving, setIsEditSaving] = useState(false);
 
+    // --- Edit Vehicle Modal State ---
+    const [isEditVehicleOpen, setIsEditVehicleOpen] = useState(false);
+    const [editingVehicle, setEditingVehicle] = useState<any>(null);
+    const [editingCochera, setEditingCochera] = useState<any>(null);
+    const [editVehicleData, setEditVehicleData] = useState({
+        patente: '',
+        marca: '',
+        modelo: '',
+        color: '',
+        anio: '',
+        companiaSeguro: ''
+    });
+    const [isEditVehicleSaving, setIsEditVehicleSaving] = useState(false);
+
     // --- Photo Capture State ---
     const [photos, setPhotos] = useState<{ [key: string]: string }>({});
     const [showCameraModal, setShowCameraModal] = useState(false);
     const [activePhotoField, setActivePhotoField] = useState<string | null>(null);
 
     // Body scroll lock when any modal is open
-    useBodyScrollLock(isRenewalModalOpen || isAdvanceModalOpen || isModalOpen || isNewCocheraOpen || confirmModal.isOpen || isEditCustomerOpen || showCameraModal);
+    useBodyScrollLock(isRenewalModalOpen || isAdvanceModalOpen || isModalOpen || isNewCocheraOpen || confirmModal.isOpen || isEditCustomerOpen || isEditVehicleOpen || showCameraModal);
 
     const openCamera = (field: string) => { setActivePhotoField(field); setShowCameraModal(true); };
     const handleCapture = (img: string) => {
@@ -656,12 +725,12 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     // --- Edit Customer Handler ---
     const handleOpenEditCustomer = () => {
         setEditCustomerData({
-            name: subscriber.customerData?.firstName || subscriber.customerData?.name || subscriber.nombreApellido || '',
-            dni: String(subscriber.customerData?.dni || subscriber.dni || ''),
-            phone: String(subscriber.customerData?.phone || subscriber.phone || ''),
-            email: subscriber.customerData?.email || subscriber.email || '',
-            address: subscriber.customerData?.address || subscriber.domicilio || '',
-            localidad: subscriber.customerData?.localidad || subscriber.localidad || ''
+            name: currentSubscriber.customerData?.name || currentSubscriber.customerData?.firstName || currentSubscriber.nombreApellido || currentSubscriber.name || '',
+            dni: String(currentSubscriber.customerData?.dni || currentSubscriber.dni || ''),
+            phone: String(currentSubscriber.customerData?.phone || currentSubscriber.phone || ''),
+            email: currentSubscriber.customerData?.email || currentSubscriber.email || '',
+            address: currentSubscriber.customerData?.address || currentSubscriber.domicilio || currentSubscriber.address || '',
+            localidad: currentSubscriber.customerData?.localidad || currentSubscriber.localidad || ''
         });
         setIsEditCustomerOpen(true);
     };
@@ -672,7 +741,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
         setIsEditSaving(true);
         try {
-            await api.patch(`/clientes/${clientId}`, {
+            const res = await api.patch(`/clientes/${clientId}`, {
                 name: editCustomerData.name.trim(),
                 dni: editCustomerData.dni.trim(),
                 phone: editCustomerData.phone.trim(),
@@ -680,6 +749,46 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 address: editCustomerData.address.trim(),
                 localidad: editCustomerData.localidad.trim()
             });
+            const updatedCustomer = res.data?.customer ?? res.data;
+
+            setCurrentSubscriber((prev: any) => ({
+                ...prev,
+                nombreApellido: updatedCustomer.name,
+                name: updatedCustomer.name,
+                dni: updatedCustomer.dni,
+                phone: updatedCustomer.phone,
+                email: updatedCustomer.email,
+                domicilio: updatedCustomer.address,
+                address: updatedCustomer.address,
+                localidad: updatedCustomer.localidad,
+                customerData: {
+                    ...(prev.customerData || {}),
+                    ...updatedCustomer,
+                    name: updatedCustomer.name,
+                    updatedAt: updatedCustomer.updatedAt || updatedCustomer.updated_at || (prev.customerData?.updatedAt),
+                    updated_at: updatedCustomer.updated_at || updatedCustomer.updatedAt || (prev.customerData?.updated_at)
+                }
+            }));
+
+            queryClient.setQueryData(
+                ['abonos-hydration', hydrationGarageId],
+                (old: any) => {
+                    if (!old) return old;
+                    return {
+                        ...old,
+                        customers: (old.customers || []).map((c: any) => {
+                            const id = c.id || c._id;
+                            if (id !== updatedCustomer.id) {
+                                return c;
+                            }
+                            return {
+                                ...c,
+                                ...updatedCustomer
+                            };
+                        })
+                    };
+                }
+            );
 
             toast.success('Datos del cliente actualizados');
             setIsEditCustomerOpen(false);
@@ -692,17 +801,120 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         }
     };
 
+    // --- Edit Vehicle Handler ---
+    const handleOpenEditVehicle = (vehicleObj: any, cochera: any) => {
+        const normalize = (s: string) => String(s || '').trim().toUpperCase();
+        const reqPlate = normalize(vehicleObj.plate);
+        
+        const baseMatch = realVehicles.find((v: any) => normalize(v.plate) === reqPlate) || {};
+        
+        // FASE 2: RESOLUCIÓN ROBUSTA DE VEHICLE ID
+        const finalId = 
+            baseMatch?.id || 
+            baseMatch?._id || 
+            baseMatch?.vehicleId || 
+            baseMatch?.vehicle_id || 
+            vehicleObj?.id || 
+            vehicleObj?._id || 
+            vehicleObj?.vehicleId || 
+            vehicleObj?.vehicle_id;
+            
+        // FASE 2: RESOLUCIÓN ROBUSTA DE COCHERA ID
+        const resolvedCocheraId = 
+            cochera?.id || 
+            cochera?._id || 
+            cochera?.cocheraId || 
+            cochera?.cochera_id;
+
+        console.log('[VEHICLE EDIT][OPEN]', {
+            vehicleObj,
+            cochera,
+            resolvedVehicleId: finalId,
+            resolvedCocheraId
+        });
+
+        setEditingVehicle({
+            ...vehicleObj,
+            id: finalId,
+            cocheraId: resolvedCocheraId
+        });
+        setEditingCochera({
+            ...cochera,
+            id: resolvedCocheraId
+        });
+        setEditVehicleData({
+            patente: baseMatch.plate || vehicleObj.plate || '',
+            marca: baseMatch.brand || '',
+            modelo: baseMatch.model || '',
+            color: baseMatch.color || '',
+            anio: baseMatch.year || '',
+            companiaSeguro: baseMatch.insurance || ''
+        });
+        setIsEditVehicleOpen(true);
+    };
+
+    const handleUpdateVehicle = async () => {
+        console.log('[VEHICLE EDIT][SUBMIT]', {
+            editingVehicle,
+            editingCochera,
+            editVehicleData
+        });
+
+        if (!editingVehicle?.id) {
+            console.warn('[VEHICLE EDIT][ABORT] missing vehicleId');
+        }
+        if (!editingCochera?.id) {
+            console.warn('[VEHICLE EDIT][ABORT] missing cocheraId');
+        }
+
+        if (!editingVehicle?.id || !editingCochera?.id) {
+            toast.error("Datos insuficientes para actualizar el vehículo");
+            return;
+        }
+        if (!editVehicleData.patente.trim()) {
+            console.warn('[VEHICLE EDIT][ABORT] missing plate');
+            toast.error("La patente es obligatoria");
+            return;
+        }
+
+        setIsEditVehicleSaving(true);
+        try {
+            const payload = {
+                plate: editVehicleData.patente.trim().toUpperCase(),
+                brand: editVehicleData.marca,
+                model: editVehicleData.modelo,
+                color: editVehicleData.color,
+                year: editVehicleData.anio,
+                insurance: editVehicleData.companiaSeguro,
+                cocheraId: editingCochera.id,
+                oldPlate: editingVehicle.plate
+            };
+
+            await api.patch(`/vehiculos/${editingVehicle.id}`, payload);
+            toast.success("Vehículo actualizado correctamente");
+            setIsEditVehicleOpen(false);
+            await refreshCustomerAssets();
+        } catch (error: any) {
+            console.error("Error updating vehicle:", error);
+            toast.error("Error al actualizar vehículo: " + (error.response?.data?.error || error.message));
+        } finally {
+            setIsEditVehicleSaving(false);
+        }
+    };
+
     const clientName =
-        subscriber.customerData?.firstName ||
-        subscriber.nombreApellido ||
+        currentSubscriber.customerData?.name ||
+        currentSubscriber.customerData?.firstName ||
+        currentSubscriber.nombreApellido ||
+        currentSubscriber.name ||
         'Cliente';
 
-    const rawDni = subscriber.customerData?.dni || subscriber.dni;
+    const rawDni = currentSubscriber.customerData?.dni || currentSubscriber.dni;
     const clientDni = rawDni
         ? new Intl.NumberFormat('es-AR').format(Number(String(rawDni).replace(/\D/g, '')))
         : '---';
 
-    const rawPhone = subscriber.customerData?.phone || subscriber.phone;
+    const rawPhone = currentSubscriber.customerData?.phone || currentSubscriber.phone;
     const formatPhone = (phone: any) => {
         if (!phone) return null;
         const p = String(phone).replace(/\D/g, '');
@@ -713,9 +925,10 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     const clientPhone = formatPhone(rawPhone);
 
     const clientId =
-        subscriber.customerData?.id ||
-        subscriber.customerId ||
-        subscriber.assignedTo;
+        currentSubscriber.customerData?.id ||
+        currentSubscriber.customerId ||
+        currentSubscriber.assignedTo ||
+        currentSubscriber.id;
 
     // Standardized Refresher for Global UI state
     const refreshCustomerAssets = async () => {
@@ -726,15 +939,19 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 api.get(`/cocheras?clienteId=${clientId}`),
                 api.get(`/abonos?clientId=${clientId}`),
                 api.get(`/vehiculos?customerId=${clientId}`),
-                api.get(`/deudas/${clientId}`).catch(() => ({ data: [] }))
+                api.get(`/deudas/${clientId}`)
             ]);
 
             setCocheras(cocherasRes.data || []);
             setSubscriptions(subsRes.data || []);
             setRealVehicles(vehiclesRes.data || []);
             setDebts((debtsRes.data || []).filter((d: any) => d.status === 'PENDING'));
+
+            // INVALIDATE HYDRATION CACHE so ListaAbonados updates when we go back
+            queryClient.invalidateQueries({ queryKey: ['abonos-hydration', hydrationGarageId] });
         } catch (err) {
             console.error('Error refreshing client assets:', err);
+            toast.error("Atención: Problemas de conexión al cargar datos de este abonado. La información podría estar incompleta.");
         } finally {
             setLoading(false);
         }
@@ -744,38 +961,12 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         refreshCustomerAssets();
     }, [clientId]);
 
-    const getActiveSurchargeStep = () => {
-        const now = new Date();
-        const today = now.getDate();
-        const currentMonthIdx = String(now.getMonth());
 
-        let steps = financialConfig?.surchargeConfig?.monthly_overrides?.[currentMonthIdx]?.steps;
-
-        if (!steps || steps.length === 0) {
-            steps = financialConfig?.surchargeConfig?.global_default?.steps;
-        }
-
-        if (steps && Array.isArray(steps)) {
-            const sortedSteps = [...steps].sort((a: any, b: any) => b.day - a.day);
-            for (const step of sortedSteps) {
-                if (today >= step.day) {
-                    return step;
-                }
-            }
-        }
-        return null;
-    };
-
-    const calculateSurcharge = (baseAmount: number) => {
-        const step = getActiveSurchargeStep();
-        const surchargePercentage = step ? (Number(step.percentage) || 0) : 0;
-        return Math.floor(baseAmount * (surchargePercentage / 100));
-    };
 
     const handleOpenRenewalModal = (subId: string, cochera: any, baseAmount: number, surchargeAmount: number, totalAmount: number, hasDebt: boolean, isGlobalDebt: boolean = false, targetDebts: any[] = []) => {
         const sortedDebts = [...targetDebts].sort((a: any, b: any) => {
-            const dateA = new Date(a.dueDate || a.createdAt || 0).getTime();
-            const dateB = new Date(b.dueDate || b.createdAt || 0).getTime();
+            const dateA = new Date(a.dueDate || a.due_date || a.createdAt || a.created_at || 0).getTime();
+            const dateB = new Date(b.dueDate || b.due_date || b.createdAt || b.created_at || 0).getTime();
             return dateA - dateB;
         });
 
@@ -791,7 +982,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             hasPendingDebt: hasDebt,
             isGlobalDebt: isGlobalDebt,
             targetDebts: sortedDebts,
-            surchargeStep: getActiveSurchargeStep(),
+            surchargeStep: null,
             multiMonthMode: sortedDebts && sortedDebts.length > 0,
             multiMonthCount: sortedDebts && sortedDebts.length > 0 ? sortedDebts.length : 1,
             previewBreakdown: [],
@@ -939,8 +1130,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     useEffect(() => {
         if (!isRenewalModalOpen || !selectedDebtSubId) return;
 
-        if (renewalData.multiMonthMode && !renewalData.isGlobalDebt && renewalData.targetDebts && renewalData.targetDebts.length > 0) {
-            const count = Math.max(1, Math.min(renewalData.multiMonthCount || 1, renewalData.targetDebts.length));
+        if (renewalData.targetDebts && renewalData.targetDebts.length > 0) {
+            const count = renewalData.isGlobalDebt ? renewalData.targetDebts.length : Math.max(1, Math.min(renewalData.multiMonthCount || 1, renewalData.targetDebts.length));
             const targetDebtIds = renewalData.targetDebts.slice(0, count).map((d: any) => d.id).filter(Boolean);
             
             if (targetDebtIds.length === 0) return;
@@ -950,11 +1141,16 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             const fetchPreview = async () => {
                 setRenewalData(prev => ({ ...prev, isPreviewLoading: true, previewError: null }));
                 try {
-                    const res = await api.post('/abonos/renovar/preview', {
+                    const payload: any = {
                         subId: selectedDebtSubId,
                         targetDebtIds,
-                        paymentMethod: renewalData.metodoPago
-                    }, { signal: controller.signal });
+                        paymentMethod: renewalData.metodoPago,
+                        isGlobalDebt: renewalData.isGlobalDebt
+                    };
+                    if (renewalData.isGlobalDebt) {
+                        payload.customerId = clientId;
+                    }
+                    const res = await api.post('/abonos/renovar/preview', payload, { signal: controller.signal });
                     
                     if (res.status === 200) {
                         setRenewalData(prev => ({
@@ -988,10 +1184,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         const normalize = (s: string) => s ? String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim() : '';
 
         // Helper inline: obtener saldo pendiente real de una deuda (soporta pagos parciales)
-        const getSafeRemaining = (d: any): number => {
-            const rem = Number(d.remaining_amount);
-            return (typeof d.remaining_amount === 'number' && !isNaN(rem)) ? rem : Number(d.amount) || 0;
-        };
+        // Canonical implementation: handles Supabase numeric-as-string, null, undefined
+        const getSafeRemaining = getDebtRemaining;
 
         // Helper: buscar precio en la matriz para un vKey + tKey dados
         const lookupMatrixPrice = (vKey: string, tKey: string, subTypeRaw: string): number => {
@@ -1072,13 +1266,12 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
             const foundPrice = lookupMatrixPrice(vKey, tKey, subTypeRaw);
 
             if (foundPrice > 0) {
-                const nuevoCalculoMora = calculateSurcharge(foundPrice);
                 setRenewalData(prev => ({
                     ...prev,
                     baseAmount: foundPrice,
-                    surchargeAmount: nuevoCalculoMora,
-                    amountToPay: foundPrice + nuevoCalculoMora,
-                    montoCobrado: foundPrice + nuevoCalculoMora
+                    surchargeAmount: 0,
+                    amountToPay: foundPrice,
+                    montoCobrado: foundPrice
                 }));
             } else {
                 console.warn(
@@ -1181,20 +1374,24 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         if (typeof vehicleVal === 'string') plate = vehicleVal;
         else if (vehicleVal && typeof vehicleVal === 'object') plate = vehicleVal.plate || '---';
 
+        const normalize = (p: string) => String(p || '').trim().toUpperCase();
+        const reqPlate = normalize(plate);
+
         // 2. Base Object (from Cochera)
         const baseObj = typeof vehicleVal === 'object' ? vehicleVal : {};
 
         // 3. Find Primary Metadata from Database (realVehicles)
-        const realMatch = realVehicles.find((v: any) => v.plate === plate);
+        const realMatch = realVehicles.find((v: any) => normalize(v.plate) === reqPlate);
 
         // 4. Find Subscription Match (Fallback)
         const subMatch = subscriptions.find((s: any) => {
             const sPlate = s.vehicleData?.plate || s.plate;
-            return sPlate === plate;
+            return normalize(sPlate) === reqPlate;
         });
 
         // 5. Merge (realVehicles takes priority -> Subscription -> Cochera)
         return {
+            id: realMatch?.id || baseObj.id,
             plate,
             brand: realMatch?.brand || baseObj.brand || subMatch?.vehicleData?.brand || subMatch?.brand || 'No registrado',
             model: realMatch?.model || baseObj.model || subMatch?.vehicleData?.model || subMatch?.model || 'No registrado',
@@ -1211,54 +1408,24 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
     // --- REGLA ABSOLUTA DE NEGOCIO ---
     const now = new Date();
-    const expiredSubIdsLinkedToCocheras = new Set<string>();
 
-    // 1. Evaluamos exclusivamente las cocheras que el cliente tiene asignadas
-    cocheras.forEach(cochera => {
-        const cleanCocheraPlates = (cochera.vehiculos || []).map((v: any) => typeof v === 'string' ? v.trim() : v.plate?.trim());
-        const cocheraVehicles = realVehicles.filter(v => v.plate && cleanCocheraPlates.includes(v.plate.trim()));
-        const cocheraVehicleIds = cocheraVehicles.map(v => v.id);
+    const sanitizedDebts = debts;
 
-        // Usamos el resolver estricto centralizado
-        const { subscription: associatedSub, matchType } = resolveSubscriptionForCochera(cochera, subscriptions, realVehicles);
-
-        // Solo si matchea y ESTÁ VENCIDA, habilitamos sus deudas
-        if (associatedSub) {
-            if (isSubscriptionExpired(associatedSub)) {
-                expiredSubIdsLinkedToCocheras.add(associatedSub.id);
-            }
-        }
-    });
-
-    const sanitizedDebts = debts.filter((d: any) => {
-        if (d.type === 'CANON') {
-            const subId = d.subscriptionId || d.subscription_id;
-            // BARRERA: Solo pasa si pertenece a una cochera visible que está vencida
-            return subId && expiredSubIdsLinkedToCocheras.has(subId);
-        }
-        return true; // MANUAL_MIGRATION pasa siempre
-    });
-
-    // --- "Cliente Vacío" check: cocheras vacías → ocultar deudas CANON ---
+    // We no longer hide CANON debts if the client has no cochera.
+    // PENDING persisted debts are authoritative.
     const isEmptyClient = cocheras.length === 0;
 
-    const canonDebts = isEmptyClient ? [] : sanitizedDebts.filter((d: any) => d.type === 'CANON');
+    const canonDebts = sanitizedDebts.filter((d: any) => d.type === 'CANON');
     const otherDebts = sanitizedDebts.filter((d: any) => d.type !== 'CANON');
     const manualDebtsPending = sanitizedDebts.filter((d: any) => d.status === 'PENDING' && d.type === 'MANUAL_MIGRATION');
     // Use remaining_amount for real pending balance (supports partial payments)
-    // SAFE: handles null, undefined, NaN from DB
-    const getRemaining = (d: any) => {
-        const rem = Number(d.remaining_amount);
-        return (typeof d.remaining_amount === 'number' && !isNaN(rem)) ? rem : Number(d.amount) || 0;
-    };
-    const totalCanon = isEmptyClient ? 0 : canonDebts.reduce((sum: number, d: any) => sum + getRemaining(d), 0);
+    // Canonical implementation: handles Supabase numeric-as-string, null, undefined
+    const getRemaining = getDebtRemaining;
+    const totalCanon = canonDebts.reduce((sum: number, d: any) => sum + getRemaining(d), 0);
     const totalOther = otherDebts.reduce((sum: number, d: any) => sum + getRemaining(d), 0);
     const hasPartialPayments = sanitizedDebts.some((d: any) => (d.amount_paid || 0) > 0 && d.status === 'PENDING');
 
-    // Deudas visibles: si el cliente está vacío, solo muestra las que NO son CANON
-    const visibleDebts = isEmptyClient
-        ? sanitizedDebts.filter((d: any) => d.type !== 'CANON')
-        : sanitizedDebts;
+    const visibleDebts = sanitizedDebts;
     const visibleTotal = visibleDebts.reduce((sum, d) => sum + getRemaining(d), 0);
 
 
@@ -1344,7 +1511,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                 <button
                                     onClick={() => {
                                         const totalAmount = manualDebtsPending.reduce((sum, d) => sum + getRemaining(d), 0);
-                                        const totalSurcharge = manualDebtsPending.reduce((sum, d) => sum + calculateSurcharge(getRemaining(d)), 0);
+                                        const totalSurcharge = manualDebtsPending.reduce((sum, d) => sum + (Number(d.surchargeApplied) || 0), 0);
                                         const totalDebt = totalAmount + totalSurcharge;
                                         const firstSubId = manualDebtsPending[0]?.subscriptionId || subscriptions[0]?.id || '';
                                         handleOpenRenewalModal(firstSubId, null, totalAmount, totalSurcharge, totalDebt, true, true, manualDebtsPending);
@@ -1476,12 +1643,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                 const pendingRemaining = cocheraDebts.reduce((s: number, d: any) => s + getRemaining(d), 0);
 
                                                 // Month labels
-                                                const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
                                                 const canonPending = cocheraDebts.filter(d => d.type === 'CANON');
-                                                const labels = canonPending.map(d => {
-                                                    const dt = new Date(d.dueDate);
-                                                    return { label: monthNames[dt.getUTCMonth()], time: dt.getTime() };
-                                                }).sort((a, b) => a.time - b.time).map(m => m.label).join('-');
+                                                const labels = formatCanonDebtLabels(canonPending);
 
                                                 return (
                                                     <div className="mt-2 flex flex-col gap-1">
@@ -1493,7 +1656,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                         )}
                                                         {labels && (
                                                             <span className="text-[10px] text-red-400/80 font-bold uppercase tracking-widest mt-0.5">
-                                                                Debe {canonPending.length} mes(es): {labels}
+                                                                Debe {canonPending.length} {canonPending.length === 1 ? 'mes' : 'meses'}: {labels}
                                                             </span>
                                                         )}
                                                     </div>
@@ -1529,6 +1692,13 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                                     )}
                                                                 </div>
                                                                 <div className="flex items-center gap-2">
+                                                                    <button
+                                                                        onClick={(e) => { e.stopPropagation(); handleOpenEditVehicle(vehicleObj, cochera); }}
+                                                                        className="p-1.5 text-blue-500/50 hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors"
+                                                                        title="Editar Vehículo"
+                                                                    >
+                                                                        <Edit2 className="w-3.5 h-3.5" />
+                                                                    </button>
                                                                     {cochera.tipo !== 'Movil' && (
                                                                         <button
                                                                             onClick={(e) => { e.stopPropagation(); handleUnlinkVehicle(cochera.id, plateText); }}
@@ -1593,7 +1763,7 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                         const specificDebts = sanitizedDebts.filter(d => (d.subscriptionId === associatedSub.id || d.subscription_id === associatedSub.id) && d.status === 'PENDING' && d.type === 'CANON');
                                                         const totalRemaining = specificDebts.reduce((s: number, d: any) => s + getRemaining(d), 0);
                                                         const base = totalRemaining > 0 ? totalRemaining : (cochera.precioBase || 0);
-                                                        const mora = calculateSurcharge(base);
+                                                        const mora = specificDebts.reduce((s: number, d: any) => s + (Number(d.surchargeApplied) || 0), 0);
                                                         const targetDebtsArray = specificDebts.length > 0 ? specificDebts : [];
 
                                                         handleOpenRenewalModal(associatedSub.id, cochera, base, mora, base + mora, isExpired, false, targetDebtsArray);
@@ -2068,13 +2238,21 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                         {renewalData.multiMonthMode && renewalData.previewBreakdown && renewalData.previewBreakdown.length > 0 ? (
                                             <div className="space-y-3">
                                                 {renewalData.previewBreakdown.map((item: any, idx: number) => (
-                                                    <div key={idx} className="flex justify-between items-end border-b border-red-500/20 pb-2">
-                                                        <div className="text-red-400/80">
-                                                            <span className="block text-[10px] uppercase tracking-widest font-bold mb-0.5">{item.billingPeriod || 'Período'}</span>
-                                                            <span className="text-xs font-medium">Base + Mora {item.surchargePercentage ? `(${item.surchargePercentage}%)` : ''}</span>
+                                                    <div key={idx} className="flex justify-between items-start border-b border-red-500/20 pb-3 flex-col gap-1">
+                                                        <span className="block text-[10px] uppercase tracking-widest font-bold text-red-400/80 w-full border-b border-red-500/10 pb-1 mb-1">{item.billingPeriod || 'Período'}</span>
+                                                        <div className="flex justify-between w-full text-xs text-gray-400">
+                                                            <span>Base</span>
+                                                            <span className="font-mono">${Number(item.principal || 0).toLocaleString()}</span>
                                                         </div>
-                                                        <div className="text-right">
-                                                            <div className="text-sm font-bold text-gray-300 font-mono tracking-tighter">${(item.total ?? item.totalAmount ?? (Number(item.principal || 0) + Number(item.surchargeAmount || 0))).toLocaleString()}</div>
+                                                        {(item.surchargeAmount > 0 || item.surchargePercentage > 0) && (
+                                                            <div className="flex justify-between w-full text-xs text-red-400/80">
+                                                                <span>Mora {item.surchargePercentage ? `(${item.surchargePercentage}%${item.appliedFromDay ? ` desde día ${item.appliedFromDay}` : ''})` : ''}</span>
+                                                                <span className="font-mono">${Number(item.surchargeAmount || 0).toLocaleString()}</span>
+                                                            </div>
+                                                        )}
+                                                        <div className="flex justify-between w-full text-sm text-gray-300 font-bold mt-1">
+                                                            <span>Total</span>
+                                                            <span className="font-mono">${(item.total ?? (Number(item.principal || 0) + Number(item.surchargeAmount || 0))).toLocaleString()}</span>
                                                         </div>
                                                     </div>
                                                 ))}
@@ -2095,7 +2273,9 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                                         <span className="block text-[10px] uppercase tracking-widest font-bold mb-0.5">Mora por Retraso</span>
                                                         {renewalData.surchargeAmount > 0 ? (
                                                             <span className="text-[10px] font-medium block">
-                                                                Aplicado {renewalData.surchargeStep?.percentage}% de recargo por superar el día {renewalData.surchargeStep?.day} del mes
+                                                                {renewalData.previewBreakdown && renewalData.previewBreakdown.length === 1 && renewalData.previewBreakdown[0].surchargePercentage 
+                                                                    ? `Mora del ${renewalData.previewBreakdown[0].surchargePercentage}% aplicable desde el día ${renewalData.previewBreakdown[0].appliedFromDay}`
+                                                                    : 'Mora calculada según reglas vigentes'}
                                                             </span>
                                                         ) : (
                                                             <span className="text-xs font-medium">Sin recargos pendientes</span>
@@ -2349,6 +2529,69 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                                     >
                                         {isEditSaving && <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
                                         {isEditSaving ? 'Guardando...' : 'Guardar cambios'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </ModalPortal>
+                )}
+
+                {/* === EDIT VEHICLE MODAL === */}
+                {isEditVehicleOpen && (
+                    <ModalPortal>
+                        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+                            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setIsEditVehicleOpen(false)} />
+                            <div className="relative bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+                                <div className="flex items-center justify-between p-6 border-b border-gray-800">
+                                    <div>
+                                        <h3 className="text-lg font-bold text-white">Editar vehículo</h3>
+                                        <p className="text-xs text-gray-400 mt-1 uppercase font-bold tracking-wider">
+                                            TIPO ACTUAL: <span className="text-emerald-400">{editingVehicle?.type || 'No registrado'}</span>
+                                        </p>
+                                    </div>
+                                    <button onClick={() => setIsEditVehicleOpen(false)} className="p-1.5 text-gray-500 hover:text-white hover:bg-gray-800 rounded-lg transition-colors">
+                                        <X className="w-4 h-4" />
+                                    </button>
+                                </div>
+                                <div className="p-6 space-y-4">
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="col-span-2">
+                                            <label className={labelStyle}>Patente</label>
+                                            <input className={inputStyle} value={editVehicleData.patente} onChange={e => setEditVehicleData(p => ({ ...p, patente: e.target.value.toUpperCase() }))} placeholder="Ej: AA123BB" />
+                                        </div>
+                                        <div>
+                                            <label className={labelStyle}>Marca</label>
+                                            <input className={inputStyle} value={editVehicleData.marca} onChange={e => setEditVehicleData(p => ({ ...p, marca: e.target.value }))} placeholder="Ej: Toyota" />
+                                        </div>
+                                        <div>
+                                            <label className={labelStyle}>Modelo</label>
+                                            <input className={inputStyle} value={editVehicleData.modelo} onChange={e => setEditVehicleData(p => ({ ...p, modelo: e.target.value }))} placeholder="Ej: Corolla" />
+                                        </div>
+                                        <div>
+                                            <label className={labelStyle}>Color</label>
+                                            <input className={inputStyle} value={editVehicleData.color} onChange={e => setEditVehicleData(p => ({ ...p, color: e.target.value }))} placeholder="Ej: Gris" />
+                                        </div>
+                                        <div>
+                                            <label className={labelStyle}>Año</label>
+                                            <input className={inputStyle} value={editVehicleData.anio} onChange={e => setEditVehicleData(p => ({ ...p, anio: e.target.value }))} placeholder="Ej: 2022" type="number" />
+                                        </div>
+                                        <div className="col-span-2">
+                                            <label className={labelStyle}>Compañía de Seguro</label>
+                                            <input className={inputStyle} value={editVehicleData.companiaSeguro} onChange={e => setEditVehicleData(p => ({ ...p, companiaSeguro: e.target.value }))} placeholder="Ej: La Caja" />
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="flex justify-end gap-3 p-6 border-t border-gray-800">
+                                    <button onClick={() => setIsEditVehicleOpen(false)} className="px-4 py-2 text-sm text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors">
+                                        Cancelar
+                                    </button>
+                                    <button
+                                        onClick={handleUpdateVehicle}
+                                        disabled={isEditVehicleSaving}
+                                        className="flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-all shadow-lg shadow-indigo-900/40"
+                                    >
+                                        {isEditVehicleSaving && <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+                                        {isEditVehicleSaving ? 'Guardando...' : 'Guardar cambios'}
                                     </button>
                                 </div>
                             </div>
