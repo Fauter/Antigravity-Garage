@@ -109,41 +109,42 @@ const AuditoriaVehiculos: React.FC = () => {
             </div>
 
             <div className="flex-1 overflow-hidden bg-slate-900 border border-slate-800 rounded-2xl shadow-xl flex flex-col">
-                <div className="p-4 border-b border-slate-800 bg-slate-900/50">
-                    <h3 className="text-lg font-bold text-slate-300 flex items-center gap-2">
-                        <ShieldCheck className="w-5 h-5" /> Vehículos Activos
-                    </h3>
-                </div>
                 <div className="overflow-auto flex-1 app-scrollbar">
-                    <table className="w-full text-left border-collapse">
+                    <table className="w-full text-left border-collapse table-fixed">
                         <thead className="bg-slate-950 text-slate-400 uppercase text-xs font-bold sticky top-0 z-10">
                             <tr>
-                                <th className="p-4 border-b border-slate-800">Patente</th>
-                                <th className="p-4 border-b border-slate-800">Ingreso</th>
-                                <th className="p-4 border-b border-slate-800">Tiempo</th>
-                                <th className="p-4 border-b border-slate-800">Tipo</th>
+                                <th className="w-[33%] px-4 py-3 border-b border-slate-800">Patente</th>
+                                <th className="w-[33%] px-4 py-3 border-b border-slate-800">Ingreso</th>
+                                <th className="w-[34%] px-4 py-3 border-b border-slate-800">Tiempo</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800">
                             {loading && stays.length === 0 ? (
                                 <tr>
-                                    <td colSpan={4} className="p-8 text-center text-slate-500 animate-pulse">
+                                    <td colSpan={3} className="p-8 text-center text-slate-500 animate-pulse">
                                         Cargando auditoría...
                                     </td>
                                 </tr>
                             ) : stays.length === 0 ? (
                                 <tr>
-                                    <td colSpan={4} className="p-8 text-center text-slate-500">
+                                    <td colSpan={3} className="p-8 text-center text-slate-500">
                                         No hay vehículos en la playa.
                                     </td>
                                 </tr>
                             ) : (
                                 stays.map((stay) => (
                                     <tr key={stay.id} className="hover:bg-slate-800/50 transition-colors">
-                                        <td className="p-4 font-mono font-bold text-white text-lg">
-                                            {stay.plate}
+                                        <td className="px-4 py-3">
+                                            <div className="font-mono font-bold text-white text-lg leading-tight">
+                                                {stay.plate}
+                                            </div>
+                                            <div className="mt-0.5">
+                                                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-800 border border-slate-700 text-slate-300 inline-block">
+                                                    {stay.vehicleType || 'Auto'}
+                                                </span>
+                                            </div>
                                         </td>
-                                        <td className="p-4 font-mono">
+                                        <td className="px-4 py-3 font-mono">
                                             {(() => {
                                                 const { dateStr, timeStr } = formatEntryDate(stay.entryTime);
                                                 return (
@@ -154,9 +155,9 @@ const AuditoriaVehiculos: React.FC = () => {
                                                 );
                                             })()}
                                         </td>
-                                        <td className="p-4 font-mono font-medium text-emerald-400">
+                                        <td className="px-4 py-3 font-mono font-medium text-emerald-400">
                                             <div>{calculateDuration(stay.entryTime)}</div>
-                                            <div className="mt-1 flex flex-wrap gap-1">
+                                            <div className="mt-0.5 flex flex-wrap gap-1">
                                                 {stay.isSubscriber && (
                                                     <div className="text-[10px] font-bold px-1.5 py-0.5 rounded inline-block text-sky-400 bg-sky-900/20 border border-sky-500/20">
                                                         Abonado
@@ -176,11 +177,6 @@ const AuditoriaVehiculos: React.FC = () => {
                                                     );
                                                 })()}
                                             </div>
-                                        </td>
-                                        <td className="p-4">
-                                            <span className="px-2 py-1 rounded text-[10px] font-bold uppercase bg-slate-800 border border-slate-700 text-slate-300">
-                                                {stay.vehicleType || 'Auto'}
-                                            </span>
                                         </td>
                                     </tr>
                                 ))

@@ -35,16 +35,19 @@ export interface Price {
 export class NeDBConfigRepository {
 
     async getVehicleTypes(garageId: string): Promise<VehicleType[]> {
+        if (!garageId || typeof garageId !== 'string') return [];
         try {
-            const types: any[] = await db.vehicleTypes.find({ garageId });
+            const types: any[] = await db.vehicleTypes.find({
+                $or: [{ garageId }, { garage_id: garageId }]
+            });
             if (types.length > 0) {
                 return types.map(t => ({
                     id: t.id,
                     name: t.name,
-                    icon: t.icon,
-                    garageId: t.garageId,
+                    icon: t.icon ?? t.iconKey ?? t.icon_key,
+                    garageId: t.garageId ?? t.garage_id,
                     description: t.description,
-                    active: t.active
+                    active: t.active ?? true
                 }));
             }
         } catch (err) {
@@ -61,7 +64,7 @@ export class NeDBConfigRepository {
 
             if (error) throw error;
 
-            return (data || []).map(row => ({
+            const mapped = (data || []).map(row => ({
                 id: row.id,
                 name: row.name,
                 icon: row.icon_key,
@@ -69,6 +72,14 @@ export class NeDBConfigRepository {
                 description: row.description,
                 active: row.active ?? true
             }));
+
+            for (const item of mapped) {
+                try {
+                    await db.vehicleTypes.update({ id: item.id }, { ...item, updatedAt: new Date() }, { upsert: true });
+                } catch {}
+            }
+
+            return mapped;
         } catch (cloudErr) {
             console.error('Cloud VehicleTypes Error', cloudErr);
             return [];
@@ -76,15 +87,19 @@ export class NeDBConfigRepository {
     }
 
     async getTariffs(garageId: string): Promise<Tariff[]> {
+        if (!garageId || typeof garageId !== 'string') return [];
         try {
-            const items: any[] = await db.tariffs.find({ garageId }).sort({ priority: 1 });
+            const items: any[] = await db.tariffs.find({
+                $or: [{ garageId }, { garage_id: garageId }]
+            });
             if (items.length > 0) {
+                items.sort((a, b) => (a.priority ?? a.sortOrder ?? a.sort_order ?? 0) - (b.priority ?? b.sortOrder ?? b.sort_order ?? 0));
                 return items.map(t => ({
                     id: t.id,
                     name: t.name,
-                    garageId: t.garageId,
+                    garageId: t.garageId ?? t.garage_id,
                     type: t.type,
-                    priority: t.priority,
+                    priority: t.priority ?? t.sortOrder ?? t.sort_order ?? 0,
                     days: t.days,
                     hours: t.hours,
                     minutes: t.minutes
@@ -103,7 +118,7 @@ export class NeDBConfigRepository {
 
             if (error) throw error;
 
-            return (data || []).map(row => ({
+            const mapped = (data || []).map(row => ({
                 id: row.id,
                 name: row.name,
                 garageId: row.garage_id,
@@ -113,25 +128,66 @@ export class NeDBConfigRepository {
                 hours: row.hours,
                 minutes: row.minutes
             }));
+
+            for (const item of mapped) {
+                try {
+                    await db.tariffs.update({ id: item.id }, { ...item, sortOrder: item.priority, updatedAt: new Date() }, { upsert: true });
+                } catch {}
+            }
+
+            return mapped;
         } catch (cloudErr: any) {
-            console.error('Cloud Tariffs Error', cloudErr.message);
+            console.error('Cloud Tariffs Error', cloudErr?.message || cloudErr);
             return [];
         }
     }
 
     async getPrices(garageId: string, method: string = 'EFECTIVO'): Promise<Price[]> {
+        if (!garageId || typeof garageId !== 'string') return [];
+
+        const m = (method || 'EFECTIVO').toUpperCase();
+        let priceList = 'standard';
+        if (
+            m === 'ELECTRONIC' ||
+            m === 'MERCADO_PAGO' ||
+            m === 'MERCADOPAGO' ||
+            m === 'TRANSFERENCIA' ||
+            m === 'DEBITO' ||
+            m === 'CREDITO' ||
+            m === 'QR'
+        ) {
+            priceList = 'electronic';
+        } else if (m === 'EFECTIVO' || m === 'STANDARD') {
+            priceList = 'standard';
+        }
+
         try {
-            const items: any[] = await db.prices.find({ garageId, method: method.toUpperCase() });
+            const allGaragePrices: any[] = await db.prices.find({
+                $or: [{ garageId }, { garage_id: garageId }]
+            });
+
+            const items = allGaragePrices.filter(p => {
+                const pList = String(p.priceList ?? p.price_list ?? '').toLowerCase();
+                const pMethod = String(p.method ?? '').toUpperCase();
+
+                if (pList === priceList) return true;
+                if (pMethod === m) return true;
+                if (priceList === 'standard' && (pMethod === 'EFECTIVO' || pMethod === 'STANDARD')) return true;
+                if (priceList === 'electronic' && pMethod === 'ELECTRONIC') return true;
+                if (priceList === 'standard' && !pList && !pMethod) return true;
+                return false;
+            });
+
             if (items.length > 0) {
                 return items.map(p => ({
                     id: p.id,
-                    vehicleTypeId: p.vehicleTypeId,
-                    tariffId: p.tariffId,
-                    price: p.amount || p.price,
-                    amount: p.amount || p.price,
-                    currency: p.currency,
-                    garageId: p.garageId,
-                    method: p.method
+                    vehicleTypeId: p.vehicleTypeId || p.vehicle_type_id,
+                    tariffId: p.tariffId || p.tariff_id,
+                    price: Number(p.amount ?? p.price ?? 0),
+                    amount: Number(p.amount ?? p.price ?? 0),
+                    currency: p.currency || 'ARS',
+                    garageId: p.garageId || p.garage_id,
+                    method: p.method || (priceList === 'electronic' ? 'ELECTRONIC' : 'EFECTIVO')
                 }));
             }
         } catch (err) {
@@ -139,12 +195,6 @@ export class NeDBConfigRepository {
         }
 
         try {
-            let priceList = 'standard';
-            if (method.toUpperCase() === 'ELECTRONIC' || method.toUpperCase() === 'MERCADO_PAGO' || method.toUpperCase() === 'TRANSFERENCIA' || method.toUpperCase() === 'DEBITO' || method.toUpperCase() === 'CREDITO') {
-                priceList = 'electronic';
-            }
-            if (method.toUpperCase() === 'EFECTIVO') priceList = 'standard';
-
             const { data, error } = await supabase
                 .from('prices')
                 .select('*')
@@ -153,18 +203,41 @@ export class NeDBConfigRepository {
 
             if (error) throw error;
 
-            return (data || []).map(row => ({
+            const mapped = (data || []).map(row => ({
                 id: row.id,
                 vehicleTypeId: row.vehicle_type_id,
                 tariffId: row.tariff_id,
-                price: row.amount || 0,
-                amount: row.amount || 0,
-                currency: row.currency,
+                price: Number(row.amount || 0),
+                amount: Number(row.amount || 0),
+                currency: row.currency || 'ARS',
                 garageId: row.garage_id,
                 method: method
             }));
+
+            for (const row of (data || [])) {
+                try {
+                    await db.prices.update(
+                        { id: row.id },
+                        {
+                            id: row.id,
+                            vehicleTypeId: row.vehicle_type_id,
+                            tariffId: row.tariff_id,
+                            amount: Number(row.amount || 0),
+                            price: Number(row.amount || 0),
+                            currency: row.currency || 'ARS',
+                            garageId: row.garage_id,
+                            priceList: row.price_list || priceList,
+                            method: (row.price_list || priceList) === 'electronic' ? 'ELECTRONIC' : 'EFECTIVO',
+                            updatedAt: new Date()
+                        },
+                        { upsert: true }
+                    );
+                } catch {}
+            }
+
+            return mapped;
         } catch (cloudErr: any) {
-            console.error('Cloud Prices Error', cloudErr.message);
+            console.error('Cloud Prices Error', cloudErr?.message || cloudErr);
             return [];
         }
     }
@@ -172,7 +245,9 @@ export class NeDBConfigRepository {
     async getParams(garageId?: string): Promise<any> {
         try {
             if (garageId) {
-                const configs: any[] = await db.financialConfigs.find({ garageId });
+                const configs: any[] = await db.financialConfigs.find({
+                    $or: [{ garageId }, { garage_id: garageId }]
+                });
                 if (configs && configs.length > 0) {
                     configs.sort((a, b) => new Date(b.updatedAt || b.updated_at || 0).getTime() - new Date(a.updatedAt || a.updated_at || 0).getTime());
                     const config = configs[0];
@@ -184,16 +259,30 @@ export class NeDBConfigRepository {
                     const numericUntilDay = rawUntilDay === null || rawUntilDay === undefined ? null : Number(rawUntilDay);
                     const subscriptionFullPriceUntilDay = Number.isInteger(numericUntilDay) && numericUntilDay! >= 1 && numericUntilDay! <= 31 ? numericUntilDay : null;
 
+                    let parsedSurchargeConfig = config.surchargeConfig ?? config.surcharge_config;
+                    if (typeof parsedSurchargeConfig === 'string') {
+                        try {
+                            parsedSurchargeConfig = JSON.parse(parsedSurchargeConfig);
+                        } catch (e) {
+                            console.error('Invalid surcharge_config JSON string in DB:', e);
+                            parsedSurchargeConfig = {};
+                        }
+                    }
+
+                    const initialTolerance = config.initialTolerance ?? config.initial_tolerance ?? 15;
+                    const fractionateAfter = config.fractionateAfter ?? config.fractionate_after ?? 0;
+
                     return {
-                        initial_tolerance: config.initialTolerance ?? 15,
-                        fractionate_after: config.fractionateAfter ?? 0,
-                        toleranciaInicial: config.initialTolerance ?? 15,
-                        fraccionarDesde: config.fractionateAfter ?? 0,
+                        initial_tolerance: initialTolerance,
+                        fractionate_after: fractionateAfter,
+                        toleranciaInicial: initialTolerance,
+                        fraccionarDesde: fractionateAfter,
                         recargoDia11: 10,
                         recargoDia22: 20,
                         permitirCobroAnticipado: false,
                         subscriptionFullPriceEnabled,
-                        subscriptionFullPriceUntilDay
+                        subscriptionFullPriceUntilDay,
+                        surchargeConfig: parsedSurchargeConfig
                     };
                 }
             }

@@ -6,9 +6,12 @@ import { VehicleRepository } from '../../Garage/infra/VehicleRepository';
 import { CustomerRepository } from '../../Garage/infra/CustomerRepository';
 import { SubscriptionRepository } from '../../Garage/infra/SubscriptionRepository';
 import { AttachmentService } from '../../Sync/application/AttachmentService';
+import { ConfigRepository } from '../../Configuration/infra/ConfigRepository';
+import { StorageEngine } from '../../../infrastructure/database/StorageEngine';
+import { TerminalConfigManager } from '../../../infrastructure/config/TerminalConfigManager';
+import { db } from '../../../infrastructure/database/datastore';
 
 import { JsonDB } from '../../../infrastructure/database/json-db';
-// NeDB datastore removed
 import { v4 as uuidv4 } from 'uuid';
 import { CorrelativeService } from '../../../shared/CorrelativeService';
 import { SQLiteManager } from '../../../infrastructure/database/sqlite/SQLiteManager';
@@ -33,7 +36,12 @@ export class AccessController {
     private getGarageOwnerId(garageId: string): string | undefined {
         if (!garageId) return undefined;
         try {
-            
+            const termCfg = TerminalConfigManager.getConfig();
+            if (termCfg && termCfg.garage_id === garageId && termCfg.owner_id) {
+                return termCfg.owner_id;
+            }
+        } catch {}
+        try {
             const sqliteDb = SQLiteManager.getInstance().getDatabase();
             const row = sqliteDb.prepare('SELECT json_data FROM garages WHERE id = ?').get(garageId) as any;
             if (row && row.json_data) {
@@ -46,12 +54,18 @@ export class AccessController {
         return undefined;
     }
 
-    constructor() {
-        this.stayRepository = new StayRepository();
-        this.movementRepository = new MovementRepository();
-        this.vehicleRepository = new VehicleRepository();
-        this.customerRepository = new CustomerRepository();
-        this.subscriptionRepository = new SubscriptionRepository();
+    constructor(
+        stayRepository?: StayRepository,
+        movementRepository?: MovementRepository,
+        vehicleRepository?: VehicleRepository,
+        customerRepository?: CustomerRepository,
+        subscriptionRepository?: SubscriptionRepository
+    ) {
+        this.stayRepository = stayRepository || new StayRepository();
+        this.movementRepository = movementRepository || new MovementRepository();
+        this.vehicleRepository = vehicleRepository || new VehicleRepository();
+        this.customerRepository = customerRepository || new CustomerRepository();
+        this.subscriptionRepository = subscriptionRepository || new SubscriptionRepository();
     }
 
     registerEntry = async (req: Request, res: Response) => {
@@ -75,7 +89,9 @@ export class AccessController {
             }
 
             // 0. Check for existing Active Stay (Prevent Double Entry)
-            const existingStay = await this.stayRepository.findActiveByPlateOrTicket(plate, garageId);
+            const existingStay = typeof this.stayRepository.findActiveByPlateOrTicket === 'function'
+                ? await this.stayRepository.findActiveByPlateOrTicket(plate, garageId)
+                : null;
             if (existingStay) {
                 return res.status(409).json({ error: 'Vehicle already in garage', stay: existingStay });
             }
@@ -84,7 +100,7 @@ export class AccessController {
             let resolvedType = 'Auto'; // Default de seguridad
 
             if (vehicleTypeId) {
-                const configRepo = new (require('../../Configuration/infra/ConfigRepository').ConfigRepository)();
+                const configRepo = new ConfigRepository();
                 const vehicleTypes = await configRepo.getVehicleTypes(garageId);
                 const found = vehicleTypes.find((vt: any) => vt.id === vehicleTypeId || (vt as any)._id === vehicleTypeId);
 
@@ -97,7 +113,9 @@ export class AccessController {
             }
 
             // 3. Check for Active Subscription
-            const activeSubscription = await this.subscriptionRepository.findActiveByPlate(plate, garageId);
+            const activeSubscription = typeof this.subscriptionRepository.findActiveByPlate === 'function'
+                ? await this.subscriptionRepository.findActiveByPlate(plate, garageId)
+                : null;
             const isSubscriber = !!activeSubscription;
             const subscriptionId = activeSubscription ? activeSubscription.id : null;
 
@@ -107,7 +125,9 @@ export class AccessController {
 
             // 2. Resolve Vehicle Identity & Prepare
             let vehicleId: string;
-            let existingVehicle = await this.vehicleRepository.findByPlate(plate, garageId);
+            let existingVehicle = typeof this.vehicleRepository.findByPlate === 'function'
+                ? await this.vehicleRepository.findByPlate(plate, garageId)
+                : null;
             let vehicleToSave: any = null;
 
             if (existingVehicle) {
@@ -150,7 +170,7 @@ export class AccessController {
                 }
 
                 // Lookup tariff in local DB
-                const configRepo = new (require('../../Configuration/infra/ConfigRepository').ConfigRepository)();
+                const configRepo = new ConfigRepository();
                 const tariffs = await configRepo.getTariffs(garageId);
                 const tariff = tariffs.find((t: any) => t.id === prepaidTariffId || (t as any)._id === prepaidTariffId);
 
@@ -299,7 +319,7 @@ export class AccessController {
                         (savedStay as any).prepaidMovement = prepaidMovement;
                     }
 
-                    if (vehicleToSave) {
+                    if (vehicleToSave && typeof this.vehicleRepository.save === 'function') {
                         await this.vehicleRepository.save(vehicleToSave, vehicleToSave.id ? 'UPDATE' : 'CREATE', tx);
                         console.log(`🚗 Entry: Vehicle ${vehicleId} saved/updated for ${plate}`);
                     }
@@ -564,30 +584,33 @@ export class AccessController {
 
             let vehicles: any[] = [];
             if (query.$or.length > 0) {
-                
-                const sqliteDb = SQLiteManager.getInstance().getDatabase();
-                
-                // Get by IDs
-                if (vehicleIds.length > 0) {
-                    const placeholders = vehicleIds.map(() => '?').join(',');
-                    const rows = sqliteDb.prepare(`SELECT json_data FROM vehicles WHERE id IN (${placeholders})`).all(...vehicleIds) as any[];
-                    vehicles.push(...rows.map((r: any) => JSON.parse(r.json_data)));
-                }
-                
-                // Get by Plates
-                if (plates.length > 0) {
-                    const placeholders = plates.map(() => '?').join(',');
-                    const params: any[] = [...plates];
-                    let sql = `SELECT json_data FROM vehicles WHERE json_extract(json_data, '$.plate') IN (${placeholders})`;
-                    if (garageId) {
-                        sql += ` AND json_extract(json_data, '$.garageId') = ?`;
-                        params.push(garageId);
-                    }
-                    const rows = sqliteDb.prepare(sql).all(...params) as any[];
+                if (StorageEngine.getEngine() === 'SQLITE') {
+                    const sqliteDb = SQLiteManager.getInstance().getDatabase();
                     
-                    const existingIds = new Set(vehicles.map(v => v.id));
-                    const newVehicles = rows.map((r: any) => JSON.parse(r.json_data)).filter((v: any) => !existingIds.has(v.id));
-                    vehicles.push(...newVehicles);
+                    // Get by IDs
+                    if (vehicleIds.length > 0) {
+                        const placeholders = vehicleIds.map(() => '?').join(',');
+                        const rows = sqliteDb.prepare(`SELECT json_data FROM vehicles WHERE id IN (${placeholders})`).all(...vehicleIds) as any[];
+                        vehicles.push(...rows.map((r: any) => JSON.parse(r.json_data)));
+                    }
+                    
+                    // Get by Plates
+                    if (plates.length > 0) {
+                        const placeholders = plates.map(() => '?').join(',');
+                        const params: any[] = [...plates];
+                        let sql = `SELECT json_data FROM vehicles WHERE json_extract(json_data, '$.plate') IN (${placeholders})`;
+                        if (garageId) {
+                            sql += ` AND (json_extract(json_data, '$.garageId') = ? OR json_extract(json_data, '$.garage_id') = ?)`;
+                            params.push(garageId, garageId);
+                        }
+                        const rows = sqliteDb.prepare(sql).all(...params) as any[];
+                        
+                        const existingIds = new Set(vehicles.map(v => v.id));
+                        const newVehicles = rows.map((r: any) => JSON.parse(r.json_data)).filter((v: any) => !existingIds.has(v.id));
+                        vehicles.push(...newVehicles);
+                    }
+                } else {
+                    vehicles = await db.vehicles.find(query);
                 }
             }
 

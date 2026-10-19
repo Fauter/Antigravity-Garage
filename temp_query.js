@@ -1,0 +1,1 @@
+const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync('.data/garageia.sqlite'); const c = db.prepare('SELECT count(*) as c FROM stays WHERE json_extract(json_data, ''$.garageId'') = ''1cffe087-f7aa-4d99-a2c2-b8b46eeaaf02''').get(); console.log('garage stays:', c);

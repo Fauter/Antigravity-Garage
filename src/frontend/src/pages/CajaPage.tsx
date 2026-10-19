@@ -4,6 +4,7 @@ import { api } from '../services/api';
 import { toast } from 'sonner';
 import { Wallet, TrendingUp, Calendar, User, ArrowDownRight, LogOut, FileText, CheckCircle, AlertCircle, CheckCircle2, Printer, Search, X, Loader2, RotateCcw } from 'lucide-react';
 import { PrinterService } from '../services/PrinterService';
+import { calculateCajaShift } from '../utils/cajaCalculations';
 
 interface Movement {
     id?: string;
@@ -194,7 +195,12 @@ const CajaPage: React.FC = () => {
     const { user, operatorName, logout } = useAuth();
     const [unifiedRows, setUnifiedRows] = useState<UnifiedRow[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
     const [total, setTotal] = useState(0);
+
+    // Prevenir dobles clics y carreras concurrentes
+    const [isSubmittingShiftClose, setIsSubmittingShiftClose] = useState(false);
+    const [isSubmittingPartialClose, setIsSubmittingPartialClose] = useState(false);
 
     // Modals state
     const [isShiftCloseModalOpen, setIsShiftCloseModalOpen] = useState(false);
@@ -232,7 +238,19 @@ const CajaPage: React.FC = () => {
         loadMovements();
     }, [user, operatorName]);
 
+    // Recargar automáticamente cuando se complete una sincronización en segundo plano
+    useEffect(() => {
+        const handleSync = () => {
+            console.log('[CajaPage] Sincronización en segundo plano completada, refrescando caja...');
+            loadMovements();
+        };
+        window.addEventListener('ag:sync-completed', handleSync);
+        return () => window.removeEventListener('ag:sync-completed', handleSync);
+    }, [user, operatorName]);
+
     const loadMovements = async () => {
+        setLoading(true);
+        setLoadError(null);
         try {
             const [movRes, pcRes, scRes] = await Promise.all([
                 api.get('/caja/movimientos'),
@@ -240,75 +258,28 @@ const CajaPage: React.FC = () => {
                 api.get('/caja/cierres')
             ]);
 
-            const today = new Date().toLocaleDateString();
+            if (!Array.isArray(movRes.data) || !Array.isArray(pcRes.data) || !Array.isArray(scRes.data)) {
+                throw new Error('Respuesta no válida del servidor.');
+            }
 
-            // Encontrar el "ancla": último cierre de caja final de este operador
-            const myShiftCloses = (scRes.data || [])
-                .filter((sc: any) => sc.operator === operatorName || sc.operator === user?.username)
-                .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+            // La caja pertenece al GARAGE, no al operador.
+            // Se calcula el estado del turno abierto utilizando como ancla el último cierre global.
+            const result = calculateCajaShift({
+                movements: movRes.data,
+                partialCloses: pcRes.data,
+                shiftCloses: scRes.data,
+                activeGarageId: user?.garage_id
+            });
 
-            const lastCloseTimestamp = myShiftCloses.length > 0
-                ? new Date(myShiftCloses[0].timestamp).getTime()
-                : null;
-
-            // Función de filtrado: posterior al último cierre, o del día si no hay cierres
-            const isInCurrentShift = (timestamp: string, operator: string) => {
-                const isMyOp = operator === operatorName || operator === user?.username;
-                if (!isMyOp) return false;
-
-                if (lastCloseTimestamp) {
-                    // Solo mostrar movimientos POSTERIORES al último cierre
-                    return new Date(timestamp).getTime() > lastCloseTimestamp;
-                } else {
-                    // Sin cierres previos: fallback a movimientos de hoy
-                    return new Date(timestamp).toLocaleDateString() === today;
-                }
-            };
-
-            // Filtrar movimientos del turno activo
-            const shiftMovements: UnifiedRow[] = movRes.data
-                .filter((m: any) => isInCurrentShift(m.timestamp, m.operator))
-                .map((m: any) => ({ ...m, _kind: 'movement' as const }));
-
-            // Filtrar cierres parciales del turno activo
-            const shiftPartials: UnifiedRow[] = (pcRes.data || [])
-                .filter((pc: any) => isInCurrentShift(pc.timestamp, pc.operator))
-                .map((pc: any) => ({ ...pc, _kind: 'partial_close' as const }));
-
-            // Combinar y ordenar por timestamp descendente
-            const combined = [...shiftMovements, ...shiftPartials];
-            combined.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-            setUnifiedRows(combined);
-
-            // Guardar movimientos raw para reprint cross-reference
+            setUnifiedRows(result.unifiedRows as UnifiedRow[]);
             setRawMovements(movRes.data || []);
-
-            // Fondo Inicial: staying_in_cash del último cierre global (cualquier operador)
-            // Nota: los registros locales usan staying_in_cash (snake_case),
-            // pero los sincronizados desde Supabase usan stayingInCash (camelCase)
-            const allShiftClosesSorted = (scRes.data || [])
-                .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-            const lastGlobalClose = allShiftClosesSorted.length > 0 ? allShiftClosesSorted[0] : null;
-            const fondoInicial = lastGlobalClose
-                ? Number(lastGlobalClose.staying_in_cash ?? lastGlobalClose.stayingInCash) || 0
-                : 0;
-            console.log('[CajaPage] Fondo Inicial:', fondoInicial, '| Último cierre:', lastGlobalClose);
-
-            // Cálculo: fondo inicial + suma de efectivo - suma de retiros parciales
-            const cashSum = shiftMovements
-                .filter((m) => {
-                    const method = ((m as Movement).paymentMethod || (m as Movement).payment_method || '').toLowerCase();
-                    return method === 'efectivo';
-                })
-                .reduce((acc, curr) => acc + Number(curr.amount), 0);
-
-            const partialsSum = shiftPartials
-                .reduce((acc, curr) => acc + Number(curr.amount), 0);
-
-            setTotal(fondoInicial + cashSum - partialsSum);
-        } catch (error) {
+            setTotal(result.totalCashInDrawer);
+            console.log('[CajaPage] Fondo Inicial:', result.fondoInicial, '| Último cierre global:', result.lastGlobalClose, '| Efectivo en caja:', result.totalCashInDrawer);
+        } catch (error: any) {
             console.error('Error loading movements', error);
+            const msg = error?.response?.data?.error || error?.message || 'Error al cargar los datos de caja';
+            setLoadError(msg);
+            toast.error('Error al cargar datos de caja');
         } finally {
             setLoading(false);
         }
@@ -495,6 +466,13 @@ const CajaPage: React.FC = () => {
     const filteredReprintItems = reprintItems;
 
     const handleShiftClose = async () => {
+        if (loadError) {
+            toast.error('No se puede cerrar la caja con errores pendientes de carga.');
+            return;
+        }
+        if (isSubmittingShiftClose) return;
+        setIsSubmittingShiftClose(true);
+
         try {
             await api.post('/caja/cierre', {
                 operator: operatorName,
@@ -516,6 +494,7 @@ const CajaPage: React.FC = () => {
         } catch (error) {
             console.error("Error al cerrar caja", error);
             toast.error('Error al procesar la operación');
+            setIsSubmittingShiftClose(false);
         }
     };
 
@@ -557,6 +536,8 @@ const CajaPage: React.FC = () => {
 
     const handlePartialClose = async () => {
         if (!validatePartialCloseForm()) return;
+        if (isSubmittingPartialClose) return;
+        setIsSubmittingPartialClose(true);
 
         const normalizedName = recipientName.trim();
         const normalizedNotes = partialNotes.trim();
@@ -583,10 +564,24 @@ const CajaPage: React.FC = () => {
         } catch (error) {
             console.error("Error al registrar cierre parcial", error);
             toast.error('Error al procesar la operación');
+        } finally {
+            setIsSubmittingPartialClose(false);
         }
     };
 
     // --- Helpers ---
+    const cashFormatter = new Intl.NumberFormat('es-AR', {
+        maximumFractionDigits: 0,
+        minimumFractionDigits: 0,
+    });
+
+    const formatCashDisplay = (val: number): string => {
+        const absRounded = Math.round(Math.abs(val));
+        const isNegative = val < 0 && absRounded > 0;
+        const formatted = cashFormatter.format(absRounded);
+        return (isNegative ? '-$' : '$') + formatted;
+    };
+
     const formatNumberWithDots = (val: number | string): string => {
         if (val === '') return '';
         return val.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
@@ -606,42 +601,69 @@ const CajaPage: React.FC = () => {
     };
 
     return (
-        <div className="p-6 h-full flex flex-col bg-slate-950 text-gray-200 font-sans">
+        <div className="px-6 py-4 h-full flex flex-col bg-slate-950 text-gray-200 font-sans">
 
-            <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-4">
                 <div>
-                    <h2 className="text-3xl font-bold text-white tracking-tight flex items-center gap-3">
-                        <Wallet className="w-8 h-8 text-emerald-500" />
+                    <h2 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2.5">
+                        <Wallet className="w-7 h-7 text-emerald-500" />
                         Caja del Turno
                     </h2>
-                    <p className="text-gray-400 text-sm mt-2 flex items-center gap-2">
+                    <p className="text-gray-400 text-sm mt-1 flex items-center gap-2">
                         <User className="w-4 h-4 text-emerald-500" /> Operador: <span className="text-emerald-400 font-mono font-bold mr-2">{operatorName}</span>
                         |
                         <Calendar className="w-4 h-4 ml-2 text-emerald-500" /> Fecha: <span className="text-gray-300 font-mono">{new Date().toLocaleDateString()}</span>
+                        <button
+                            onClick={() => loadMovements()}
+                            disabled={loading}
+                            title="Actualizar movimientos de caja"
+                            className="ml-2 p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition disabled:opacity-50"
+                        >
+                            <RotateCcw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-emerald-400' : ''}`} />
+                        </button>
                     </p>
                 </div>
 
                 <div className="flex items-center gap-4">
-                    <div className="bg-emerald-900/20 border border-emerald-500/30 p-4 rounded-xl flex items-center gap-4">
-                        <div className="bg-emerald-500/20 p-3 rounded-xl text-emerald-500">
-                            <TrendingUp className="w-8 h-8" />
+                    <div className="bg-emerald-900/20 border border-emerald-500/30 px-4 py-2.5 rounded-xl flex items-center gap-3.5">
+                        <div className="bg-emerald-500/20 p-2.5 rounded-xl text-emerald-500">
+                            <TrendingUp className="w-6 h-6" />
                         </div>
                         <div>
                             <span className="block text-emerald-500/80 text-xs font-bold uppercase tracking-widest">Efectivo en Caja</span>
-                            <span className="text-4xl font-black text-white tracking-tighter">${total.toLocaleString()}</span>
+                            <span className="text-3xl font-black text-white tracking-tight">{formatCashDisplay(total)}</span>
                         </div>
                     </div>
                 </div>
             </div>
 
+            {loadError && (
+                <div className="bg-red-950/80 border border-red-700 text-red-200 p-4 rounded-xl mb-4 flex items-center justify-between shadow-lg">
+                    <div className="flex items-center gap-3">
+                        <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
+                        <div>
+                            <p className="font-semibold text-red-100">Error al sincronizar datos de caja</p>
+                            <p className="text-xs text-red-300/80 mt-0.5">{loadError}</p>
+                        </div>
+                    </div>
+                    <button
+                        onClick={loadMovements}
+                        disabled={loading}
+                        className="bg-red-800 hover:bg-red-700 text-white px-3 py-1.5 rounded-lg text-sm font-semibold transition flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                        <RotateCcw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Reintentar
+                    </button>
+                </div>
+            )}
+
             {/* Acciones Rápidas */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                 <button
                     onClick={() => {
                         resetPartialCloseForm();
                         setIsPartialCloseModalOpen(true);
                     }}
-                    className="flex justify-center items-center gap-3 bg-slate-800 hover:bg-slate-700 text-white p-4 rounded-xl border border-slate-700 transition-colors shadow-lg group"
+                    className="flex justify-center items-center gap-3 bg-slate-800 hover:bg-slate-700 text-white py-2.5 px-4 rounded-xl border border-slate-700 transition-colors shadow-lg group"
                 >
                     <ArrowDownRight className="w-6 h-6 text-amber-500 group-hover:scale-110 transition-transform" />
                     <span className="font-semibold text-lg">Retiro Parcial</span>
@@ -649,7 +671,7 @@ const CajaPage: React.FC = () => {
 
                 <button
                     onClick={() => setIsReprintModalOpen(true)}
-                    className="flex justify-center items-center gap-3 bg-slate-800 hover:bg-slate-700 text-white p-4 rounded-xl border border-slate-700 transition-colors shadow-lg group"
+                    className="flex justify-center items-center gap-3 bg-slate-800 hover:bg-slate-700 text-white py-2.5 px-4 rounded-xl border border-slate-700 transition-colors shadow-lg group"
                 >
                     <Printer className="w-6 h-6 text-sky-400 group-hover:scale-110 transition-transform" />
                     <span className="font-semibold text-lg">Reimprimir Tickets</span>
@@ -657,7 +679,7 @@ const CajaPage: React.FC = () => {
 
                 <button
                     onClick={() => setIsShiftCloseModalOpen(true)}
-                    className="flex justify-center items-center gap-3 bg-red-900/40 hover:bg-red-900/60 text-white p-4 rounded-xl border border-red-800/50 hover:border-red-500/50 transition-colors shadow-lg group"
+                    className="flex justify-center items-center gap-3 bg-red-900/40 hover:bg-red-900/60 text-white py-2.5 px-4 rounded-xl border border-red-800/50 hover:border-red-500/50 transition-colors shadow-lg group"
                 >
                     <LogOut className="w-6 h-6 text-red-400 group-hover:scale-110 transition-transform" />
                     <span className="font-semibold text-lg text-red-100">Cierre de Caja Final</span>
@@ -665,8 +687,8 @@ const CajaPage: React.FC = () => {
             </div>
 
             <div className="flex-1 overflow-hidden bg-slate-900 border border-slate-800 rounded-2xl shadow-xl flex flex-col">
-                <div className="p-4 border-b border-slate-800 bg-slate-900/50">
-                    <h3 className="text-lg font-bold text-slate-300 flex items-center gap-2">
+                <div className="px-4 py-2.5 border-b border-slate-800 bg-slate-900/50">
+                    <h3 className="text-base font-bold text-slate-300 flex items-center gap-2">
                         <FileText className="w-5 h-5" /> Movimientos del Turno
                     </h3>
                 </div>
@@ -809,7 +831,7 @@ const CajaPage: React.FC = () => {
 
                                 <div className="bg-slate-950/50 border border-slate-800 rounded-xl p-4 mb-6 flex items-center justify-between">
                                     <span className="text-slate-400 text-sm font-bold uppercase tracking-wide">Cálculo de Caja</span>
-                                    <span className="text-2xl font-black text-emerald-400 font-mono">${total.toLocaleString()}</span>
+                                    <span className="text-2xl font-black text-emerald-400 font-mono">{formatCashDisplay(total)}</span>
                                 </div>
 
                                 <div className="space-y-4 mb-8">
@@ -921,9 +943,18 @@ const CajaPage: React.FC = () => {
                                     </button>
                                     <button
                                         onClick={handleShiftClose}
-                                        className="flex-1 bg-red-600 text-white py-3 rounded-xl font-bold hover:bg-red-500 transition flex items-center justify-center gap-2"
+                                        disabled={isSubmittingShiftClose}
+                                        className="flex-1 bg-red-600 text-white py-3 rounded-xl font-bold hover:bg-red-500 transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
-                                        Confirmar Cierre <LogOut className="w-5 h-5" />
+                                        {isSubmittingShiftClose ? (
+                                            <>
+                                                <Loader2 className="w-5 h-5 animate-spin" /> Procesando...
+                                            </>
+                                        ) : (
+                                            <>
+                                                Confirmar Cierre <LogOut className="w-5 h-5" />
+                                            </>
+                                        )}
                                     </button>
                                 </div>
                             </>
@@ -1082,9 +1113,18 @@ const CajaPage: React.FC = () => {
                                     </button>
                                     <button
                                         onClick={handlePartialClose}
-                                        className={`flex-1 text-white py-3 rounded-xl font-bold transition flex items-center justify-center gap-2 ${movementType === 'expense' ? 'bg-sky-600 hover:bg-sky-500' : 'bg-amber-600 hover:bg-amber-500'}`}
+                                        disabled={isSubmittingPartialClose}
+                                        className={`flex-1 text-white py-3 rounded-xl font-bold transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed ${movementType === 'expense' ? 'bg-sky-600 hover:bg-sky-500' : 'bg-amber-600 hover:bg-amber-500'}`}
                                     >
-                                        {movementType === 'expense' ? 'Confirmar Egreso' : 'Confirmar Retiro'}
+                                        {isSubmittingPartialClose ? (
+                                            <>
+                                                <Loader2 className="w-5 h-5 animate-spin" /> Procesando...
+                                            </>
+                                        ) : (
+                                            <>
+                                                {movementType === 'expense' ? 'Confirmar Egreso' : 'Confirmar Retiro'}
+                                            </>
+                                        )}
                                     </button>
                                 </div>
                             </>

@@ -2,6 +2,7 @@ import { SQLiteManager } from '../../../infrastructure/database/sqlite/SQLiteMan
 import { supabase } from '../../../infrastructure/lib/supabase.js';
 import { TransactionHelper } from '../../../infrastructure/database/sqlite/TransactionHelper.js';
 import { OpsLogger } from '../../../shared/OpsLogger.js';
+import { TerminalConfigManager } from '../../../infrastructure/config/TerminalConfigManager.js';
 
 export interface TableMapping {
     remoteTable: string;
@@ -24,8 +25,10 @@ export class SqliteSyncCoordinator {
     private justReconnected = false;
     private realtimeChannel: any = null;
     private activeRealtimeGarageId: string | null = null;
+    private activeSyncPromise: Promise<{ status: 'SUCCESS' | 'WITH_WARNINGS' | 'FAILED'; failedTables: string[] }> | null = null;
 
     static readonly tableMappings: TableMapping[] = [
+        { remoteTable: 'garages', localTable: 'garages', entityType: 'Garage', filterColumn: 'id' },
         { remoteTable: 'customers', localTable: 'customers', entityType: 'Customer' },
         { remoteTable: 'subscriptions', localTable: 'subscriptions', entityType: 'Subscription' },
         { remoteTable: 'vehicles', localTable: 'vehicles', entityType: 'Vehicle' },
@@ -43,7 +46,6 @@ export class SqliteSyncCoordinator {
         { remoteTable: 'shift_closes', localTable: 'shift_closes', entityType: 'ShiftClose' },
         { remoteTable: 'partial_closes', localTable: 'partial_closes', entityType: 'PartialClose' },
         { remoteTable: 'promos', localTable: 'promos', entityType: 'Promo' },
-        { remoteTable: 'garages', localTable: 'garages', entityType: 'Garage', filterColumn: 'id' },
     ];
 
     constructor() {
@@ -236,7 +238,7 @@ export class SqliteSyncCoordinator {
         }
     }
 
-    async processOutbox() {
+    async processOutbox(forceBypassBackoff: boolean = false) {
         if (this.isSyncing) return;
         this.isSyncing = true;
 
@@ -261,7 +263,7 @@ export class SqliteSyncCoordinator {
                     const lastAttempt = new Date(event.last_attempt_at).getTime();
                     const now = Date.now();
                     const backoffMs = Math.min(10000 * Math.pow(2, Math.max(0, event.attempts - 1)), 300000);
-                    const bypassBackoff = this.backendReachable && this.justReconnected;
+                    const bypassBackoff = forceBypassBackoff || (this.backendReachable && this.justReconnected);
                     
                     if (!bypassBackoff && now - lastAttempt < backoffMs) {
                         break; 
@@ -517,13 +519,26 @@ export class SqliteSyncCoordinator {
         }
     }
 
-    public async runSyncCycle(garageId: string, reason: string): Promise<{ status: 'SUCCESS' | 'WITH_WARNINGS', failedTables: string[] }> {
-        const result: { status: 'SUCCESS' | 'WITH_WARNINGS', failedTables: string[] } = { status: 'SUCCESS', failedTables: [] };
-        
+    public async runSyncCycle(garageId: string, reason: string): Promise<{ status: 'SUCCESS' | 'WITH_WARNINGS' | 'FAILED', failedTables: string[] }> {
+        if (this.activeSyncPromise) {
+            console.log(`[SYNC] Joining in-flight runSyncCycle (${reason}) for garage: ${garageId}`);
+            return this.activeSyncPromise;
+        }
         if (this.isGlobalSyncing) {
             console.log(`[SYNC] Skipped runSyncCycle (${reason}): Already syncing.`);
-            return result;
+            return { status: 'WITH_WARNINGS', failedTables: [] };
         }
+
+        this.activeSyncPromise = this.executeSyncCycle(garageId, reason);
+        try {
+            return await this.activeSyncPromise;
+        } finally {
+            this.activeSyncPromise = null;
+        }
+    }
+
+    private async executeSyncCycle(garageId: string, reason: string): Promise<{ status: 'SUCCESS' | 'WITH_WARNINGS' | 'FAILED', failedTables: string[] }> {
+        const result: { status: 'SUCCESS' | 'WITH_WARNINGS' | 'FAILED', failedTables: string[] } = { status: 'SUCCESS', failedTables: [] };
         this.isGlobalSyncing = true;
         this.garageId = garageId;
         const startTime = Date.now();
@@ -532,12 +547,25 @@ export class SqliteSyncCoordinator {
 
         try {
             // STEP 1: PUSH LOCAL (fast-track any pending outbox items before pulling)
-            await this.processOutbox();
+            await this.processOutbox(reason === 'MANUAL_BOOTSTRAP' || reason === 'BACKGROUND_RECONNECT');
 
-            // STEP 2: PULL REMOTE -> RECONCILE LOCAL (Controlled Parallelism)
+            // STEP 2: PULL REMOTE -> RECONCILE LOCAL (Ensure garages row is pulled first so owner_lookup succeeds)
+            const mappings = SqliteSyncCoordinator.tableMappings;
+            const garageMapping = mappings.find(m => m.remoteTable === 'garages');
+            const remainingMappings = mappings.filter(m => m.remoteTable !== 'garages');
+
+            if (garageMapping) {
+                try {
+                    await this.fetchTable(garageMapping.remoteTable, garageMapping.localTable, garageId, garageMapping.entityType, garageMapping.filterColumn, garageMapping.filterStrategy, false, reason);
+                } catch (tableErr: any) {
+                    console.warn(`⚠️ Pull Error for table ${garageMapping.remoteTable}:`, tableErr?.message || tableErr);
+                    result.failedTables.push(garageMapping.remoteTable);
+                }
+            }
+
             const chunkSize = 4;
-            for (let i = 0; i < SqliteSyncCoordinator.tableMappings.length; i += chunkSize) {
-                const chunk = SqliteSyncCoordinator.tableMappings.slice(i, i + chunkSize);
+            for (let i = 0; i < remainingMappings.length; i += chunkSize) {
+                const chunk = remainingMappings.slice(i, i + chunkSize);
                 await Promise.all(chunk.map(async (mapping) => {
                     try {
                         await this.fetchTable(mapping.remoteTable, mapping.localTable, garageId, mapping.entityType, mapping.filterColumn, mapping.filterStrategy, false, reason);
@@ -548,22 +576,50 @@ export class SqliteSyncCoordinator {
                 }));
             }
 
-            this.backendReachable = true;
-            this.lastSuccessfulSyncAt = new Date();
-            
             const duration = Date.now() - startTime;
-            if (result.failedTables.length > 0) {
-                result.status = 'WITH_WARNINGS';
-                console.log(`[SYNC] cycle completed duration=${duration}ms WITH WARNINGS. Failed tables: ${result.failedTables.join(', ')}`);
-                OpsLogger.warn({ operation: 'SYNC_SUCCESS', status: 'SUCCESS', garageId, errorMessage: `Warnings on: ${result.failedTables.join(', ')}` });
-            } else {
+            const db = SQLiteManager.getInstance().getDatabase();
+
+            if (result.failedTables.length === 0) {
+                this.backendReachable = true;
+                this.lastSuccessfulSyncAt = new Date();
+                this.lastError = null;
+                try {
+                    const now = new Date().toISOString();
+                    db.prepare("INSERT INTO sync_checkpoints (collection_name, last_synced_at) VALUES (?, ?) ON CONFLICT(collection_name) DO UPDATE SET last_synced_at = excluded.last_synced_at").run(`${garageId}__bootstrap_complete`, now);
+                    db.prepare("DELETE FROM sync_checkpoints WHERE collection_name = ?").run(`${garageId}__bootstrap_incomplete`);
+                } catch {}
                 console.log(`[SYNC] cycle completed duration=${duration}ms`);
                 OpsLogger.info({ operation: 'SYNC_SUCCESS', status: 'SUCCESS', garageId });
+            } else {
+                try {
+                    const existingComplete = db.prepare("SELECT 1 FROM sync_checkpoints WHERE collection_name = ? LIMIT 1").get(`${garageId}__bootstrap_complete`);
+                    if (!existingComplete) {
+                        const now = new Date().toISOString();
+                        db.prepare("INSERT INTO sync_checkpoints (collection_name, last_synced_at) VALUES (?, ?) ON CONFLICT(collection_name) DO UPDATE SET last_synced_at = excluded.last_synced_at").run(`${garageId}__bootstrap_incomplete`, now);
+                    }
+                } catch {}
+
+                const allFailed = mappings.length > 0 && result.failedTables.length >= mappings.length;
+                if (allFailed) {
+                    result.status = 'FAILED';
+                    this.backendReachable = false;
+                    this.lastError = `Sync failed on all tables (${result.failedTables.join(', ')})`;
+                    console.warn(`[SYNC] cycle FAILED duration=${duration}ms. All tables failed: ${result.failedTables.join(', ')}`);
+                    OpsLogger.error({ operation: 'SYNC_FAILURE', status: 'FAIL', garageId, errorMessage: `All tables failed: ${result.failedTables.join(', ')}` });
+                } else {
+                    result.status = 'WITH_WARNINGS';
+                    this.backendReachable = true;
+                    this.lastError = `Warnings on: ${result.failedTables.join(', ')}`;
+                    console.log(`[SYNC] cycle completed duration=${duration}ms WITH WARNINGS. Failed tables: ${result.failedTables.join(', ')}`);
+                    OpsLogger.warn({ operation: 'SYNC_PARTIAL', status: 'FAIL', garageId, errorMessage: `Warnings on: ${result.failedTables.join(', ')}` });
+                }
             }
         } catch (e: any) {
             console.error(`❌ [SYNC] Error in runSyncCycle (${reason}):`, e);
-            result.status = 'WITH_WARNINGS';
+            result.status = 'FAILED';
             result.failedTables.push('ALL'); // Indicate critical failure
+            this.backendReachable = false;
+            this.lastError = e?.message || String(e);
             OpsLogger.error({ operation: 'SYNC_FAILURE', status: 'FAIL', garageId, errorMessage: e.message, errorCode: e.code, stack: e.stack });
         } finally {
             this.isGlobalSyncing = false;
@@ -601,14 +657,30 @@ export class SqliteSyncCoordinator {
                 }
             }
             
-            // 3. Fetch all data with true (isRecovery)
-            const fetchPromises = SqliteSyncCoordinator.tableMappings.map(async (mapping) => {
+            // 3. Fetch all data with true (isRecovery), pulling garages first
+            const mappings = SqliteSyncCoordinator.tableMappings;
+            const garageMapping = mappings.find(m => m.remoteTable === 'garages');
+            const remainingMappings = mappings.filter(m => m.remoteTable !== 'garages');
+
+            if (garageMapping) {
+                const startMs = Date.now();
+                await this.fetchTable(garageMapping.remoteTable, garageMapping.localTable, garageId, garageMapping.entityType, garageMapping.filterColumn, garageMapping.filterStrategy, true, 'MANUAL_BOOTSTRAP');
+                timingResults[garageMapping.remoteTable] = Date.now() - startMs;
+            }
+
+            const fetchPromises = remainingMappings.map(async (mapping) => {
                 const startMs = Date.now();
                 await this.fetchTable(mapping.remoteTable, mapping.localTable, garageId, mapping.entityType, mapping.filterColumn, mapping.filterStrategy, true, 'MANUAL_BOOTSTRAP');
                 timingResults[mapping.remoteTable] = Date.now() - startMs;
             });
             await Promise.all(fetchPromises);
             
+            try {
+                const now = new Date().toISOString();
+                db.prepare("INSERT INTO sync_checkpoints (collection_name, last_synced_at) VALUES (?, ?) ON CONFLICT(collection_name) DO UPDATE SET last_synced_at = excluded.last_synced_at").run(`${garageId}__bootstrap_complete`, now);
+                db.prepare("DELETE FROM sync_checkpoints WHERE collection_name = ?").run(`${garageId}__bootstrap_incomplete`);
+            } catch {}
+
             console.log(`[SYNC] cycle completed duration=${Date.now() - startTotal}ms`);
             return { status: 'SUCCESS', timing: timingResults, totalMs: Date.now() - startTotal };
         } catch (error: any) {
@@ -700,8 +772,14 @@ export class SqliteSyncCoordinator {
                     ownerId = parsedGarage.ownerId || parsedGarage.owner_id;
                 }
                 if (!ownerId) {
+                    const termCfg = TerminalConfigManager.getConfig();
+                    if (termCfg && termCfg.garage_id === garageId && termCfg.owner_id) {
+                        ownerId = termCfg.owner_id;
+                    }
+                }
+                if (!ownerId) {
                     console.warn(`⚠️ Cannot resolve owner_id for garage ${garageId} locally. Skipping ${remoteTable} sync.`);
-                    return;
+                    throw new Error(`Cannot resolve owner_id for garage ${garageId} locally to sync ${remoteTable}`);
                 }
                 const columnToFilter = filterColumn || 'owner_id';
                 query = supabase.from(remoteTable).select('*').eq(columnToFilter, ownerId);
@@ -710,11 +788,13 @@ export class SqliteSyncCoordinator {
                 query = supabase.from(remoteTable).select('*').eq(columnToFilter, garageId);
             }
             
-            if (isIncremental && watermark) {
+            if (isIncremental && watermark && typeof query.gte === 'function') {
                 query = query.gte('updated_at', watermark);
             }
             
-            query = query.range(from, to);
+            if (typeof query.range === 'function') {
+                query = query.range(from, to);
+            }
             
             const { data, error } = await query;
             if (error) throw error;
@@ -741,14 +821,15 @@ export class SqliteSyncCoordinator {
         }
         const writeMs = Date.now() - applyStart;
         
-        // Update watermark ONLY if pull finished successfully
+        // Update table checkpoint ONLY if pull finished successfully
+        try {
+            const now = new Date().toISOString();
+            db.prepare("INSERT INTO sync_checkpoints (collection_name, last_synced_at) VALUES (?, ?) ON CONFLICT(collection_name) DO UPDATE SET last_synced_at = excluded.last_synced_at").run(checkpointKey, now);
+        } catch (e) {
+            // Table might not exist yet, handled by migrations
+        }
+
         if (isIncremental) {
-            try {
-                const now = new Date().toISOString();
-                db.prepare("INSERT INTO sync_checkpoints (collection_name, last_synced_at) VALUES (?, ?) ON CONFLICT(collection_name) DO UPDATE SET last_synced_at = excluded.last_synced_at").run(checkpointKey, now);
-            } catch (e) {
-                // Table might not exist yet, handled by migrations
-            }
 
             // ==========================================================
             // AUTHORITATIVE DELETIONS RECONCILIATION
@@ -882,13 +963,31 @@ export class SqliteSyncCoordinator {
     }
 
     private handleRealtimePayload(payload: any, garageId: string) {
-        if (payload.new && payload.new.garage_id && payload.new.garage_id !== garageId) return;
+        if (!payload || !payload.table) return;
 
         const mapping = SqliteSyncCoordinator.tableMappings.find(m => m.remoteTable === payload.table);
         if (!mapping) return;
 
         try {
             if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+                if (!payload.new) return;
+                if (payload.table === 'garages') {
+                    if (payload.new.id !== garageId) return;
+                } else if (payload.table === 'employee_accounts') {
+                    const dbSq = SQLiteManager.getInstance().getDatabase();
+                    const localGarage = dbSq.prepare(`SELECT json_data FROM garages WHERE id = ?`).get(garageId) as any;
+                    const localOwnerId = localGarage?.json_data
+                        ? (JSON.parse(localGarage.json_data).ownerId || JSON.parse(localGarage.json_data).owner_id)
+                        : null;
+                    if (localOwnerId) {
+                        if (payload.new.owner_id !== localOwnerId) return;
+                    } else if (payload.new.garage_id !== garageId) {
+                        return;
+                    }
+                } else {
+                    if (payload.new.garage_id !== garageId) return;
+                }
+
                 TransactionHelper.run((tx) => {
                     this.applyRemoteRow(tx, payload.new, mapping.remoteTable, mapping.localTable, mapping.entityType, garageId);
                 });

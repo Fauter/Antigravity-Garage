@@ -5,6 +5,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { api } from '../../services/api';
 import { toast } from 'sonner';
 import { SyncStatusModal } from './SyncStatusModal';
+import { useQueryClient } from '@tanstack/react-query';
 
 export const SyncRefreshContext = React.createContext<{ refreshKey: number }>({ refreshKey: 0 });
 
@@ -42,7 +43,9 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     const [configSaved, setConfigSaved] = useState(false);
 
     const location = useLocation();
-    const { user, logout, isGlobalSyncing, syncStatus } = useAuth();
+    const { user, logout, isGlobalSyncing, syncStatus, localHealth, initialSyncState } = useAuth();
+    const [isRecovering, setIsRecovering] = useState(false);
+    const queryClient = useQueryClient();
     const navigate = useNavigate();
 
     // Auto-refresh logic when sync completes
@@ -134,6 +137,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     }, [location]);
 
     const handleTabChange = (tab: 'operador' | 'audit' | 'anticipados' | 'abonos' | 'caja' | 'incidentes' | 'config') => {
+        if (initialSyncState !== 'ready') return;
         setActiveTab(tab);
         if (tab === 'operador') navigate('/');
         if (tab === 'audit') navigate('/audit');
@@ -386,8 +390,53 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
         return `Hace ${Math.max(0, Math.round((new Date().getTime() - syncDate.getTime()) / 60000))} min`;
     };
 
+    const handleRecoverBackend = async () => {
+        setIsRecovering(true);
+        try {
+            // @ts-ignore
+            if (window.electronAPI?.recoverBackend) {
+                // @ts-ignore
+                const result = await window.electronAPI.recoverBackend();
+                
+                if (result?.recovered) {
+                    toast.success('Servidor local recuperado');
+                    queryClient.invalidateQueries({ queryKey: ['abonos-hydration'] });
+                    queryClient.invalidateQueries({ queryKey: ['prices'] });
+                    queryClient.invalidateQueries({ queryKey: ['vehicle-types'] });
+                    queryClient.invalidateQueries({ queryKey: ['financial-config'] });
+                } else {
+                    toast.error(result?.error || 'No se pudo recuperar el servidor local.');
+                }
+            } else {
+                window.location.reload();
+            }
+        } catch (e: any) {
+            toast.error('Error al intentar recuperar el backend.');
+        } finally {
+            setIsRecovering(false);
+        }
+    };
+
     return (
         <div className="h-full min-h-0 overflow-hidden bg-black text-gray-200 font-sans selection:bg-emerald-500/30 flex flex-col">
+            {localHealth?.state === 'DOWN' && (
+                <div className="fixed inset-0 z-[9999] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="bg-gray-900 border border-red-500/50 rounded-lg shadow-2xl max-w-md w-full p-6 text-center">
+                        <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4 animate-pulse" />
+                        <h2 className="text-xl font-bold text-white mb-2">Servidor Local No Disponible</h2>
+                        <p className="text-gray-400 text-sm mb-6">
+                            GarageIA perdió conexión con su motor local. Sus datos locales no fueron eliminados.
+                        </p>
+                        <button 
+                            onClick={handleRecoverBackend}
+                            disabled={isRecovering}
+                            className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-md transition-colors shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {isRecovering ? 'REINTENTANDO...' : 'REINTENTAR CONEXIÓN'}
+                        </button>
+                    </div>
+                </div>
+            )}
             <SyncStatusModal 
                 isOpen={isSyncModalOpen} 
                 onClose={() => setIsSyncModalOpen(false)} 
@@ -415,8 +464,17 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                         onClick={() => setIsSyncModalOpen(true)}
                         className="transition-transform hover:scale-105 active:scale-95"
                     >
-                        {/* @ts-ignore */}
-                        {(syncStatus?.state === 'BACKEND_UNREACHABLE' || syncStatus?.state === 'OFFLINE') ? (
+                        {localHealth?.state === 'DOWN' ? (
+                            <div className="flex items-center gap-1.5 px-2 py-0.5 bg-amber-900/40 border border-amber-600/50 rounded text-amber-500 font-mono shadow-sm cursor-pointer" title="El servidor local dejó de responder">
+                                <AlertTriangle className="w-3.5 h-3.5 animate-pulse" />
+                                <span className="text-[10px] uppercase tracking-widest pt-0.5 font-bold">ERROR LOCAL · BACKEND NO DISPONIBLE</span>
+                            </div>
+                        ) : localHealth?.state === 'SQLITE_ERROR' ? (
+                            <div className="flex items-center gap-1.5 px-2 py-0.5 bg-red-900/30 border border-red-700/50 rounded text-red-500 font-mono shadow-sm cursor-pointer" title="Error crítico en base de datos local">
+                                <AlertTriangle className="w-3.5 h-3.5 animate-pulse" />
+                                <span className="text-[10px] uppercase tracking-widest pt-0.5 font-bold">ERROR BASE LOCAL</span>
+                            </div>
+                        ) : (syncStatus?.state === 'BACKEND_UNREACHABLE' || syncStatus?.state === 'CLOUD_UNREACHABLE' || syncStatus?.state === 'OFFLINE') ? (
                             // @ts-ignore
                             syncStatus?.pending > 0 ? (
                                 <div className="flex items-center gap-1.5 px-2 py-0.5 bg-amber-900/30 border border-amber-700/50 rounded text-amber-500 font-mono shadow-sm cursor-pointer" title={`${syncStatus?.pending} pendientes - Terminal offline`}>
@@ -425,7 +483,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                                     <span className="text-[10px] uppercase tracking-widest pt-0.5 font-bold">OFFLINE · {syncStatus?.pending} PEND.</span>
                                 </div>
                             ) : (
-                                <div className="flex items-center gap-1.5 px-2 py-0.5 bg-emerald-900/30 border border-emerald-700/50 rounded text-emerald-600 font-mono shadow-sm cursor-pointer" title="Terminal offline - Modo Local Operativo">
+                                <div className="flex items-center gap-1.5 px-2 py-0.5 bg-lime-900/30 border border-lime-700/50 rounded text-lime-500 font-mono shadow-sm cursor-pointer" title="Terminal offline - Modo Local Operativo">
                                     <WifiOff className="w-3.5 h-3.5" />
                                     <span className="text-[10px] uppercase tracking-widest pt-0.5 font-bold">SIN INTERNET · LOCAL OK</span>
                                 </div>
@@ -469,7 +527,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
 
                 {/* Navigation Tabs Container - Centered */}
                 <div className="flex justify-center items-center">
-                    <nav className="flex items-center gap-1 bg-gray-900/50 p-1 rounded-lg border border-gray-800/50">
+                    <nav className={`flex items-center gap-1 bg-gray-900/50 p-1 rounded-lg border border-gray-800/50 ${initialSyncState !== 'ready' ? 'pointer-events-none opacity-40' : ''}`}>
                         <NavButton
                             active={activeTab === 'operador'}
                             onClick={() => handleTabChange('operador')}
@@ -496,13 +554,13 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                         />
                         <NavButton
                             active={activeTab === 'incidentes'}
-                            onClick={() => setIsIncidentModalOpen(true)}
+                            onClick={() => { if (initialSyncState === 'ready') setIsIncidentModalOpen(true); }}
                             icon={<AlertTriangle className="w-4 h-4" />}
                             label="Incidente"
                         />
                         <NavButton
                             active={false}
-                            onClick={handleOpenConfigModal}
+                            onClick={() => { if (initialSyncState === 'ready') handleOpenConfigModal(); }}
                             icon={<Settings className="w-4 h-4" />}
                             label="Config"
                         />

@@ -6,6 +6,7 @@ import {
     Calendar,
     User,
     Phone,
+    Mail,
     Plus,
     AlertTriangle,
     Check,
@@ -28,45 +29,15 @@ import { compressPhotos } from '../../utils/imageCompression';
 import { AdvancePaymentModal } from './AdvancePaymentModal';
 import { ModalPortal } from '../common/ModalPortal';
 import { useBodyScrollLock } from '../../hooks/useBodyScrollLock';
-import { resolveSubscriptionForCochera, getAdvanceEligibility, formatCanonDebtLabels } from '../../utils/subscriptionHelper';
+import { resolveSubscriptionForCochera, getAdvanceEligibility, formatCanonDebtLabels, getVisibleDebts, getDebtBillingPeriod, isSubscriptionExpired } from '../../utils/subscriptionHelper';
 import { getDebtRemaining } from '../../utils/parseDebtAmount';
+
+export { isSubscriptionExpired };
 
 interface CustomerDetailViewProps {
     subscriber: any;
     onBack: () => void;
 }
-
-export const isSubscriptionExpired = (sub: any): boolean => {
-    if (!sub) return false;
-    const endStr = sub.endDate || sub.end_date;
-    const startStr = sub.startDate || sub.start_date;
-
-    if (!endStr && !startStr) {
-        if (process.env.NODE_ENV === 'development') {
-            console.warn('[Validation] Subscription missing any date field (endDate, end_date, startDate, start_date):', sub);
-        }
-        return false;
-    }
-
-    const now = new Date();
-
-    if (endStr) {
-        const endDateObj = new Date(endStr);
-        if (!isNaN(endDateObj.getTime())) {
-            return now > endDateObj;
-        }
-    }
-
-    if (startStr) {
-        const startDateObj = new Date(startStr);
-        if (!isNaN(startDateObj.getTime())) {
-            const endOfMonth = new Date(startDateObj.getFullYear(), startDateObj.getMonth() + 1, 0, 23, 59, 59, 999);
-            return now > endOfMonth;
-        }
-    }
-
-    return false;
-};
 
 const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onBack }) => {
     const queryClient = useQueryClient();
@@ -270,7 +241,10 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         phone: '',
         email: '',
         address: '',
-        localidad: ''
+        localidad: '',
+        work_address: '',
+        work_phone: '',
+        emergency_phone: ''
     });
     const [isEditSaving, setIsEditSaving] = useState(false);
 
@@ -723,16 +697,48 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     };
 
     // --- Edit Customer Handler ---
-    const handleOpenEditCustomer = () => {
+    const handleOpenEditCustomer = async () => {
+        const cData = currentSubscriber.customerData || {};
+        
+        const resolveVal = (fieldCamel: string, fieldSnake: string, fallbackVal: any = '') => {
+            const val = cData[fieldSnake] ?? cData[fieldCamel] ?? currentSubscriber[fieldSnake] ?? currentSubscriber[fieldCamel] ?? fallbackVal;
+            return val != null ? String(val) : '';
+        };
+
         setEditCustomerData({
-            name: currentSubscriber.customerData?.name || currentSubscriber.customerData?.firstName || currentSubscriber.nombreApellido || currentSubscriber.name || '',
-            dni: String(currentSubscriber.customerData?.dni || currentSubscriber.dni || ''),
-            phone: String(currentSubscriber.customerData?.phone || currentSubscriber.phone || ''),
-            email: currentSubscriber.customerData?.email || currentSubscriber.email || '',
-            address: currentSubscriber.customerData?.address || currentSubscriber.domicilio || currentSubscriber.address || '',
-            localidad: currentSubscriber.customerData?.localidad || currentSubscriber.localidad || ''
+            name: cData.name || cData.firstName || currentSubscriber.nombreApellido || currentSubscriber.name || '',
+            dni: resolveVal('dni', 'dni', currentSubscriber.dni),
+            phone: resolveVal('phone', 'phone', currentSubscriber.phone),
+            email: resolveVal('email', 'email', currentSubscriber.email),
+            address: resolveVal('address', 'address', currentSubscriber.domicilio),
+            localidad: resolveVal('localidad', 'localidad'),
+            work_address: resolveVal('workAddress', 'work_address'),
+            work_phone: resolveVal('workPhone', 'work_phone'),
+            emergency_phone: resolveVal('emergencyPhone', 'emergency_phone')
         });
         setIsEditCustomerOpen(true);
+
+        if (clientId) {
+            try {
+                const res = await api.get(`/clientes/${clientId}`);
+                const fullCust = res.data?.customer ?? res.data;
+                if (fullCust) {
+                    setEditCustomerData(prev => ({
+                        name: fullCust.name ?? prev.name,
+                        dni: fullCust.dni != null ? String(fullCust.dni) : prev.dni,
+                        phone: fullCust.phone != null ? String(fullCust.phone) : prev.phone,
+                        email: fullCust.email ?? prev.email,
+                        address: fullCust.address ?? prev.address,
+                        localidad: fullCust.localidad ?? prev.localidad,
+                        work_address: (fullCust.work_address ?? fullCust.workAddress) != null ? String(fullCust.work_address ?? fullCust.workAddress) : prev.work_address,
+                        work_phone: (fullCust.work_phone ?? fullCust.workPhone) != null ? String(fullCust.work_phone ?? fullCust.workPhone) : prev.work_phone,
+                        emergency_phone: (fullCust.emergency_phone ?? fullCust.emergencyPhone) != null ? String(fullCust.emergency_phone ?? fullCust.emergencyPhone) : prev.emergency_phone
+                    }));
+                }
+            } catch (err) {
+                console.warn('Could not fetch extra customer details:', err);
+            }
+        }
     };
 
     const handleUpdateCustomer = async () => {
@@ -741,14 +747,19 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
         setIsEditSaving(true);
         try {
-            const res = await api.patch(`/clientes/${clientId}`, {
+            const payload: Record<string, any> = {
                 name: editCustomerData.name.trim(),
                 dni: editCustomerData.dni.trim(),
                 phone: editCustomerData.phone.trim(),
                 email: editCustomerData.email.trim(),
                 address: editCustomerData.address.trim(),
-                localidad: editCustomerData.localidad.trim()
-            });
+                localidad: editCustomerData.localidad.trim(),
+                work_address: editCustomerData.work_address.trim(),
+                work_phone: editCustomerData.work_phone.trim(),
+                emergency_phone: editCustomerData.emergency_phone.trim()
+            };
+
+            const res = await api.patch(`/clientes/${clientId}`, payload);
             const updatedCustomer = res.data?.customer ?? res.data;
 
             setCurrentSubscriber((prev: any) => ({
@@ -761,10 +772,16 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 domicilio: updatedCustomer.address,
                 address: updatedCustomer.address,
                 localidad: updatedCustomer.localidad,
+                work_address: updatedCustomer.work_address ?? (updatedCustomer as any).workAddress,
+                work_phone: updatedCustomer.work_phone ?? (updatedCustomer as any).workPhone,
+                emergency_phone: updatedCustomer.emergency_phone ?? (updatedCustomer as any).emergencyPhone,
                 customerData: {
                     ...(prev.customerData || {}),
                     ...updatedCustomer,
                     name: updatedCustomer.name,
+                    work_address: updatedCustomer.work_address ?? (updatedCustomer as any).workAddress,
+                    work_phone: updatedCustomer.work_phone ?? (updatedCustomer as any).workPhone,
+                    emergency_phone: updatedCustomer.emergency_phone ?? (updatedCustomer as any).emergencyPhone,
                     updatedAt: updatedCustomer.updatedAt || updatedCustomer.updated_at || (prev.customerData?.updatedAt),
                     updated_at: updatedCustomer.updated_at || updatedCustomer.updatedAt || (prev.customerData?.updated_at)
                 }
@@ -923,6 +940,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
         return phone;
     };
     const clientPhone = formatPhone(rawPhone);
+    const rawEmail = currentSubscriber.customerData?.email || currentSubscriber.email || '';
+    const clientEmail = typeof rawEmail === 'string' ? rawEmail.trim() : '';
 
     const clientId =
         currentSubscriber.customerData?.id ||
@@ -965,6 +984,16 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
     const handleOpenRenewalModal = (subId: string, cochera: any, baseAmount: number, surchargeAmount: number, totalAmount: number, hasDebt: boolean, isGlobalDebt: boolean = false, targetDebts: any[] = []) => {
         const sortedDebts = [...targetDebts].sort((a: any, b: any) => {
+            // Match backend logic: use canonical period for CANON debts
+            if (a.type === 'CANON' && b.type === 'CANON') {
+                const periodA = getDebtBillingPeriod(a).period;
+                const periodB = getDebtBillingPeriod(b).period;
+                if (periodA && periodB) {
+                    return periodA.localeCompare(periodB);
+                }
+            }
+            
+            // Fallback for non-CANON or malformed dates
             const dateA = new Date(a.dueDate || a.due_date || a.createdAt || a.created_at || 0).getTime();
             const dateB = new Date(b.dueDate || b.due_date || b.createdAt || b.created_at || 0).getTime();
             return dateA - dateB;
@@ -1166,11 +1195,19 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 } catch (err: any) {
                     if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
                     console.error("Preview error:", err);
+                    
+                    const errorMsg = err.response?.data?.error || "Error calculando totales";
+                    const isStale = errorMsg.includes('Invalid debt selection prefix') || errorMsg.includes('You cannot skip months');
+                    
                     setRenewalData(prev => ({ 
                         ...prev, 
                         isPreviewLoading: false, 
-                        previewError: err.response?.data?.error || "Error calculando totales" 
+                        previewError: isStale ? "⚠️ Los meses pendientes han cambiado o la información está desactualizada. Cierre esta ventana y vuelva a intentarlo." : errorMsg 
                     }));
+                    
+                    if (isStale) {
+                        refreshCustomerAssets();
+                    }
                 }
             };
             fetchPreview();
@@ -1215,8 +1252,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                 totalBaseCalculado += remaining;
             });
 
-            // Recalcular mora global sobre el nuevo total base
-            const nuevaMoraGlobal = calculateSurcharge(totalBaseCalculado);
+            // Se asume el resultado canónico devuelto por el preview backend.
+            const nuevaMoraGlobal = renewalData.surchargeAmount || 0;
 
             // Actualización atómica (Regla #2)
             setRenewalData(prev => ({
@@ -1409,9 +1446,8 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
     // --- REGLA ABSOLUTA DE NEGOCIO ---
     const now = new Date();
 
-    const sanitizedDebts = debts;
+    const sanitizedDebts = getVisibleDebts(debts, cocheras, subscriptions, realVehicles);
 
-    // We no longer hide CANON debts if the client has no cochera.
     // PENDING persisted debts are authoritative.
     const isEmptyClient = cocheras.length === 0;
 
@@ -1431,42 +1467,56 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
 
     return (
         <div className="flex-1 min-h-full border-none bg-[#050505] w-full flex flex-col">
-            <div className="max-w-7xl mx-auto w-full p-8 space-y-12 animate-in fade-in duration-500 flex-1 pb-32">
-                <div className="flex flex-col md:flex-row items-start md:items-end justify-between gap-6 border-b border-gray-800 pb-8">
-                    <div className="flex items-start gap-6">
+            <div className="max-w-7xl mx-auto w-full p-8 space-y-8 animate-in fade-in duration-500 flex-1 pb-32">
+                <div className="flex flex-col md:flex-row items-start md:items-end justify-between gap-4 border-b border-gray-800/80 pb-5">
+                    <div className="flex items-start gap-4 sm:gap-5">
                         <button
                             onClick={onBack}
-                            className="group p-3 bg-gray-900/50 hover:bg-gray-800 rounded-full border border-gray-800 text-gray-400 hover:text-white transition-all hover:scale-105"
+                            className="group p-2.5 bg-gray-900/50 hover:bg-gray-800 rounded-full border border-gray-800 text-gray-400 hover:text-white transition-all hover:scale-105 shrink-0 mt-0.5"
+                            title="Volver"
                         >
                             <ArrowLeft className="w-5 h-5 group-hover:-translate-x-1 transition-transform" />
                         </button>
 
-                        <div className="space-y-4">
-                            <div className="flex items-center gap-3">
-                                <h2 className="text-4xl font-bold text-white tracking-tight">
+                        <div className="space-y-1.5 min-w-0">
+                            <div className="flex items-center gap-2.5 flex-wrap">
+                                <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight truncate">
                                     {clientName}
                                 </h2>
                                 <button
                                     onClick={handleOpenEditCustomer}
-                                    className="p-2 text-gray-500 hover:text-indigo-400 transition-colors rounded-lg hover:bg-gray-800/50"
+                                    className="p-1.5 text-gray-500 hover:text-indigo-400 transition-colors rounded-lg hover:bg-gray-800/50"
                                     title="Editar datos del cliente"
                                 >
                                     <Edit2 className="w-4 h-4" />
                                 </button>
                             </div>
 
-                            <div className="flex flex-wrap items-center gap-3">
-                                <div className="flex items-center gap-2 px-4 py-1.5 bg-gray-800/50 border border-gray-700 rounded-full">
-                                    <User className="w-3.5 h-3.5 text-indigo-400" />
-                                    <span className="text-xs text-gray-400 uppercase tracking-wider font-semibold">DNI</span>
-                                    <span className="font-mono text-sm text-gray-200">{clientDni}</span>
-                                </div>
+                            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-400">
+                                <span className="inline-flex items-center gap-1.5">
+                                    <User className="w-3.5 h-3.5 text-indigo-400/80 shrink-0" />
+                                    <span className="text-[10px] uppercase font-bold text-gray-500 tracking-wider">DNI</span>
+                                    <span className="font-mono text-gray-200">{clientDni}</span>
+                                </span>
 
                                 {clientPhone && (
-                                    <div className="flex items-center gap-2 px-4 py-1.5 bg-gray-800/50 border border-gray-700 rounded-full">
-                                        <Phone className="w-3.5 h-3.5 text-emerald-400" />
-                                        <span className="font-mono text-sm text-gray-200">{clientPhone}</span>
-                                    </div>
+                                    <>
+                                        <span className="text-gray-700 hidden sm:inline">•</span>
+                                        <span className="inline-flex items-center gap-1.5">
+                                            <Phone className="w-3.5 h-3.5 text-emerald-400/80 shrink-0" />
+                                            <span className="font-mono text-gray-200">{clientPhone}</span>
+                                        </span>
+                                    </>
+                                )}
+
+                                {clientEmail && (
+                                    <>
+                                        <span className="text-gray-700 hidden md:inline">•</span>
+                                        <span className="inline-flex items-center gap-1.5 truncate text-gray-300 max-w-xs">
+                                            <Mail className="w-3.5 h-3.5 text-sky-400/80 shrink-0" />
+                                            <span className="truncate">{clientEmail}</span>
+                                        </span>
+                                    </>
                                 )}
                             </div>
                         </div>
@@ -2483,42 +2533,78 @@ const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ subscriber, onB
                     <ModalPortal>
                         <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
                             <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setIsEditCustomerOpen(false)} />
-                            <div className="relative bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-                                <div className="flex items-center justify-between p-6 border-b border-gray-800">
+                            <div className="relative bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800 shrink-0">
                                     <h3 className="text-lg font-bold text-white">Editar datos del cliente</h3>
                                     <button onClick={() => setIsEditCustomerOpen(false)} className="p-1.5 text-gray-500 hover:text-white hover:bg-gray-800 rounded-lg transition-colors">
                                         <X className="w-4 h-4" />
                                     </button>
                                 </div>
-                                <div className="p-6 space-y-4">
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div className="col-span-2">
-                                            <label className={labelStyle}>Nombre completo</label>
-                                            <input className={inputStyle} value={editCustomerData.name} onChange={e => setEditCustomerData(p => ({ ...p, name: e.target.value }))} placeholder="Nombre y Apellido" />
+                                <div className="p-6 space-y-5 overflow-y-auto app-scrollbar">
+                                    {/* Grupo 1: Datos personales */}
+                                    <div className="space-y-2.5">
+                                        <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-400/90 flex items-center gap-1.5">
+                                            <User className="w-3.5 h-3.5" /> Datos personales
+                                        </span>
+                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                            <div className="sm:col-span-2">
+                                                <label className={labelStyle}>Nombre completo</label>
+                                                <input className={inputStyle} value={editCustomerData.name} onChange={e => setEditCustomerData(p => ({ ...p, name: e.target.value }))} placeholder="Nombre y Apellido" />
+                                            </div>
+                                            <div>
+                                                <label className={labelStyle}>DNI</label>
+                                                <input className={inputStyle} value={editCustomerData.dni} onChange={e => setEditCustomerData(p => ({ ...p, dni: e.target.value }))} placeholder="12345678" />
+                                            </div>
                                         </div>
-                                        <div>
-                                            <label className={labelStyle}>DNI</label>
-                                            <input className={inputStyle} value={editCustomerData.dni} onChange={e => setEditCustomerData(p => ({ ...p, dni: e.target.value }))} placeholder="12345678" />
+                                    </div>
+
+                                    {/* Grupo 2: Contacto principal */}
+                                    <div className="space-y-2.5 pt-2 border-t border-gray-800/60">
+                                        <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400/90 flex items-center gap-1.5">
+                                            <Phone className="w-3.5 h-3.5" /> Contacto principal
+                                        </span>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                            <div>
+                                                <label className={labelStyle}>Teléfono</label>
+                                                <input className={inputStyle} value={editCustomerData.phone} onChange={e => setEditCustomerData(p => ({ ...p, phone: e.target.value }))} placeholder="1122334455" />
+                                            </div>
+                                            <div>
+                                                <label className={labelStyle}>Email</label>
+                                                <input className={inputStyle} type="email" value={editCustomerData.email} onChange={e => setEditCustomerData(p => ({ ...p, email: e.target.value }))} placeholder="ejemplo@mail.com" />
+                                            </div>
                                         </div>
-                                        <div>
-                                            <label className={labelStyle}>Teléfono</label>
-                                            <input className={inputStyle} value={editCustomerData.phone} onChange={e => setEditCustomerData(p => ({ ...p, phone: e.target.value }))} placeholder="1122334455" />
-                                        </div>
-                                        <div className="col-span-2">
-                                            <label className={labelStyle}>Email</label>
-                                            <input className={inputStyle} type="email" value={editCustomerData.email} onChange={e => setEditCustomerData(p => ({ ...p, email: e.target.value }))} placeholder="ejemplo@mail.com" />
-                                        </div>
-                                        <div>
-                                            <label className={labelStyle}>Dirección</label>
-                                            <input className={inputStyle} value={editCustomerData.address} onChange={e => setEditCustomerData(p => ({ ...p, address: e.target.value }))} placeholder="Calle 123" />
-                                        </div>
-                                        <div>
-                                            <label className={labelStyle}>Localidad</label>
-                                            <input className={inputStyle} value={editCustomerData.localidad} onChange={e => setEditCustomerData(p => ({ ...p, localidad: e.target.value }))} placeholder="Ciudad" />
+                                    </div>
+
+                                    {/* Grupo 3: Dirección y contacto alternativo / laboral */}
+                                    <div className="space-y-2.5 pt-2 border-t border-gray-800/60">
+                                        <span className="text-[11px] font-bold uppercase tracking-wider text-sky-400/90 flex items-center gap-1.5">
+                                            Dirección y contacto alternativo / laboral
+                                        </span>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                            <div>
+                                                <label className={labelStyle}>Dirección particular</label>
+                                                <input className={inputStyle} value={editCustomerData.address} onChange={e => setEditCustomerData(p => ({ ...p, address: e.target.value }))} placeholder="Calle 123" />
+                                            </div>
+                                            <div>
+                                                <label className={labelStyle}>Localidad</label>
+                                                <input className={inputStyle} value={editCustomerData.localidad} onChange={e => setEditCustomerData(p => ({ ...p, localidad: e.target.value }))} placeholder="Ciudad" />
+                                            </div>
+                                            <div className="sm:col-span-2">
+                                                <label className={labelStyle}>Dirección laboral</label>
+                                                <input className={inputStyle} value={editCustomerData.work_address} onChange={e => setEditCustomerData(p => ({ ...p, work_address: e.target.value }))} placeholder="Av. Laboral 456" />
+                                            </div>
+                                            <div>
+                                                <label className={labelStyle}>Teléfono laboral</label>
+                                                <input className={inputStyle} value={editCustomerData.work_phone} onChange={e => setEditCustomerData(p => ({ ...p, work_phone: e.target.value }))} placeholder="1144556677" />
+                                            </div>
+                                            <div>
+                                                <label className={labelStyle}>Teléfono de emergencia</label>
+                                                <input className={inputStyle} value={editCustomerData.emergency_phone} onChange={e => setEditCustomerData(p => ({ ...p, emergency_phone: e.target.value }))} placeholder="1199887766" />
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
-                                <div className="flex justify-end gap-3 p-6 border-t border-gray-800">
+                                <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-800 shrink-0 bg-gray-900/80">
                                     <button onClick={() => setIsEditCustomerOpen(false)} className="px-4 py-2 text-sm text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors">
                                         Cancelar
                                     </button>

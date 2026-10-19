@@ -5,8 +5,12 @@ import { VehicleType, Tariff, Price } from './ConfigRepository';
 export class SqliteConfigRepository {
 
     async getVehicleTypes(garageId: string): Promise<VehicleType[]> {
+        if (!garageId || typeof garageId !== 'string') return [];
         const db = SQLiteManager.getInstance().getDatabase();
-        const rows = db.prepare(`SELECT json_data FROM vehicle_types WHERE json_extract(json_data, '$.garageId') = ?`).all(garageId) as any[];
+        const rows = db.prepare(`
+            SELECT json_data FROM vehicle_types 
+            WHERE json_extract(json_data, '$.garageId') = ? OR json_extract(json_data, '$.garage_id') = ?
+        `).all(garageId, garageId) as any[];
         
         if (rows.length > 0) {
             return rows.map(r => {
@@ -14,10 +18,10 @@ export class SqliteConfigRepository {
                 return {
                     id: t.id,
                     name: t.name,
-                    icon: t.icon,
-                    garageId: t.garageId,
+                    icon: t.icon ?? t.iconKey ?? t.icon_key,
+                    garageId: t.garageId ?? t.garage_id,
                     description: t.description,
-                    active: t.active
+                    active: t.active ?? true
                 };
             });
         }
@@ -27,7 +31,7 @@ export class SqliteConfigRepository {
         try {
             const { data, error } = await supabase.from('vehicle_types').select('*').eq('garage_id', garageId);
             if (error) throw error;
-            return (data || []).map(row => ({
+            const mapped = (data || []).map(row => ({
                 id: row.id,
                 name: row.name,
                 icon: row.icon_key,
@@ -35,6 +39,15 @@ export class SqliteConfigRepository {
                 description: row.description,
                 active: row.active ?? true
             }));
+            if (mapped.length > 0) {
+                try {
+                    const stmt = db.prepare(`INSERT INTO vehicle_types (id, json_data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET json_data = excluded.json_data`);
+                    for (const item of mapped) {
+                        stmt.run(item.id, JSON.stringify(item));
+                    }
+                } catch {}
+            }
+            return mapped;
         } catch (err) {
             console.error('Cloud VehicleTypes Error', err);
             return [];
@@ -42,18 +55,22 @@ export class SqliteConfigRepository {
     }
 
     async getTariffs(garageId: string): Promise<Tariff[]> {
+        if (!garageId || typeof garageId !== 'string') return [];
         const db = SQLiteManager.getInstance().getDatabase();
-        const rows = db.prepare(`SELECT json_data FROM tariffs WHERE json_extract(json_data, '$.garageId') = ?`).all(garageId) as any[];
+        const rows = db.prepare(`
+            SELECT json_data FROM tariffs 
+            WHERE json_extract(json_data, '$.garageId') = ? OR json_extract(json_data, '$.garage_id') = ?
+        `).all(garageId, garageId) as any[];
         
         if (rows.length > 0) {
             const parsed = rows.map(r => JSON.parse(r.json_data));
-            parsed.sort((a, b) => (a.priority || 0) - (b.priority || 0));
+            parsed.sort((a, b) => (a.priority ?? a.sortOrder ?? a.sort_order ?? 0) - (b.priority ?? b.sortOrder ?? b.sort_order ?? 0));
             return parsed.map(t => ({
                 id: t.id,
                 name: t.name,
-                garageId: t.garageId,
+                garageId: t.garageId ?? t.garage_id,
                 type: t.type,
-                priority: t.priority,
+                priority: t.priority ?? t.sortOrder ?? t.sort_order ?? 0,
                 days: t.days,
                 hours: t.hours,
                 minutes: t.minutes
@@ -63,7 +80,7 @@ export class SqliteConfigRepository {
         try {
             const { data, error } = await supabase.from('tariffs').select('*').eq('garage_id', garageId).order('sort_order', { ascending: true });
             if (error) throw error;
-            return (data || []).map(row => ({
+            const mapped = (data || []).map(row => ({
                 id: row.id,
                 name: row.name,
                 garageId: row.garage_id,
@@ -73,6 +90,15 @@ export class SqliteConfigRepository {
                 hours: row.hours,
                 minutes: row.minutes
             }));
+            if (mapped.length > 0) {
+                try {
+                    const stmt = db.prepare(`INSERT INTO tariffs (id, json_data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET json_data = excluded.json_data`);
+                    for (const item of mapped) {
+                        stmt.run(item.id, JSON.stringify(item));
+                    }
+                } catch {}
+            }
+            return mapped;
         } catch (err) {
             console.error('Cloud Tariffs Error', err);
             return [];
@@ -82,7 +108,7 @@ export class SqliteConfigRepository {
     async getPrices(garageId: string, method: string = 'EFECTIVO'): Promise<Price[]> {
         if (!garageId || typeof garageId !== 'string') return [];
         let priceList = 'standard';
-        const m = (method || '').toUpperCase();
+        const m = (method || 'EFECTIVO').toUpperCase();
         if (m === 'ELECTRONIC' || m === 'MERCADO_PAGO' || m === 'MERCADOPAGO' || m === 'TRANSFERENCIA' || m === 'DEBITO' || m === 'CREDITO' || m === 'QR') {
             priceList = 'electronic';
         }
@@ -90,16 +116,20 @@ export class SqliteConfigRepository {
             priceList = 'standard';
         }
 
+        const expectedMethodUpper = priceList === 'electronic' ? 'ELECTRONIC' : 'EFECTIVO';
+
         const db = SQLiteManager.getInstance().getDatabase();
         const rows = db.prepare(`
             SELECT json_data FROM prices 
-            WHERE json_extract(json_data, '$.garageId') = ? 
+            WHERE (json_extract(json_data, '$.garageId') = ? OR json_extract(json_data, '$.garage_id') = ?)
               AND (
-                json_extract(json_data, '$.priceList') = ? 
-                OR json_extract(json_data, '$.price_list') = ? 
+                LOWER(json_extract(json_data, '$.priceList')) = ? 
+                OR LOWER(json_extract(json_data, '$.price_list')) = ? 
                 OR UPPER(json_extract(json_data, '$.method')) = ?
+                OR UPPER(json_extract(json_data, '$.method')) = ?
+                OR (? = 'standard' AND json_extract(json_data, '$.priceList') IS NULL AND json_extract(json_data, '$.price_list') IS NULL AND json_extract(json_data, '$.method') IS NULL)
               )
-        `).all(garageId, priceList, priceList, (method || '').toUpperCase()) as any[];
+        `).all(garageId, garageId, priceList, priceList, m, expectedMethodUpper, priceList) as any[];
         
         if (rows.length > 0) {
             return rows.map(r => {
@@ -108,11 +138,11 @@ export class SqliteConfigRepository {
                     id: p.id,
                     vehicleTypeId: p.vehicleTypeId || p.vehicle_type_id,
                     tariffId: p.tariffId || p.tariff_id,
-                    price: p.amount || p.price,
-                    amount: p.amount || p.price,
-                    currency: p.currency,
+                    price: Number(p.amount ?? p.price ?? 0),
+                    amount: Number(p.amount ?? p.price ?? 0),
+                    currency: p.currency || 'ARS',
                     garageId: p.garageId || p.garage_id,
-                    method: p.method || (p.priceList === 'electronic' ? 'ELECTRONIC' : 'EFECTIVO')
+                    method: p.method || (priceList === 'electronic' ? 'ELECTRONIC' : 'EFECTIVO')
                 };
             });
         }
@@ -120,16 +150,26 @@ export class SqliteConfigRepository {
         try {
             const { data, error } = await supabase.from('prices').select('*').eq('garage_id', garageId).eq('price_list', priceList);
             if (error) throw error;
-            return (data || []).map(row => ({
+            const mapped = (data || []).map(row => ({
                 id: row.id,
                 vehicleTypeId: row.vehicle_type_id,
                 tariffId: row.tariff_id,
-                price: row.amount || 0,
-                amount: row.amount || 0,
-                currency: row.currency,
+                price: Number(row.amount || 0),
+                amount: Number(row.amount || 0),
+                currency: row.currency || 'ARS',
                 garageId: row.garage_id,
-                method: method
+                priceList,
+                method: expectedMethodUpper
             }));
+            if (mapped.length > 0) {
+                try {
+                    const stmt = db.prepare(`INSERT INTO prices (id, json_data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET json_data = excluded.json_data`);
+                    for (const item of mapped) {
+                        stmt.run(item.id, JSON.stringify(item));
+                    }
+                } catch {}
+            }
+            return mapped;
         } catch (err) {
             console.error('Cloud Prices Error', err);
             return [];
@@ -139,7 +179,10 @@ export class SqliteConfigRepository {
     async getParams(garageId?: string): Promise<any> {
         if (garageId && typeof garageId === 'string') {
             const db = SQLiteManager.getInstance().getDatabase();
-            const rows = db.prepare(`SELECT json_data FROM financial_configs WHERE json_extract(json_data, '$.garageId') = ?`).all(garageId) as any[];
+            const rows = db.prepare(`
+                SELECT json_data FROM financial_configs 
+                WHERE json_extract(json_data, '$.garageId') = ? OR json_extract(json_data, '$.garage_id') = ?
+            `).all(garageId, garageId) as any[];
             
             if (rows.length > 0) {
                 const configs = rows.map(r => JSON.parse(r.json_data));
@@ -163,11 +206,14 @@ export class SqliteConfigRepository {
                     }
                 }
 
+                const initialTolerance = config.initialTolerance ?? config.initial_tolerance ?? 15;
+                const fractionateAfter = config.fractionateAfter ?? config.fractionate_after ?? 0;
+
                 return {
-                    initial_tolerance: config.initialTolerance ?? 15,
-                    fractionate_after: config.fractionateAfter ?? 0,
-                    toleranciaInicial: config.initialTolerance ?? 15,
-                    fraccionarDesde: config.fractionateAfter ?? 0,
+                    initial_tolerance: initialTolerance,
+                    fractionate_after: fractionateAfter,
+                    toleranciaInicial: initialTolerance,
+                    fraccionarDesde: fractionateAfter,
                     recargoDia11: 10,
                     recargoDia22: 20,
                     permitirCobroAnticipado: false,
@@ -191,3 +237,5 @@ export class SqliteConfigRepository {
         };
     }
 }
+
+export { SqliteConfigRepository as ConfigRepository };

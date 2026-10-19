@@ -1477,19 +1477,8 @@ export class GarageController {
 
             const debts = await this.debtRepo.findByCustomerId(clientId);
 
-            // Apply Dynamic Surcharge based on real Garage settings from Supabase
-            let garageSettings: any = {};
-            if (garageId) {
-                const garage: any = await (SQLiteManager.getInstance().getDatabase().prepare("SELECT * FROM garages WHERE id = ?").get(garageId) || {});
-                // Settings usually mapped to 'settings' or 'config', handle both or root
-                garageSettings = garage?.settings || garage?.config || garage || {};
-
-                // Include new threshold-based financial configs
-                const financialConfigs: any = await [(await (new ConfigRepository()).getParams(garageId))];
-                if (financialConfigs && financialConfigs.length > 0) {
-                    garageSettings.surchargeConfig = financialConfigs[0].surchargeConfig || financialConfigs[0];
-                }
-            }
+            // Apply Dynamic Surcharge based on real Garage settings
+            const garageSettings: any = garageId ? await this.loadGarageSettings(garageId) : {};
 
             let debtsWithDynamicSurcharge = [];
             let subCache: Record<string, any> = {};
@@ -1587,9 +1576,9 @@ export class GarageController {
                 phone: updates.phone != null ? String(updates.phone) : existing.phone,
                 address: updates.address ?? existing.address,
                 localidad: updates.localidad ?? (existing as any).localidad,
-                work_address: updates.work_address ?? (existing as any).work_address,
-                work_phone: updates.work_phone ?? (existing as any).work_phone,
-                emergency_phone: updates.emergency_phone ?? (existing as any).emergency_phone,
+                work_address: updates.work_address ?? updates.workAddress ?? (existing as any).work_address ?? (existing as any).workAddress,
+                work_phone: updates.work_phone != null ? String(updates.work_phone) : (updates.workPhone != null ? String(updates.workPhone) : (existing as any).work_phone ?? (existing as any).workPhone),
+                emergency_phone: updates.emergency_phone != null ? String(updates.emergency_phone) : (updates.emergencyPhone != null ? String(updates.emergencyPhone) : (existing as any).emergency_phone ?? (existing as any).emergencyPhone),
                 updatedAt: new Date()
             };
 
@@ -1604,6 +1593,29 @@ export class GarageController {
 
     // Wrapper for server.ts compatibility
     getSubscriptions = this.getAllSubscriptions;
+
+    private loadGarageSettings = async (garageId: string): Promise<any> => {
+        let garage: any = null;
+        try {
+            const row: any = SQLiteManager.getInstance().getDatabase().prepare("SELECT json_data FROM garages WHERE id = ?").get(garageId);
+            if (row?.json_data) {
+                garage = JSON.parse(row.json_data);
+            }
+        } catch {}
+        if (!garage) {
+            try {
+                garage = await db.garages.findOne({ $or: [{ id: garageId }, { _id: garageId }] });
+            } catch {}
+        }
+        const garageSettings: any = garage?.settings ? { ...garage.settings } : (garage?.config ? { ...garage.config } : (garage ? { ...garage } : {}));
+        try {
+            const params: any = await (new ConfigRepository()).getParams(garageId);
+            if (params) {
+                garageSettings.surchargeConfig = params.surchargeConfig || params;
+            }
+        } catch {}
+        return garageSettings;
+    };
     
     previewMultiMonthDebt = async (req: Request, res: Response) => {
         try {
@@ -1614,15 +1626,7 @@ export class GarageController {
                 return res.status(400).json({ error: 'targetDebtIds must be a non-empty array.' });
             }
 
-            let garageSettings: any = {};
-            if (garageId) {
-                const garage: any = await (SQLiteManager.getInstance().getDatabase().prepare("SELECT * FROM garages WHERE id = ?").get(garageId) || {});
-                garageSettings = garage?.settings || garage?.config || garage || {};
-                const financialConfigs: any = await [(await (new ConfigRepository()).getParams(garageId))];
-                if (financialConfigs && financialConfigs.length > 0) {
-                    garageSettings.surchargeConfig = financialConfigs[0].surchargeConfig || financialConfigs[0];
-                }
-            }
+            const garageSettings: any = garageId ? await this.loadGarageSettings(garageId) : {};
 
             if (isGlobalDebt) {
                 const allDebts = customerId ? await this.debtRepo.findByCustomerId(String(customerId)) : [];
@@ -1739,7 +1743,7 @@ export class GarageController {
             if (!vTypeString) return null;
             
             const vKey = String(vTypeString).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
-            const vehicleTypes = await (new (require('../../Configuration/infra/SqliteConfigRepository').ConfigRepository)()).getVehicleTypes(garageId);
+            const vehicleTypes = await (new ConfigRepository()).getVehicleTypes(garageId);
             
             const matchedVt = vehicleTypes.find((vt: any) => 
                 String(vt.name).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim() === vKey
@@ -1763,15 +1767,7 @@ export class GarageController {
             }
 
             // ── Load Garage Surcharge Config ──
-            let garageSettings: any = {};
-            if (garageId) {
-                const garage: any = await (SQLiteManager.getInstance().getDatabase().prepare("SELECT * FROM garages WHERE id = ?").get(garageId) || {});
-                garageSettings = garage?.settings || garage?.config || garage || {};
-                const financialConfigs: any = await [(await (new ConfigRepository()).getParams(garageId))];
-                if (financialConfigs && financialConfigs.length > 0) {
-                    garageSettings.surchargeConfig = financialConfigs[0].surchargeConfig || financialConfigs[0];
-                }
-            }
+            const garageSettings: any = garageId ? await this.loadGarageSettings(garageId) : {};
 
             // WE NOW WRAP EVERYTHING IN A TRANSACTION
             let __success = false;
@@ -2137,7 +2133,9 @@ export class GarageController {
                     if (subSpot) return ` - Cochera #${subSpot}`;
                     if (customerId) {
                         try {
-                            const allCocheras = await require('../../../infrastructure/database/sqlite/SQLiteManager').SQLiteManager.getInstance().getDatabase().prepare("SELECT * FROM cocheras WHERE clienteId = ? OR cliente_id = ?").all(customerId, customerId);
+                            const allCocheras = (await cocherasDB.getAll()).filter((c: any) =>
+                                c.clienteId === customerId || c.cliente_id === customerId
+                            );
                             const subPlate = subToFetch?.plate;
                             const match = allCocheras.find((c: any) => {
                                 let vehs = c.vehiculos;

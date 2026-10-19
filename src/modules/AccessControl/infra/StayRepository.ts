@@ -278,6 +278,15 @@ export class NeDBStayRepository {
             return 0;
         }
     }
+
+    async findById(id: string): Promise<Stay | null> {
+        try {
+            const doc = await db.stays.findOne({ $or: [{ id }, { _id: id }] } as any);
+            return doc ? this.mapStay(doc) : null;
+        } catch (e) {
+            return null;
+        }
+    }
 }
 import { StorageEngine } from '../../../infrastructure/database/StorageEngine';
 import { SqliteStayRepository } from './SqliteStayRepository';
@@ -295,16 +304,7 @@ export class StayRepository {
 
     async save(stay: Stay, arg2?: any, arg3?: any): Promise<Stay> { return this.impl.save(stay, arg2, arg3); }
     async findById(id: string): Promise<Stay | null> {
-        if (typeof this.impl.findById === 'function') {
-            return this.impl.findById(id);
-        }
-        try {
-            const { db } = require('../../../infrastructure/database/datastore');
-            const doc = await db.stays.findOne({ id } as any);
-            return doc ? (this.impl as NeDBStayRepository).mapStay(doc) : null;
-        } catch (e) {
-            return null;
-        }
+        return this.impl.findById(id);
     }
     async findActiveByPlateOrTicket(queryInput: string, garageId?: string): Promise<Stay | null> { return this.impl.findActiveByPlateOrTicket(queryInput, garageId); }
     async findAllActive(garageId?: string): Promise<Stay[]> { return this.impl.findAllActive(garageId); }

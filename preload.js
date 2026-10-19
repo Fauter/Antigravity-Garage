@@ -1,8 +1,8 @@
 /**
- * preload.js — Electron Preload Script
+ * preload.js â€” Electron Preload Script
  * 
  * Bridge seguro entre Renderer Process y Main Process.
- * Expone window.electronAPI con canales IPC para impresión silenciosa.
+ * Expone window.electronAPI con canales IPC para impresiÃ³n silenciosa.
  * 
  * Compatible con contextIsolation: true y false.
  * Cuando contextIsolation es false, contextBridge.exposeInMainWorld
@@ -14,9 +14,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 // --- Zero-Session on Startup: Surgical Sync Cleanup ---
 // Ejecutado antes de cargar la SPA de React. Borramos todo rastro anterior en localStorage
 // (como viejas sesiones de ag_user o supabase que hayan quedado de versiones previas)
-// excepto la configuración física del garaje, vital para la identidad del terminal.
+// excepto la configuraciÃ³n fÃ­sica del garaje, vital para la identidad del terminal.
 try {
-    // PROTECCIÓN DE SEGURIDAD: Solo limpiar si el documento cargó en el origin correcto
+    // PROTECCIÃ“N DE SEGURIDAD: Solo limpiar si el documento cargÃ³ en el origin correcto
     if (window.location.origin.includes('localhost')) {
         const keysToPreserve = ['ag_terminal_config', 'selected_printer_name', 'printer_paper_width'];
         const keysToRemove = [];
@@ -27,17 +27,20 @@ try {
             }
         }
         keysToRemove.forEach(key => localStorage.removeItem(key));
-        sessionStorage.clear();
+        if (!sessionStorage.getItem('ag_window_bootstrapped')) {
+            sessionStorage.clear();
+            sessionStorage.setItem('ag_window_bootstrapped', '1');
+        }
     }
 } catch (e) {
-    console.warn('⚠️ Error durante la limpieza quirúrgica pre-carga:', e);
+    console.warn('âš ï¸ Error durante la limpieza quirÃºrgica pre-carga:', e);
 }
 // --------------------------------------------------------
 
 try {
     contextBridge.exposeInMainWorld('electronAPI', {
         /**
-         * Envía HTML al Main Process para impresión silenciosa.
+         * EnvÃ­a HTML al Main Process para impresiÃ³n silenciosa.
          * @param {string} html - HTML completo del ticket
          * @param {object} [printerConfig] - { deviceName?: string, pageWidth?: number (micrones) }
          * @returns {Promise<{success: boolean, error?: string}>}
@@ -54,8 +57,9 @@ try {
          * Lee un archivo local y lo devuelve en Base64.
          */
         readFileBase64: (filePath) => ipcRenderer.invoke('fs:readFileBase64', filePath),
+        recoverBackend: () => ipcRenderer.invoke('backend:recover'),
 
-        // ── Hardware Integration ──────────────────────────────────
+        // â”€â”€ Hardware Integration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         /** Listener: evento de entrada detectado por hardware/simulador */
         onHardwareEntry: (callback) => {
@@ -64,7 +68,7 @@ try {
             return () => ipcRenderer.removeListener('hw:entry-detected', handler);
         },
 
-        /** Listener: resultado de autorización de barrera de salida */
+        /** Listener: resultado de autorizaciÃ³n de barrera de salida */
         onBarrierAuthResult: (callback) => {
             const handler = (_event, payload) => callback(payload);
             ipcRenderer.on('hw:barrier-auth-result', handler);
@@ -81,7 +85,7 @@ try {
         /** Obtener estado actual del hardware */
         getHardwareStatus: () => ipcRenderer.invoke('hw:get-status'),
 
-        /** Obtener y guardar configuración de hardware */
+        /** Obtener y guardar configuraciÃ³n de hardware */
         getHardwareConfig: () => ipcRenderer.invoke('hw:get-config'),
         setHardwareConfig: (config) => ipcRenderer.invoke('hw:set-config', config),
 
@@ -107,11 +111,11 @@ try {
         openBarrier: (type) => ipcRenderer.invoke('hw:open-barrier', type),
         openHardwareSimulator: () => ipcRenderer.invoke('hw:open-simulator'),
 
-        /** DEV / Simulación */
+        /** DEV / SimulaciÃ³n */
         simulateEntry: () => ipcRenderer.invoke('hw:simulate-entry'),
         simulateBarcodeScan: (code) => ipcRenderer.invoke('hw:simulate-barcode', code),
 
-        // ── Bidirectional ESP32 Events ──────────────────────────────
+        // â”€â”€ Bidirectional ESP32 Events â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         /** Listener: RFID authorization result (auto-exit flow) */
         onRfidAuthResult: (callback) => {
@@ -131,3 +135,4 @@ try {
     console.error('[PRELOAD:ERROR] Error exposing electronAPI to MainWorld:', error);
     throw error;
 }
+

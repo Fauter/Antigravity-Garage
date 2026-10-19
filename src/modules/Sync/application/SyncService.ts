@@ -51,6 +51,7 @@ export class NeDBSyncService {
     async processQueue() {
         if (this.isSyncing) return;
         this.isSyncing = true;
+        let reconnected = false;
 
         try {
             const pendingMutations = await db.mutations.find({
@@ -80,6 +81,10 @@ export class NeDBSyncService {
                     await this.pushToCloud(mutation);
                     await db.mutations.remove({ _id: mutation._id }, {});
                     
+                    if (!this.backendReachable) {
+                        reconnected = true;
+                        console.log('🟢 [NEDB SYNC] Conectividad remota restaurada tras drenar mutación pendiente.');
+                    }
                     this.backendReachable = true;
                     this.lastSuccessfulSyncAt = new Date();
                     this.lastError = null;
@@ -96,10 +101,6 @@ export class NeDBSyncService {
                         msg.includes('NetworkError') || msg.includes('is unreachable') || msg.includes('Failed to fetch');
                         
                     const isTransientRemote = status === 429 || status >= 500;
-                    
-                    const isPermanent = code.startsWith('22') || code.startsWith('23') || code.startsWith('42') || code.startsWith('PGRST') || 
-                        status === 400 || status === 404 || status === 409 || status === 422 || 
-                        msg.includes('Unknown entity type');
 
                     if (isNetwork || isTransientRemote) {
                         this.backendReachable = !isNetwork;
@@ -118,6 +119,10 @@ export class NeDBSyncService {
             console.error('❌ SyncService: Error procesando cola de mutaciones', error);
         } finally {
             this.isSyncing = false;
+        }
+
+        if (reconnected && this.garageId) {
+            this.pullAllData(this.garageId, true).catch(e => console.error('Reconnection pull error:', e));
         }
     }
 
@@ -208,12 +213,29 @@ export class NeDBSyncService {
         }
     }
 
-    async pullAllData(garageId: string, isSilent: boolean = false) {
-        if (this.isGlobalSyncing) return;
+    private activePullPromise: Promise<string[]> | null = null;
+    private activeSyncPromise: Promise<{ status: 'SUCCESS' | 'WITH_WARNINGS' | 'FAILED', failedTables: string[] }> | null = null;
+
+    async pullAllData(garageId: string, isSilent: boolean = false): Promise<string[]> {
+        if (this.activePullPromise) {
+            return this.activePullPromise;
+        }
+        if (this.isGlobalSyncing) return [];
+
+        this.activePullPromise = this.executePullAllData(garageId, isSilent);
+        try {
+            return await this.activePullPromise;
+        } finally {
+            this.activePullPromise = null;
+        }
+    }
+
+    private async executePullAllData(garageId: string, isSilent: boolean = false): Promise<string[]> {
         this.isGlobalSyncing = true;
         this.garageId = garageId;
+        const failedTables: string[] = [];
 
-        const tableMap: any = {
+        const tableMap: Record<string, string> = {
             'vehicles': 'Vehicle',
             'customers': 'Customer',
             'subscriptions': 'Subscription',
@@ -228,20 +250,70 @@ export class NeDBSyncService {
             'vehicle_types': 'VehicleType',
             'tariffs': 'Tariff',
             'prices': 'Price',
+            'promos': 'Promo',
             'financial_configs': 'FinancialConfig',
             'building_levels': 'BuildingLevel',
         };
 
         try {
+            // Pull garage row first so owner_id is available for employee_accounts owner_lookup
+            try {
+                await this.fetchTable('garages', garageId, 'Garage');
+            } catch (e: any) {
+                failedTables.push('garages');
+                console.error(e);
+            }
+
             const fetchPromises = Object.entries(tableMap).map(([table, entityType]) => 
-                this.fetchTable(table, garageId, entityType as string).catch(e => console.error(e))
+                this.fetchTable(table, garageId, entityType as string).catch(e => {
+                    failedTables.push(table);
+                    console.error(e);
+                })
             );
             await Promise.all(fetchPromises);
-        } catch (error) {
+
+            if (failedTables.length === 0) {
+                if (!this.backendReachable) {
+                    console.log('🟢 [NEDB SYNC] Conectividad remota restaurada durante pull global.');
+                }
+                this.backendReachable = true;
+                this.lastSuccessfulSyncAt = new Date();
+                this.lastError = null;
+                try {
+                    const now = new Date().toISOString();
+                    await db.syncState.update(
+                        { collection_name: `${garageId}__bootstrap_complete` },
+                        { $set: { collection_name: `${garageId}__bootstrap_complete`, last_synced_at: now } },
+                        { upsert: true }
+                    );
+                    await db.syncState.remove({ collection_name: `${garageId}__bootstrap_incomplete` }, { multi: true });
+                } catch {}
+            } else {
+                try {
+                    const existingComplete = await db.syncState.findOne({ collection_name: `${garageId}__bootstrap_complete` });
+                    if (!existingComplete) {
+                        const now = new Date().toISOString();
+                        await db.syncState.update(
+                            { collection_name: `${garageId}__bootstrap_incomplete` },
+                            { $set: { collection_name: `${garageId}__bootstrap_incomplete`, last_synced_at: now } },
+                            { upsert: true }
+                        );
+                    }
+                } catch {}
+                const totalTables = Object.keys(tableMap).length + 1;
+                if (failedTables.length >= totalTables) {
+                    this.backendReachable = false;
+                }
+                this.lastError = `Failed tables: ${failedTables.join(', ')}`;
+            }
+        } catch (error: any) {
+            this.backendReachable = false;
+            this.lastError = error?.message || String(error);
             console.error('❌ SyncService: Error en Pull Global', error);
         } finally {
             this.isGlobalSyncing = false;
         }
+        return failedTables;
     }
 
     async resetReplicatedStateFromRemote(garageId: string) {
@@ -253,11 +325,11 @@ export class NeDBSyncService {
 
         try {
             // 1. Limpiar mutations locales SOLO de este garage
-            // (NeDB usa un query para borrar)
             await db.mutations.remove({}, { multi: true });
             console.log(`[BOOTSTRAP] Mutations locales limpiadas.`);
 
-            const tableMap: any = {
+            const tableMap: Record<string, string> = {
+                'garages': 'Garage',
                 'vehicles': 'Vehicle',
                 'customers': 'Customer',
                 'subscriptions': 'Subscription',
@@ -272,33 +344,42 @@ export class NeDBSyncService {
                 'vehicle_types': 'VehicleType',
                 'tariffs': 'Tariff',
                 'prices': 'Price',
+                'promos': 'Promo',
                 'financial_configs': 'FinancialConfig',
                 'building_levels': 'BuildingLevel',
             };
 
             const timingResults: Record<string, number> = {};
 
-            // Ojo: en NeDB borramos todo lo local para este garage
-            for (const [tableName, entityType] of Object.entries(tableMap)) {
+            for (const [tableName] of Object.entries(tableMap)) {
                 const localDbName = this.getLocalDbName(tableName);
                 const localStore = (db as any)[localDbName];
-                if (localStore) {
-                    // Para configs globales (no scopeadas por garageId) no borramos, solo actualizamos.
-                    // Tablas como vehicle_types, tariffs, prices, tienen garage_id
+                if (localStore && tableName !== 'garages') {
                     await localStore.remove({ $or: [{ garageId }, { garage_id: garageId }] }, { multi: true });
                 }
             }
 
-            // Descargar snapshot paginado por partes
-            // Paralelismo controlado
-            const fetchPromises = Object.entries(tableMap).map(async ([tableName, entityType]) => {
-                const startMs = Date.now();
-                await this.fetchTable(tableName, garageId, entityType as string, true); // true = bypass pending check, bulk insert
-                timingResults[tableName] = Date.now() - startMs;
-                console.log(`[BOOTSTRAP] ${tableName} reconstruido en ${timingResults[tableName]}ms`);
-            });
+            await this.fetchTable('garages', garageId, 'Garage', true);
+
+            const fetchPromises = Object.entries(tableMap)
+                .filter(([tableName]) => tableName !== 'garages')
+                .map(async ([tableName, entityType]) => {
+                    const startMs = Date.now();
+                    await this.fetchTable(tableName, garageId, entityType as string, true);
+                    timingResults[tableName] = Date.now() - startMs;
+                    console.log(`[BOOTSTRAP] ${tableName} reconstruido en ${timingResults[tableName]}ms`);
+                });
 
             await Promise.all(fetchPromises);
+            try {
+                const now = new Date().toISOString();
+                await db.syncState.update(
+                    { collection_name: `${garageId}__bootstrap_complete` },
+                    { $set: { collection_name: `${garageId}__bootstrap_complete`, last_synced_at: now } },
+                    { upsert: true }
+                );
+                await db.syncState.remove({ collection_name: `${garageId}__bootstrap_incomplete` }, { multi: true });
+            } catch {}
             console.log(`[BOOTSTRAP] RECOVERY COMPLETADO EN ${Date.now() - startTotal}ms`);
             return { status: 'SUCCESS', timing: timingResults, totalMs: Date.now() - startTotal };
         } catch (error: any) {
@@ -307,6 +388,23 @@ export class NeDBSyncService {
         } finally {
             this.isGlobalSyncing = false;
         }
+    }
+
+    private async resolveOwnerIdForGarage(garageId: string): Promise<string | null> {
+        try {
+            const g = await db.garages.findOne({ $or: [{ id: garageId }, { _id: garageId }] }) as any;
+            if (g && (g.ownerId || g.owner_id)) {
+                return g.ownerId || g.owner_id;
+            }
+        } catch {}
+        try {
+            const { TerminalConfigManager } = await import('../../../infrastructure/config/TerminalConfigManager.js');
+            const cfg = TerminalConfigManager.getConfig();
+            if (cfg && cfg.garage_id === garageId && cfg.owner_id) {
+                return cfg.owner_id;
+            }
+        } catch {}
+        return null;
     }
 
     private async fetchTable(tableName: string, garageId: string, entityType: string, isRecovery: boolean = false) {
@@ -327,17 +425,34 @@ export class NeDBSyncService {
             }
         }
 
+        let ownerIdForEmployees: string | null = null;
+        if (tableName === 'employee_accounts') {
+            ownerIdForEmployees = await this.resolveOwnerIdForGarage(garageId);
+            if (!ownerIdForEmployees) {
+                throw new Error(`Cannot resolve owner_id for garage ${garageId} locally to sync ${tableName}`);
+            }
+        }
+
         while (hasMore) {
-            let query = supabase
+            let query: any = supabase
                 .from(tableName)
-                .select('*')
-                .eq('garage_id', garageId);
+                .select('*');
+
+            if (tableName === 'garages') {
+                query = query.eq('id', garageId);
+            } else if (tableName === 'employee_accounts' && ownerIdForEmployees) {
+                query = query.eq('owner_id', ownerIdForEmployees);
+            } else {
+                query = query.eq('garage_id', garageId);
+            }
                 
             if (isIncremental && watermark) {
                 query = query.gte('updated_at', watermark);
             }
                 
-            query = query.range(from, to);
+            if (typeof query.range === 'function') {
+                query = query.range(from, to);
+            }
             
             const { data, error } = await query;
 
@@ -374,19 +489,26 @@ export class NeDBSyncService {
                         if (pendingMutations > 0) continue;
                     }
                     const camelPayload = this.toCamelCase(row);
+                    if (tableName === 'prices') {
+                        const pList = String(row.price_list || camelPayload.priceList || 'standard').toLowerCase();
+                        camelPayload.priceList = pList;
+                        camelPayload.method = camelPayload.method || (pList === 'electronic' ? 'ELECTRONIC' : 'EFECTIVO');
+                        camelPayload.price = Number(camelPayload.amount ?? camelPayload.price ?? 0);
+                        camelPayload.amount = Number(camelPayload.amount ?? camelPayload.price ?? 0);
+                    } else if (tableName === 'tariffs') {
+                        camelPayload.priority = camelPayload.priority ?? camelPayload.sortOrder ?? row.sort_order ?? 0;
+                    }
                     await localStore.update({ id }, { $set: camelPayload }, { upsert: true });
                 }
             }
         }
         
-        if (isIncremental) {
-            const now = new Date().toISOString();
-            await db.syncState.update(
-                { collection_name: `${garageId}_${tableName}` },
-                { $set: { collection_name: `${garageId}_${tableName}`, last_synced_at: now } },
-                { upsert: true }
-            );
-        }
+        const now = new Date().toISOString();
+        await db.syncState.update(
+            { collection_name: `${garageId}_${tableName}` },
+            { $set: { collection_name: `${garageId}_${tableName}`, last_synced_at: now } },
+            { upsert: true }
+        );
     }
 
     private getLocalDbName(tableName: string): string {
@@ -417,21 +539,65 @@ export class NeDBSyncService {
         return obj;
     }
 
-    async runSyncCycle(garageId: string, reason: string) {
-        if (this.isGlobalSyncing) return { status: 'SUCCESS', failedTables: [] };
-        
-        try {
-            await this.processQueue();
-            await this.pullAllData(garageId, true);
-            
-            const status = await this.getStatus();
-            if (status.blocked > 0 || status.state === 'SYNC_ERROR' || !this.backendReachable) {
-                return { status: 'WITH_WARNINGS', failedTables: ['mutations_queue'] };
+    async runSyncCycle(garageId: string, reason: string): Promise<{ status: 'SUCCESS' | 'WITH_WARNINGS' | 'FAILED', failedTables: string[] }> {
+        if (this.activeSyncPromise) {
+            return this.activeSyncPromise;
+        }
+        if (this.isGlobalSyncing) return { status: 'WITH_WARNINGS', failedTables: [] };
+
+        this.activeSyncPromise = (async () => {
+            try {
+                await this.processQueue();
+                const failedTables = (await this.pullAllData(garageId, true)) || [];
+                
+                if (failedTables.length >= 18) {
+                    return {
+                        status: 'FAILED' as const,
+                        failedTables
+                    };
+                }
+                const status = await this.getStatus();
+                if (failedTables.length > 0 || status.blocked > 0 || status.state === 'SYNC_ERROR' || !this.backendReachable) {
+                    return {
+                        status: 'WITH_WARNINGS' as const,
+                        failedTables: failedTables.length > 0 ? failedTables : ['mutations_queue']
+                    };
+                }
+                return { status: 'SUCCESS' as const, failedTables: [] };
+            } catch (err: any) {
+                console.error('❌ Error in NeDB runSyncCycle:', err);
+                return { status: 'FAILED' as const, failedTables: ['ALL'] };
             }
-            return { status: 'SUCCESS', failedTables: [] };
-        } catch (err: any) {
-            console.error('❌ Error in NeDB runSyncCycle:', err);
-            return { status: 'WITH_WARNINGS', failedTables: ['ALL'] };
+        })();
+
+        try {
+            return await this.activeSyncPromise;
+        } finally {
+            this.activeSyncPromise = null;
+        }
+    }
+
+    private reconciliationInterval: NodeJS.Timeout | null = null;
+
+    startReconciliation(garageId: string) {
+        this.garageId = garageId;
+        if (this.reconciliationInterval) {
+            clearInterval(this.reconciliationInterval);
+        }
+        this.reconciliationInterval = setInterval(async () => {
+            try {
+                await this.processQueue();
+                await this.pullAllData(garageId, true);
+            } catch (e) {
+                console.error('Reconciliation error (NeDB):', e);
+            }
+        }, 5 * 60 * 1000);
+    }
+
+    stopReconciliation() {
+        if (this.reconciliationInterval) {
+            clearInterval(this.reconciliationInterval);
+            this.reconciliationInterval = null;
         }
     }
 
@@ -460,9 +626,10 @@ export class NeDBSyncService {
     }
 
     private async handleRealtimePayload(payload: any, garageId: string) {
-        if (payload.new && payload.new.garage_id && payload.new.garage_id !== garageId) return;
+        if (!payload || !payload.table) return;
 
         const tableMap: Record<string, { entityType: string, localTable: string }> = {
+            'garages': { entityType: 'Garage', localTable: 'garages' },
             'vehicles': { entityType: 'Vehicle', localTable: 'vehicles' },
             'customers': { entityType: 'Customer', localTable: 'customers' },
             'subscriptions': { entityType: 'Subscription', localTable: 'subscriptions' },
@@ -477,6 +644,7 @@ export class NeDBSyncService {
             'vehicle_types': { entityType: 'VehicleType', localTable: 'vehicleTypes' },
             'tariffs': { entityType: 'Tariff', localTable: 'tariffs' },
             'prices': { entityType: 'Price', localTable: 'prices' },
+            'promos': { entityType: 'Promo', localTable: 'promos' },
             'financial_configs': { entityType: 'FinancialConfig', localTable: 'financialConfigs' },
             'building_levels': { entityType: 'BuildingLevel', localTable: 'buildingLevels' },
         };
@@ -485,6 +653,23 @@ export class NeDBSyncService {
         if (!mapping) return;
 
         try {
+            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+                if (!payload.new) return;
+                if (payload.table === 'garages') {
+                    if (payload.new.id !== garageId) return;
+                } else if (payload.table === 'employee_accounts') {
+                    const localGarage: any = await db.garages.findOne({ $or: [{ id: garageId }, { _id: garageId }] });
+                    const localOwnerId = localGarage?.ownerId || localGarage?.owner_id;
+                    if (localOwnerId) {
+                        if (payload.new.owner_id !== localOwnerId) return;
+                    } else if (payload.new.garage_id !== garageId) {
+                        return;
+                    }
+                } else {
+                    if (payload.new.garage_id !== garageId) return;
+                }
+            }
+
             const localStore = (db as any)[mapping.localTable];
             if (!localStore) return;
 
@@ -498,6 +683,15 @@ export class NeDBSyncService {
                 if (pending > 0) return;
                 
                 const camelPayload = this.toCamelCase(payload.new);
+                if (payload.table === 'prices') {
+                    const pList = String(payload.new.price_list || camelPayload.priceList || 'standard').toLowerCase();
+                    camelPayload.priceList = pList;
+                    camelPayload.method = camelPayload.method || (pList === 'electronic' ? 'ELECTRONIC' : 'EFECTIVO');
+                    camelPayload.price = Number(camelPayload.amount ?? camelPayload.price ?? 0);
+                    camelPayload.amount = Number(camelPayload.amount ?? camelPayload.price ?? 0);
+                } else if (payload.table === 'tariffs') {
+                    camelPayload.priority = camelPayload.priority ?? camelPayload.sortOrder ?? payload.new.sort_order ?? 0;
+                }
                 await localStore.update({ id }, { $set: camelPayload }, { upsert: true });
             } else if (payload.eventType === 'DELETE') {
                 const id = payload.old?.id;
@@ -520,10 +714,19 @@ export class NeDBSyncService {
 }
 
 export class SyncServiceProxy {
-    private impl: any;
-    constructor() {
-        this.impl = StorageEngine.getEngine() === 'SQLITE' ? new SqliteSyncCoordinator() : new NeDBSyncService();
+    private sqliteImpl?: SqliteSyncCoordinator;
+    private nedbImpl?: NeDBSyncService;
+
+    private get impl(): any {
+        if (StorageEngine.getEngine() === 'SQLITE') {
+            if (!this.sqliteImpl) this.sqliteImpl = new SqliteSyncCoordinator();
+            return this.sqliteImpl;
+        } else {
+            if (!this.nedbImpl) this.nedbImpl = new NeDBSyncService();
+            return this.nedbImpl;
+        }
     }
+
     async getStatus() { return this.impl.getStatus(); }
     async pullAllData(garageId: string, isSilent: boolean = false) { return this.impl.pullAllData(garageId, isSilent); }
     async runSyncCycle(garageId: string, reason: string) { if (this.impl.runSyncCycle) return this.impl.runSyncCycle(garageId, reason); }

@@ -1,6 +1,6 @@
 {
   "name": "GarageIA",
-  "version": "3.4.7",
+  "version": "3.4.9",
   "description": "GarageIA - Control de Estacionamientos",
   "main": "main.js",
   "scripts": {

@@ -36,6 +36,9 @@ export const CustomerSchema = z.object({
   dni: z.string().optional(),
   address: z.string().optional(),
   localidad: z.string().optional(),
+  work_address: z.string().optional().nullable(),
+  work_phone: z.string().optional().nullable(),
+  emergency_phone: z.string().optional().nullable(),
   createdAt: TimestampSchema.default(() => new Date()),
   updatedAt: TimestampSchema.default(() => new Date()),
 });

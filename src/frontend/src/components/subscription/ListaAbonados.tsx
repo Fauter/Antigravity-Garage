@@ -3,7 +3,7 @@ import { Search, Plus, ArrowUp, ArrowDown, AlertCircle, RefreshCw, User as UserI
 import { api } from '../../services/api';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../context/AuthContext';
-import { resolveSubscriptionForCochera } from '../../utils/subscriptionHelper';
+import { resolveSubscriptionForCochera, calculateCustomerBalance } from '../../utils/subscriptionHelper';
 import { getDebtRemaining } from '../../utils/parseDebtAmount';
 
 // --- TypeScript Interfaces ---
@@ -134,69 +134,18 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                 const plates = Array.from(uniquePlates);
 
                 // --- REGLA ABSOLUTA DE NEGOCIO (Espejo de DetailView) ---
-                const now = new Date();
-                const expiredClientSubIds = new Set<string>();
-                let hasAnyExpiredSubscription = false;
-
-                clientCocheras.forEach(cochera => {
-                    const cleanCocheraPlates = (cochera.vehiculos || []).map((v: any) => typeof v === 'string' ? v.trim() : v.plate?.trim());
-                    const cocheraVehicles = realVehicles.filter(v => v.plate && cleanCocheraPlates.includes(v.plate.trim()));
-                    const cocheraVehicleIds = cocheraVehicles.map(v => v.id);
-
-                    const { subscription: associatedSub } = resolveSubscriptionForCochera(cochera, subscriptions, realVehicles);
-
-                    if (associatedSub) {
-                        let isExpired = false;
-                        // Soporte nativo para flat DB rows y populaciones
-                        const rawEndDate = associatedSub.endDate || associatedSub.end_date;
-                        const rawStartDate = associatedSub.startDate || associatedSub.start_date;
-
-                        if (rawEndDate) {
-                            isExpired = now > new Date(rawEndDate);
-                        } else if (rawStartDate) {
-                            const sDate = new Date(rawStartDate);
-                            isExpired = now > new Date(sDate.getFullYear(), sDate.getMonth() + 1, 0, 23, 59, 59, 999);
-                        }
-                        
-                        if (isExpired) {
-                            expiredClientSubIds.add(associatedSub.id || associatedSub._id);
-                            hasAnyExpiredSubscription = true;
-                        }
-                    }
-                });
-
-                // Also check if the current subscription being iterated (if any) is expired. 
-                // Wait, it's better to just check all subscriptions for this customer.
-                subscriptions.filter((s: any) => s.customerId === customerId || (s as any).customer_id === customerId).forEach((s: any) => {
-                    let isExpired = false;
-                    const rawEndDate = s.endDate || s.end_date;
-                    const rawStartDate = s.startDate || s.start_date;
-                    if (rawEndDate) {
-                        isExpired = now > new Date(rawEndDate);
-                    } else if (rawStartDate) {
-                        const sDate = new Date(rawStartDate);
-                        isExpired = now > new Date(sDate.getFullYear(), sDate.getMonth() + 1, 0, 23, 59, 59, 999);
-                    }
-                    if (isExpired) {
-                        expiredClientSubIds.add(s.id || s._id);
-                        hasAnyExpiredSubscription = true;
-                    }
-                });
-
                 const isEmptyClient = clientCocheras.length === 0;
 
                 const allCustomerDebts = debts.filter((d: any) => {
                     const isClientMatch = (d.customerId === customerId || d.customer_id === customerId);
                     if (!isClientMatch || d.status !== 'PENDING') return false;
-                    
-                    // REGLA AUTORITATIVA DE DEUDA: PENDING debt persistida = deuda existente.
-                    // NO filtramos CANON por expiredClientSubIds.
                     return true;
                 });
 
-                const visibleDebts = allCustomerDebts; // NO ocultar CANON de clientes vacíos
-                
-                const balance = visibleDebts.reduce((sum, d) => sum + getDebtRemaining(d), 0);
+                const clientSubscriptions = subscriptions.filter((s: any) => s.customerId === customerId || (s as any).customer_id === customerId);
+
+                // Reutilizamos el helper compartido para garantizar consistencia con CustomerDetailView
+                const balance = calculateCustomerBalance(clientCocheras, clientSubscriptions, realVehicles, allCustomerDebts);
 
                 // --- Status Resolutivo Exacto ---
                 // Si Activo/Inactivo significa "cliente con cochera asignada", lo conservamos tal cual,
@@ -221,8 +170,7 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                         balance,
                         plates,
                         email,
-                        phone,
-                        hasAnyExpiredSubscription // Nuevo flag para la interfaz
+                        phone
                     }
                 });
             } else {
@@ -463,10 +411,6 @@ const SubscriberList: React.FC<SubscriberListProps> = ({ onNewClick, onSelectSub
                                             {balance > 0 ? (
                                                 <span className="text-red-400 font-semibold font-mono">
                                                     ${balance.toLocaleString('es-AR')}
-                                                </span>
-                                            ) : sub.aggregatedValues.hasAnyExpiredSubscription ? (
-                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20">
-                                                    VENCIDO
                                                 </span>
                                             ) : hasNoVehicles ? (
                                                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-800/40 text-gray-500 border border-gray-700/40">

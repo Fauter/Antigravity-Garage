@@ -45,6 +45,28 @@ const getExitModeLabel = (mode: ExitMode): string => {
     }
 };
 
+const currencyFormatter = new Intl.NumberFormat('es-AR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+    useGrouping: true,
+});
+
+const formatPriceParts = (amount: number) => {
+    const parts = currencyFormatter.formatToParts(amount);
+    let integerPart = '';
+    let decimalPart = '';
+
+    for (const part of parts) {
+        if (part.type === 'decimal' || part.type === 'fraction') {
+            decimalPart += part.value;
+        } else {
+            integerPart += part.value;
+        }
+    }
+
+    return { integerPart, decimalPart };
+};
+
 const useExitLogic = () => {
     const [loading, setLoading] = useState(false);
     const [stay, setStay] = useState<ExitStay | null>(null);
@@ -145,6 +167,7 @@ const PanelSalida: React.FC = () => {
     const [processedExitMode, setProcessedExitMode] = useState<ExitMode | null>(null);
 
     const [now, setNow] = useState<Date>(new Date());
+    const priceParts = price !== null && !isNaN(price) ? formatPriceParts(price) : null;
     
     useEffect(() => {
         if (!stay) return;
@@ -634,8 +657,11 @@ const PanelSalida: React.FC = () => {
                                 <span className={`text-5xl font-black tracking-tighter block ${price !== null && price > 0 ? 'text-white drop-shadow-md' : 'text-gray-700'}`}>
                                     {isCalculating ? (
                                         <span className="animate-pulse opacity-50 block mt-1">...</span>
-                                    ) : price !== null ? (
-                                        `$${price.toFixed(2)}`
+                                    ) : priceParts ? (
+                                        <>
+                                            <span>${priceParts.integerPart}</span>
+                                            <span className="text-2xl font-bold align-baseline text-gray-400">{priceParts.decimalPart}</span>
+                                        </>
                                     ) : (
                                         <span className="opacity-30">$ -</span>
                                     )}

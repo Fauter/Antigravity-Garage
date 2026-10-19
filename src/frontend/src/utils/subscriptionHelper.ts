@@ -1,3 +1,5 @@
+import { getDebtRemaining } from './parseDebtAmount';
+
 export interface MatchResult {
     subscription: any | null;
     matchType: 'COCHERA_ID' | 'SPOT' | 'VEHICLE_ID' | 'PLATE' | 'UNIQUE_FALLBACK' | 'AMBIGUOUS' | 'NONE';
@@ -335,3 +337,143 @@ export function formatCanonDebtLabels(debts: any[]): string {
         .map(info => info.label)
         .join('-');
 }
+
+export function getVisibleDebts(debts: any[], cocheras: any[], subscriptions: any[], realVehicles: any[]): any[] {
+    const activeCanonicalSubIds = new Set<string>();
+    const activeVehiclesWithCanonicalSubs = new Set<string>();
+    
+    cocheras.forEach(cochera => {
+        const { subscription: associatedSub } = resolveSubscriptionForCochera(cochera, subscriptions, realVehicles);
+        if (associatedSub) {
+            const subId = associatedSub.id || associatedSub._id;
+            if (subId) {
+                activeCanonicalSubIds.add(String(subId));
+                
+                const vehicleId = associatedSub.vehicleId || associatedSub.vehicle_id;
+                if (vehicleId) {
+                    activeVehiclesWithCanonicalSubs.add(String(vehicleId));
+                }
+            }
+        }
+    });
+
+    return debts.filter(d => {
+        if (d.type !== 'CANON') return true;
+        
+        const subId = String(d.subscriptionId || d.subscription_id);
+        if (activeCanonicalSubIds.has(subId)) return true;
+        
+        const debtSub = subscriptions.find(s => String(s.id || s._id) === subId);
+        if (!debtSub) return true;
+        
+        const debtSubVehicleId = String(debtSub.vehicleId || debtSub.vehicle_id);
+        if (debtSubVehicleId && debtSubVehicleId !== 'undefined' && activeVehiclesWithCanonicalSubs.has(debtSubVehicleId)) {
+            return false; // Superseded by a newer active sub for the same vehicle
+        }
+        
+        return true; 
+    });
+}
+
+export const isSubscriptionExpired = (sub: any, currentDate: Date = new Date()): boolean => {
+    if (!sub) return false;
+    const endStr = sub.endDate || sub.end_date;
+    const startStr = sub.startDate || sub.start_date;
+
+    if (!endStr && !startStr) {
+        if (process.env.NODE_ENV === 'development') {
+            console.warn('[Validation] Subscription missing any date field (endDate, end_date, startDate, start_date):', sub);
+        }
+        return false;
+    }
+
+    if (endStr) {
+        const endDateObj = new Date(endStr);
+        if (!isNaN(endDateObj.getTime())) {
+            return currentDate > endDateObj;
+        }
+    }
+
+    if (startStr) {
+        const startDateObj = new Date(startStr);
+        if (!isNaN(startDateObj.getTime())) {
+            const endOfMonth = new Date(startDateObj.getFullYear(), startDateObj.getMonth() + 1, 0, 23, 59, 59, 999);
+            return currentDate > endOfMonth;
+        }
+    }
+
+    return false;
+};
+
+export function hasCustomerExpiredSubscription(
+    clientCocheras: any[],
+    clientSubscriptions: any[],
+    realVehicles: any[],
+    currentDate: Date = new Date()
+): boolean {
+    if (!Array.isArray(clientCocheras) || clientCocheras.length === 0) return false;
+
+    for (const cochera of clientCocheras) {
+        const { subscription: associatedSub } = resolveSubscriptionForCochera(cochera, clientSubscriptions, realVehicles);
+        if (associatedSub) {
+            const hasValidTariff = (Number(cochera.precioBase) > 0) || (Number(associatedSub.basePrice || associatedSub.amount || associatedSub.price || 0) > 0);
+            const hasDeterminableDate = Boolean(associatedSub.endDate || associatedSub.end_date || associatedSub.startDate || associatedSub.start_date);
+            if (hasValidTariff && hasDeterminableDate && isSubscriptionExpired(associatedSub, currentDate)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/**
+ * Calculates the total real operational pending balance for a customer.
+ * 
+ * Rules:
+ * 1. Sanitizes and filters debts using getVisibleDebts (protecting against orphaned/historical debts).
+ * 2. Starts with persistedBalance = visibleDebts.reduce((sum, d) => sum + getDebtRemaining(d), 0).
+ * 3. Evaluates all occupied client cocheras:
+ *    - Resolves associated subscription for each cochera using resolveSubscriptionForCochera.
+ *    - If associatedSub is expired and has a valid tariff, but DOES NOT have a visible CANON debt,
+ *      adds the renewal base amount (cochera.precioBase || associatedSub.basePrice || associatedSub.amount || associatedSub.price || 0).
+ *    - If associatedSub already has visible CANON debt, its remaining amount is already counted in persistedBalance
+ *      (preventing duplicate billing for the same period).
+ *    - Evaluated per cochera, preserving vehicle independence (e.g. 1 cochera with 2 vehicles is counted once).
+ * 4. Clients with no occupied cocheras or no valid subscriptions/tariffs do not fabricate renewal debt.
+ */
+export function calculateCustomerBalance(
+    clientCocheras: any[],
+    clientSubscriptions: any[],
+    realVehicles: any[],
+    allCustomerDebts: any[],
+    currentDate: Date = new Date()
+): number {
+    const visibleDebts = getVisibleDebts(allCustomerDebts, clientCocheras, clientSubscriptions, realVehicles);
+    const persistedBalance = visibleDebts.reduce((sum, d) => sum + getDebtRemaining(d), 0);
+
+    let unpersistedExpiredRenewals = 0;
+    if (Array.isArray(clientCocheras)) {
+        for (const cochera of clientCocheras) {
+            const { subscription: associatedSub } = resolveSubscriptionForCochera(cochera, clientSubscriptions, realVehicles);
+            if (!associatedSub) continue;
+
+            const subId = String(associatedSub.id || associatedSub._id);
+            const hasVisibleCanonDebt = visibleDebts.some(d =>
+                d.type === 'CANON' && (String(d.subscriptionId || d.subscription_id) === subId)
+            );
+
+            if (!hasVisibleCanonDebt) {
+                const hasValidTariff = (Number(cochera.precioBase) > 0) || (Number(associatedSub.basePrice || associatedSub.amount || associatedSub.price || 0) > 0);
+                const hasDeterminableDate = Boolean(associatedSub.endDate || associatedSub.end_date || associatedSub.startDate || associatedSub.start_date);
+
+                if (hasValidTariff && hasDeterminableDate && isSubscriptionExpired(associatedSub, currentDate)) {
+                    const renewalBase = Number(cochera.precioBase || associatedSub.basePrice || associatedSub.amount || associatedSub.price || 0);
+                    unpersistedExpiredRenewals += renewalBase;
+                }
+            }
+        }
+    }
+
+    return persistedBalance + unpersistedExpiredRenewals;
+}
+

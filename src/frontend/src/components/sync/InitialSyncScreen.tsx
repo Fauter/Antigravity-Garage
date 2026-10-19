@@ -50,7 +50,10 @@ const CometSpinner = () => (
 );
 
 export const InitialSyncScreen: React.FC = () => {
-    const { initialSyncState, retryInitialSync, continueWithLocalData } = useAuth();
+    const { initialSyncState, readinessDiagnostics, retryInitialSync, continueWithLocalData } = useAuth();
+    const canContinueLocally = Boolean(readinessDiagnostics?.hasLocalData);
+    const missingDatasets = readinessDiagnostics?.missing || [];
+    const failedTables = readinessDiagnostics?.failedTables || [];
 
     return (
         <>
@@ -66,38 +69,75 @@ export const InitialSyncScreen: React.FC = () => {
                         </p>
                     </div>
                 ) : initialSyncState === 'offline' ? (
-                    <div className="flex flex-col items-center animate-in fade-in zoom-in duration-300">
+                    <div className="flex flex-col items-center max-w-md text-center px-6 animate-in fade-in zoom-in duration-300">
                         <WifiOff className="w-12 h-12 text-amber-500 mb-4" />
-                        <p className="text-amber-500 font-medium text-[14px] tracking-wide mb-6 font-sans">
-                            Sin conexión
+                        <h2 className="text-lg font-semibold text-amber-400 mb-2 font-sans">
+                            Sin conexión remota
+                        </h2>
+                        <p className="text-gray-200 text-sm mb-3 font-sans">
+                            {readinessDiagnostics?.message || 'No se pudo conectar con el servidor remoto para sincronizar este garaje.'}
                         </p>
-                        <button 
-                            onClick={continueWithLocalData}
-                            className="px-6 py-2 bg-gray-800/80 hover:bg-gray-700 text-white font-medium text-sm rounded-lg backdrop-blur-md border border-gray-600 transition-colors"
-                        >
-                            Continuar
-                        </button>
+                        {missingDatasets.length > 0 && (
+                            <p className="text-amber-300/90 text-xs mb-6 font-mono bg-amber-950/40 border border-amber-800/50 rounded-md px-3 py-2">
+                                Datos faltantes: {missingDatasets.join(', ')}
+                            </p>
+                        )}
+                        <div className="flex gap-3 justify-center">
+                            <button
+                                onClick={retryInitialSync}
+                                className="px-6 py-2 bg-emerald-600/90 hover:bg-emerald-500 text-white font-medium text-sm rounded-lg backdrop-blur-md transition-colors"
+                            >
+                                Reintentar
+                            </button>
+                            {canContinueLocally && (
+                                <button 
+                                    onClick={continueWithLocalData}
+                                    className="px-6 py-2 bg-gray-800/80 hover:bg-gray-700 text-white font-medium text-sm rounded-lg backdrop-blur-md border border-gray-600 transition-colors"
+                                >
+                                    Continuar con datos locales
+                                </button>
+                            )}
+                        </div>
                     </div>
                 ) : (
-                    <div className="flex flex-col items-center max-w-sm text-center animate-in fade-in zoom-in duration-300">
+                    <div className="flex flex-col items-center max-w-md text-center px-6 animate-in fade-in zoom-in duration-300">
                         <AlertTriangle className="w-12 h-12 text-amber-500 mb-4" />
-                        <h2 className="text-xl font-semibold text-amber-400 mb-2 font-sans">La sincronización está tardando más de lo esperado</h2>
-                        <p className="text-gray-200 text-sm mb-8 font-sans">
-                            La descarga inicial de datos continúa en progreso.
+                        <h2 className="text-xl font-semibold text-amber-400 mb-2 font-sans">
+                            {initialSyncState === 'error'
+                                ? 'Sincronización inicial incompleta'
+                                : 'La sincronización está tardando más de lo esperado'}
+                        </h2>
+                        <p className="text-gray-200 text-sm mb-4 font-sans">
+                            {readinessDiagnostics?.message ||
+                                (initialSyncState === 'error'
+                                    ? 'No se pudieron descargar todas las tablas requeridas para operar.'
+                                    : 'La descarga inicial de datos continúa en progreso.')}
                         </p>
-                        <div className="flex w-full gap-4 justify-center">
+                        {failedTables.length > 0 && (
+                            <p className="text-amber-300/90 text-xs mb-2 font-mono bg-amber-950/40 border border-amber-800/50 rounded-md px-3 py-1.5">
+                                Tablas con error: {failedTables.join(', ')}
+                            </p>
+                        )}
+                        {missingDatasets.length > 0 && (
+                            <p className="text-amber-300/90 text-xs mb-6 font-mono bg-amber-950/40 border border-amber-800/50 rounded-md px-3 py-1.5">
+                                Datos faltantes: {missingDatasets.join(', ')}
+                            </p>
+                        )}
+                        <div className="flex w-full gap-4 justify-center mt-2">
                             <button 
                                 onClick={retryInitialSync}
                                 className="px-6 py-2 bg-emerald-600/90 hover:bg-emerald-500 text-white font-medium text-sm rounded-lg backdrop-blur-md transition-colors"
                             >
                                 Reintentar
                             </button>
-                            <button 
-                                onClick={continueWithLocalData}
-                                className="px-6 py-2 bg-gray-800/80 hover:bg-gray-700 text-white font-medium text-sm rounded-lg backdrop-blur-md border border-gray-600 transition-colors"
-                            >
-                                Continuar con datos locales
-                            </button>
+                            {canContinueLocally && (
+                                <button 
+                                    onClick={continueWithLocalData}
+                                    className="px-6 py-2 bg-gray-800/80 hover:bg-gray-700 text-white font-medium text-sm rounded-lg backdrop-blur-md border border-gray-600 transition-colors"
+                                >
+                                    Continuar con datos locales
+                                </button>
+                            )}
                         </div>
                     </div>
                 )}

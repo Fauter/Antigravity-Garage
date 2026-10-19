@@ -51,14 +51,25 @@ function appendLog(file, prefix, ...args) {
     }
 }
 
+function formatTime() {
+    return new Date().toTimeString().split(' ')[0];
+}
 const origLog = console.log;
 const origError = console.error;
 console.log = (...args) => {
-    origLog(...args);
+    if (args.length >= 2 && typeof args[0] === 'string' && args[0].length <= 10 && !args[0].includes('[')) {
+        origLog(`${formatTime()}  ${args[0].padEnd(8, ' ')}  ${args.slice(1).join(' ')}`);
+    } else {
+        origLog(...args);
+    }
     appendLog(startupLogPath, '[INFO]', ...args);
 };
 console.error = (...args) => {
-    origError(...args);
+    if (args.length >= 2 && typeof args[0] === 'string' && args[0].length <= 10 && !args[0].includes('[')) {
+        origError(`${formatTime()}  ${args[0].padEnd(8, ' ')}  ${args.slice(1).join(' ')}`);
+    } else {
+        origError(...args);
+    }
     appendLog(startupLogPath, '[ERROR]', ...args);
 };
 
@@ -69,7 +80,7 @@ if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL
 }
 
 process.on('uncaughtException', (err) => {
-    console.error('[STARTUP:FATAL] Uncaught Exception:', err);
+    console.error('STARTUP', '[ERR] Uncaught Exception', err);
     if (!isDev) {
         dialog.showMessageBoxSync({
             type: 'error',
@@ -81,23 +92,23 @@ process.on('uncaughtException', (err) => {
     }
 });
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('[STARTUP:FATAL] Unhandled Rejection at:', promise, 'reason:', reason);
+    console.error('STARTUP', '[ERR] Unhandled Rejection', promise, reason);
 });
 
 app.on('render-process-gone', (event, webContents, details) => {
-    console.error('[STARTUP:FATAL] render-process-gone', details);
+    console.error('STARTUP', '[ERR] render-process-gone', details);
 });
 app.on('child-process-gone', (event, details) => {
-    console.error('[STARTUP:FATAL] child-process-gone', details);
+    console.error('STARTUP', '[ERR] child-process-gone', details);
 });
 
 // ── TSX Register: MUST be loaded before any .ts require ──────────────
 if (isDev) {
     try {
         require('tsx');
-        console.log('🛠️ [DEV] tsx loaded — TypeScript imports enabled');
+        console.log('STARTUP', '[DEV] tsx loaded');
     } catch (e) {
-        console.error('❌ Error: El paquete "tsx" es necesario en desarrollo.', e.message);
+        console.error('STARTUP', '[ERR] tsx missing', e.message);
     }
 }
 
@@ -117,7 +128,7 @@ const startServer = () => {
             require(serverPath);
             
         } catch (err) {
-            console.error(`[STARTUP:FATAL] Error crítico al ejecutar el servidor:`, err);
+            console.error('STARTUP', '[ERR] Error crítico ejecutando servidor', err);
             if (!isDev) {
                 dialog.showMessageBoxSync({
                     type: 'error',
@@ -129,7 +140,7 @@ const startServer = () => {
             }
         }
     } else {
-        console.error(`[STARTUP:FATAL] No se encontró el servidor en: ${serverPath}`);
+        console.error('STARTUP', `[ERR] Servidor no encontrado en: ${serverPath}`);
         if (!isDev) {
             dialog.showMessageBoxSync({
                 type: 'error',
@@ -144,7 +155,7 @@ const startServer = () => {
 
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
-    console.log('[STARTUP:FATAL] Otra instancia ya está ejecutándose. Saliendo...');
+    console.error('STARTUP', '[ERR] Otra instancia ya ejecutándose. Saliendo...');
     app.quit();
     return; // Stop execution
 }
@@ -168,19 +179,36 @@ let mainWindow = null;
 
 app.on('second-instance', (event, commandLine, workingDirectory) => {
     // Alguien intentó abrir una segunda instancia, enfocar nuestra ventana
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        if (!mainWindow.isVisible()) mainWindow.show();
         if (mainWindow.isMinimized()) mainWindow.restore();
         mainWindow.focus();
     }
 });
 
 if (isDev) {
-    console.log('🛠️ [DEV] Saltando orquestación interna del Backend (ya manejada por concurrently)');
+    console.log('STARTUP', '[DEV] Saltando orquestación backend local');
 } else {
     startServer();
 }
 
 function attachRendererDiagnostics(win) {
+    // Lifecycle & Load Retry (active in both Dev and Prod so window never remains hidden on transient load error)
+    win.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+        if (errorCode !== -3) { // ERR_ABORTED is typically benign
+            console.error(`[RENDERER:FAILED-LOAD] ${errorDescription} (${errorCode}) at ${validatedURL}`);
+            // Retry navigation once if connection failed and it was trying to reach our server
+            if (validatedURL && validatedURL.includes('localhost:3000') && !win.hasRetriedLoad) {
+                console.log(`[RENDERER:RETRY] Retrying loadURL for ${validatedURL} in 1500ms...`);
+                win.hasRetriedLoad = true;
+                setTimeout(() => {
+                    if (!win.isDestroyed()) win.loadURL(validatedURL);
+                }, 1500);
+            } else if (!win.isDestroyed() && !win.isVisible()) {
+                win.show();
+            }
+        }
+    });
 
     if (!isDev) return;
 
@@ -192,22 +220,7 @@ function attachRendererDiagnostics(win) {
         if (level >= 2) {
             console.error(`[RENDERER:${levelStr}] ${message}\n  source: ${src}`);
         } else {
-            console.log(`[RENDERER:${levelStr}] ${message}\n  source: ${src}`);
-        }
-    });
-
-    // 2. Lifecycle & Errors
-    win.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
-        if (errorCode !== -3) { // ERR_ABORTED is typically benign
-            console.error(`[RENDERER:FAILED-LOAD] ${errorDescription} (${errorCode}) at ${validatedURL}`);
-            // Retry navigation once if connection was refused and it was trying to reach our server
-            if (errorCode === -102 && validatedURL.includes('localhost:3000') && !win.hasRetriedLoad) {
-                console.log(`[RENDERER:RETRY] Retrying loadURL for ${validatedURL} in 2000ms...`);
-                win.hasRetriedLoad = true;
-                setTimeout(() => {
-                    win.loadURL(validatedURL);
-                }, 2000);
-            }
+            if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('RENDERER', `[${levelStr}] ${message}`);
         }
     });
 
@@ -234,36 +247,73 @@ function attachRendererDiagnostics(win) {
     });
 }
 
-function waitForBackendReady(port, timeoutMs = 90000, retryMs = 500) {
+function waitForBackendReady(port, options = {}) {
+    const overallTimeoutMs = options.overallTimeoutMs || 90000;
+    const requestTimeoutMs = options.requestTimeoutMs || 5000;
+    const retryIntervalMs = options.retryIntervalMs || 500;
+    const endpoint = options.endpoint || '/api/readiness';
+
     const http = require('http');
     const startTime = Date.now();
     let attempt = 0;
+    let isFinished = false;
+    let lastErrorMsg = null;
     
-    if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[ELECTRON:TRACE] waiting for backend readiness...');
+    console.log(`[STARTUP][WINDOW] WINDOW_CREATED (waiting for backend readiness on port ${port}...)`);
 
     return new Promise((resolve, reject) => {
         const check = () => {
+            if (isFinished) return;
             attempt++;
-            if (Date.now() - startTime > timeoutMs) {
-                return reject(new Error('Timeout waiting for backend'));
-            }
+            const elapsedMs = Date.now() - startTime;
             
-            const req = http.get(`http://127.0.0.1:${port}/api/health`, (res) => {
-                if (res.statusCode === 200) {
-                    if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log(`[ELECTRON:TRACE] READY after ${Date.now() - startTime}ms (attempt ${attempt})`);
-                    resolve();
-                } else {
-                    if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log(`[ELECTRON:TRACE] health attempt ${attempt} returned status ${res.statusCode}`);
-                    setTimeout(check, retryMs);
+            if (elapsedMs > overallTimeoutMs) {
+                isFinished = true;
+                const msg = `Timeout waiting for backend after ${elapsedMs}ms (${attempt} attempts)`;
+                console.error(`[STARTUP][READY_CHECK] attempt=${attempt} status=FATAL_TIMEOUT durationMs=0 elapsed=${elapsedMs}ms message="${msg}"`);
+                return reject(new Error(msg));
+            }
+
+            const reqStart = Date.now();
+            
+            const req = http.get(`http://127.0.0.1:${port}${endpoint}`, (res) => {
+                if (isFinished) {
+                    res.resume(); // Drain
+                    return;
                 }
+                const durationMs = Date.now() - reqStart;
+                
+                res.on('data', () => {});
+                res.on('end', () => {
+                    if (res.statusCode === 200) {
+                        isFinished = true;
+                        if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('STARTUP', `READY_CHECK SUCCESS attempt=${attempt}`);
+                        console.log('STARTUP', `Ready · ${Date.now() - startTime}ms`);
+                        resolve();
+                    } else {
+                        const newErrMsg = `HTTP_${res.statusCode}`;
+                        if (attempt === 1 || newErrMsg !== lastErrorMsg) {
+                            if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('STARTUP', `READY_CHECK ERROR attempt=${attempt}`);
+                            lastErrorMsg = newErrMsg;
+                        }
+                        setTimeout(check, retryIntervalMs);
+                    }
+                });
             });
 
             req.on('error', (err) => {
-                // connection refused typically
-                setTimeout(check, retryMs);
+                if (isFinished) return;
+                const durationMs = Date.now() - reqStart;
+                const isTimeout = err.message && err.message.includes('socket hang up') || err.code === 'ECONNRESET';
+                
+                if (attempt === 1 || err.code !== lastErrorMsg || isTimeout || attempt % 20 === 0) {
+                     if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('STARTUP', `READY_CHECK ERROR attempt=${attempt}`);
+                     lastErrorMsg = err.code;
+                }
+                setTimeout(check, retryIntervalMs);
             });
             
-            req.setTimeout(retryMs, () => {
+            req.setTimeout(requestTimeoutMs, () => {
                 req.destroy();
             });
         };
@@ -324,8 +374,10 @@ function createWindow() {
     attachRendererDiagnostics(mainWindow);
     
     mainWindow.webContents.once('did-finish-load', () => {
+        console.log('UI', 'Did finish load');
         if (process.env.GARAGEIA_LOG_LEVEL === 'debug' || process.env.GARAGEIA_LOG_LEVEL === 'trace') console.log('[ELECTRON:TRACE] renderer ready, showing window');
         mainWindow.show();
+        console.log('UI', 'Window shown');
     });
 
     // In development, load the Vite dev server
@@ -340,8 +392,10 @@ function createWindow() {
     if (isDev) {
         loadApp();
     } else {
-        waitForBackendReady(3000, 90000, 500)
+        waitForBackendReady(3000, { overallTimeoutMs: 90000, requestTimeoutMs: 5000, retryIntervalMs: 500, endpoint: '/api/readiness' })
             .then(() => {
+                console.log('STARTUP', 'Backend ready signal received');
+                console.log('UI', 'Loading URL');
                 loadApp();
             })
             .catch((err) => {
